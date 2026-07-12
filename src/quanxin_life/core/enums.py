@@ -1,0 +1,23 @@
+from enum import Enum
+
+
+class EvidenceLevel(str, Enum):
+    DATA_DIRECT = "DATA_DIRECT"
+    MODEL_INFERENCE = "MODEL_INFERENCE"
+    PHYSICS_REFERENCE = "PHYSICS_REFERENCE"
+    DOMAIN_KNOWLEDGE = "DOMAIN_KNOWLEDGE"
+    UNDETERMINED = "UNDETERMINED"
+
+
+class Decision(str, Enum):
+    ADMIT = "ADMIT"
+    RECHECK = "RECHECK"
+    DOWNGRADE = "DOWNGRADE"
+    REJECT = "REJECT"
+
+
+class SourceKind(str, Enum):
+    OBSERVED = "OBSERVED"
+    PREDICTED = "PREDICTED"
+    NEWLY_OBSERVED = "NEWLY_OBSERVED"
+    SIMULATED = "SIMULATED"
