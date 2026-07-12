@@ -1,0 +1,43 @@
+[
+  {
+    "dataset_id": "MATR",
+    "version": "Severson-2019-and-Attia-2020-raw-batches",
+    "source_uri": "https://data.matr.io/1/projects/5c48dd2bc625d700019f3204",
+    "paper_uri": "https://doi.org/10.1038/s41560-019-0356-8",
+    "license_status": "must_verify_before_download",
+    "ingestion_mode": "hdf5",
+    "expected_suffixes": [".mat"],
+    "notes": "四批原始MAT/HDF5文件；2019批次需从对应MATR项目单独获取。"
+  },
+  {
+    "dataset_id": "HUST",
+    "version": "Mendeley-v2",
+    "source_uri": "https://data.mendeley.com/datasets/nsc7hnsg4s/2",
+    "paper_uri": "https://doi.org/10.1039/D2EE01676A",
+    "license_status": "must_verify_before_download",
+    "ingestion_mode": "quarantine_conversion",
+    "expected_suffixes": [".zip"],
+    "prohibited_direct_suffixes": [".pkl", ".pickle"],
+    "notes": "官方压缩包包含Python pickle；主进程禁止反序列化，必须经无网络、只读输入的隔离转换与静态审计。"
+  },
+  {
+    "dataset_id": "NAUMANN_CYCLE",
+    "version": "Mendeley-v1",
+    "source_uri": "https://data.mendeley.com/datasets/6hgyr25h8d/1",
+    "paper_uri": "https://doi.org/10.1016/j.jpowsour.2019.227666",
+    "license_status": "CC BY 4.0",
+    "ingestion_mode": "tabular",
+    "expected_suffixes": [".xlsx"],
+    "notes": "29个月LFP/graphite循环老化研究，19种工况。"
+  },
+  {
+    "dataset_id": "NAUMANN_CALENDAR",
+    "version": "Mendeley-v1",
+    "source_uri": "https://data.mendeley.com/datasets/kxh42bfgtj/1",
+    "paper_uri": "https://doi.org/10.1016/j.est.2018.01.019",
+    "license_status": "CC BY 4.0",
+    "ingestion_mode": "tabular",
+    "expected_suffixes": [".xlsx"],
+    "notes": "29个月LFP/graphite日历老化研究，17种温度与SOC工况。"
+  }
+]
