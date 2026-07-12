@@ -1,7 +1,7 @@
 import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, BinaryIO
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -32,12 +32,31 @@ class RawFileManifest(BaseModel):
         return value.astimezone(UTC)
 
 
-def _sha256_file(path: Path) -> str:
+def verify_raw_file_stream(handle: BinaryIO, path: Path, manifest: RawFileManifest) -> str:
+    """Verify a raw file from its already-open binary stream and rewind it."""
+    assert_safe_external_data_file(path)
+    if not handle.readable() or not handle.seekable():
+        raise ValueError("raw data stream must be readable and seekable")
+
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+    handle.seek(0)
+    try:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not isinstance(chunk, bytes):
+                raise ValueError("raw data stream must be binary")
+            if not chunk:
+                break
             digest.update(chunk)
-    return digest.hexdigest()
+        actual = digest.hexdigest()
+        if actual != manifest.sha256:
+            raise ValueError(
+                f"SHA-256 mismatch for {manifest.relative_path}: "
+                f"expected {manifest.sha256}, got {actual}"
+            )
+        return actual
+    finally:
+        handle.seek(0)
 
 
 def verify_raw_file(path: Path, manifest: RawFileManifest) -> str:
@@ -45,10 +64,5 @@ def verify_raw_file(path: Path, manifest: RawFileManifest) -> str:
     assert_safe_external_data_file(path)
     if not path.is_file():
         raise ValueError(f"raw data file does not exist: {path}")
-    actual = _sha256_file(path)
-    if actual != manifest.sha256:
-        raise ValueError(
-            f"SHA-256 mismatch for {manifest.relative_path}: "
-            f"expected {manifest.sha256}, got {actual}"
-        )
-    return actual
+    with path.open("rb") as handle:
+        return verify_raw_file_stream(handle, path, manifest)

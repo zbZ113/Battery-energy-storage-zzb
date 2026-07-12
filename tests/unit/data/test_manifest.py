@@ -1,8 +1,10 @@
 import hashlib
+from io import StringIO
 from pathlib import Path
 
 import pytest
 
+import quanxin_life.data.manifest as manifest_module
 from quanxin_life.data.manifest import RawFileManifest, verify_raw_file
 
 
@@ -20,6 +22,62 @@ def test_raw_file_manifest_verifies_content_hash(tmp_path: Path) -> None:
     )
 
     assert verify_raw_file(source, manifest) == digest
+
+
+def test_stream_verifier_uses_the_open_handle_and_rewinds_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "cell.csv"
+    source.write_bytes(b"cycle,capacity\n1,1.1\n")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    manifest = RawFileManifest(
+        dataset_id="MATR",
+        relative_path="cell.csv",
+        sha256=digest,
+        source_uri="https://data.matr.io/1/",
+        license_name="dataset-specific terms",
+    )
+
+    with source.open("rb") as handle:
+        handle.seek(5)
+
+        def path_open_is_forbidden(*args: object, **kwargs: object) -> None:
+            raise AssertionError("stream verification must not reopen the path")
+
+        monkeypatch.setattr(Path, "open", path_open_is_forbidden)
+
+        assert manifest_module.verify_raw_file_stream(handle, source, manifest) == digest
+        assert handle.tell() == 0
+
+
+def test_stream_verifier_rejects_an_unsafe_serialized_filename(tmp_path: Path) -> None:
+    source = tmp_path / "cells.pkl"
+    source.write_bytes(b"not trusted")
+    manifest = RawFileManifest(
+        dataset_id="MATR",
+        relative_path="cells.pkl",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        source_uri="https://example.invalid/cells.pkl",
+        license_name="unknown",
+    )
+
+    with source.open("rb") as handle, pytest.raises(ValueError, match="unsafe serialized artifact"):
+        manifest_module.verify_raw_file_stream(handle, source, manifest)
+
+
+def test_stream_verifier_rejects_a_non_binary_handle(tmp_path: Path) -> None:
+    source = tmp_path / "cell.csv"
+    source.write_bytes(b"cycle,capacity\n1,1.1\n")
+    manifest = RawFileManifest(
+        dataset_id="MATR",
+        relative_path="cell.csv",
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        source_uri="https://data.matr.io/1/",
+        license_name="dataset-specific terms",
+    )
+
+    with pytest.raises(ValueError, match="binary"):
+        manifest_module.verify_raw_file_stream(StringIO("not binary"), source, manifest)
 
 
 def test_raw_file_manifest_rejects_hash_mismatch(tmp_path: Path) -> None:
