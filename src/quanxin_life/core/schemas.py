@@ -78,11 +78,15 @@ class ToolResult(ContractModel):
 class CellMetadata(ContractModel):
     dataset_id: str = Field(min_length=1)
     cell_id: str = Field(min_length=1)
+    raw_cell_id: str | None = None
     chemistry: str = Field(min_length=1)
     nominal_capacity_ah: float = Field(gt=0)
     reference_capacity_ah: float | None = Field(default=None, gt=0)
     eol_threshold: float = Field(default=0.8, gt=0, lt=1)
     protocol_id: str | None = None
+    protocol_description: str | None = None
+    official_life_label: int | None = Field(default=None, ge=0)
+    official_life_label_name: str | None = None
     source_uri: str = Field(min_length=1)
     source_sha256: Sha256
     schema_version: str = Field(min_length=1)

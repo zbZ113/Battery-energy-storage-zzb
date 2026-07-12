@@ -21,6 +21,15 @@ def _write_matr_file(
         batch = handle.create_group("batch")
         summary_refs = batch.create_dataset("summary", (1, 1), dtype=h5py.ref_dtype)
         cycle_refs = batch.create_dataset("cycles", (1, 1), dtype=h5py.ref_dtype)
+        policy_refs = batch.create_dataset("policy_readable", (1, 1), dtype=h5py.ref_dtype)
+        life_refs = batch.create_dataset("cycle_life", (1, 1), dtype=h5py.ref_dtype)
+
+        policy = handle.create_dataset(
+            "policy_0", data=np.array([ord(char) for char in "3.6C(80%)-1C"], dtype=np.uint16)
+        )
+        cycle_life = handle.create_dataset("cycle_life_0", data=np.array([1000.0]))
+        policy_refs[0, 0] = policy.ref
+        life_refs[0, 0] = cycle_life.ref
 
         summary = handle.create_group("summary_0")
         if include_resistance:
@@ -84,7 +93,11 @@ def test_loads_cells_with_provenance_and_preserves_cycle_zero(tmp_path: Path) ->
     assert metadata.source_sha256 == manifest.sha256
     assert metadata.nominal_capacity_ah == 1.1
     assert metadata.reference_capacity_ah is None
-    assert metadata.protocol_id == "MATR_batch_3"
+    assert metadata.protocol_id.startswith("MATR_policy_")
+    assert metadata.raw_cell_id == "b3c0"
+    assert metadata.protocol_description == "3.6C(80%)-1C"
+    assert metadata.official_life_label == 1000
+    assert metadata.official_life_label_name == "MATR_cycle_life"
     assert metadata.adapter_version == "matr-hdf5-v1.0.0"
     assert metadata.ingestion_parameters == {
         "batch_index": 3,
