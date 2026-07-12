@@ -14,7 +14,7 @@
     "version": "Mendeley-v2",
     "source_uri": "https://data.mendeley.com/datasets/nsc7hnsg4s/2",
     "paper_uri": "https://doi.org/10.1039/D2EE01676A",
-    "license_status": "must_verify_before_download",
+    "license_status": "CC BY 4.0",
     "ingestion_mode": "quarantine_conversion",
     "expected_suffixes": [".zip"],
     "prohibited_direct_suffixes": [".pkl", ".pickle"],
