@@ -66,7 +66,7 @@ def _manifest(path: Path, *, sha256: str | None = None) -> RawFileManifest:
         relative_path=path.name,
         sha256=digest,
         source_uri="https://data.matr.example/batch.mat",
-        license_name="CC BY 4.0",
+        license_name="dataset-specific terms",
     )
 
 
@@ -85,6 +85,12 @@ def test_loads_cells_with_provenance_and_preserves_cycle_zero(tmp_path: Path) ->
     assert metadata.nominal_capacity_ah == 1.1
     assert metadata.reference_capacity_ah is None
     assert metadata.protocol_id == "MATR_batch_3"
+    assert metadata.adapter_version == "matr-hdf5-v1.0.0"
+    assert metadata.ingestion_parameters == {
+        "batch_index": 3,
+        "skip_cycle_zero": False,
+        "time_unit": "seconds",
+    }
     assert isinstance(records, tuple)
     assert {record.cycle_index for record in records} == {0, 1}
     assert records[0].cell_id == metadata.cell_id
@@ -177,3 +183,12 @@ def test_unconsumed_auxiliary_cycle_arrays_do_not_block_ingestion(tmp_path: Path
     )[0]
 
     assert len(records) == 6
+
+
+def test_rejects_manifest_for_another_dataset(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path)
+    manifest = _manifest(path).model_copy(update={"dataset_id": "HUST"})
+
+    with pytest.raises(ValueError, match="dataset_id must be MATR"):
+        load_matr_batch(path, manifest, batch_index=1, time_unit="seconds")

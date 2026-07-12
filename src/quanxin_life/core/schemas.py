@@ -33,7 +33,10 @@ def _utc_datetime(value: datetime) -> datetime:
 
 def _json_mapping(value: JsonMapping | None) -> JsonMapping | None:
     if value is not None:
-        sha256_canonical(value)
+        try:
+            sha256_canonical(value)
+        except TypeError as exc:
+            raise ValueError("mapping must contain only JSON-compatible values") from exc
     return value
 
 
@@ -83,6 +86,14 @@ class CellMetadata(ContractModel):
     source_uri: str = Field(min_length=1)
     source_sha256: Sha256
     schema_version: str = Field(min_length=1)
+    adapter_version: str | None = None
+    ingestion_parameters: JsonMapping = Field(default_factory=dict)
+
+    @field_validator("ingestion_parameters")
+    @classmethod
+    def ingestion_parameters_are_json(cls, value: JsonMapping) -> JsonMapping:
+        _json_mapping(value)
+        return value
 
 
 class AnalysisState(ContractModel):

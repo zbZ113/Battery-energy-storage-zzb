@@ -104,6 +104,21 @@ def test_reference_capacity_is_positive_when_known(capacity: float) -> None:
         )
 
 
+def test_cell_metadata_ingestion_parameters_must_be_json_safe() -> None:
+    with pytest.raises(ValidationError):
+        CellMetadata(
+            dataset_id="MATR",
+            cell_id="MATR_b1c0",
+            chemistry="LFP/graphite",
+            nominal_capacity_ah=1.1,
+            source_uri="https://data.matr.io/1/",
+            source_sha256="c" * 64,
+            schema_version="1.0.0",
+            adapter_version="matr-hdf5-v1.0.0",
+            ingestion_parameters={"invalid": object()},
+        )
+
+
 def test_created_at_is_normalized_to_utc() -> None:
     result = valid_tool_result(created_at=datetime(2026, 7, 12, 8, tzinfo=UTC))
 

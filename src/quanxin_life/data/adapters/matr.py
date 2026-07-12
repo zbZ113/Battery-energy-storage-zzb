@@ -9,6 +9,7 @@ MatrCell: TypeAlias = tuple[CellMetadata, tuple[CycleRecord, ...]]
 
 _ALLOWED_SUFFIXES = frozenset({".mat", ".h5", ".hdf5"})
 _REQUIRED_SAMPLE_FIELDS = ("t", "V", "I", "Qc", "Qd")
+_ADAPTER_VERSION = "matr-hdf5-v1.0.0"
 
 
 def _flatten_numeric(value: Any) -> list[float]:
@@ -52,6 +53,8 @@ def load_matr_batch(
     disagree about whether it is seconds or minutes.
     """
     path = Path(path)
+    if manifest.dataset_id != "MATR":
+        raise ValueError("MATR manifest dataset_id must be MATR")
     if path.suffix.lower() not in _ALLOWED_SUFFIXES:
         raise ValueError(f"unsupported MATR file suffix: {path.suffix}")
     source_sha256 = verify_raw_file(path, manifest)
@@ -147,6 +150,12 @@ def load_matr_batch(
                 source_uri=manifest.source_uri,
                 source_sha256=source_sha256,
                 schema_version="1.0",
+                adapter_version=_ADAPTER_VERSION,
+                ingestion_parameters={
+                    "batch_index": batch_index,
+                    "skip_cycle_zero": skip_cycle_zero,
+                    "time_unit": time_unit,
+                },
             )
             cells.append((metadata, tuple(records)))
     return tuple(cells)
