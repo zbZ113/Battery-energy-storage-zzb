@@ -95,7 +95,8 @@ def load_matr_batch(
             raise ValueError(
                 "MATR batch is missing required references: " + ", ".join(missing_batch_fields)
             )
-        if batch["summary"].shape[0] != batch["cycles"].shape[0]:
+        reference_counts = {field: batch[field].shape[0] for field in required_batch_fields}
+        if len(set(reference_counts.values())) != 1:
             raise ValueError("MATR batch has inconsistent cell reference counts")
 
         for cell_index in range(batch["cycles"].shape[0]):

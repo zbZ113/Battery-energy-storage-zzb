@@ -16,12 +16,15 @@ def _write_matr_file(
     include_resistance: bool = True,
     mismatched_voltage: bool = False,
     mismatched_auxiliary: bool = False,
+    extra_policy_reference: bool = False,
 ) -> None:
     with h5py.File(path, "w") as handle:
         batch = handle.create_group("batch")
         summary_refs = batch.create_dataset("summary", (1, 1), dtype=h5py.ref_dtype)
         cycle_refs = batch.create_dataset("cycles", (1, 1), dtype=h5py.ref_dtype)
-        policy_refs = batch.create_dataset("policy_readable", (1, 1), dtype=h5py.ref_dtype)
+        policy_refs = batch.create_dataset(
+            "policy_readable", (2 if extra_policy_reference else 1, 1), dtype=h5py.ref_dtype
+        )
         life_refs = batch.create_dataset("cycle_life", (1, 1), dtype=h5py.ref_dtype)
 
         policy = handle.create_dataset(
@@ -29,6 +32,8 @@ def _write_matr_file(
         )
         cycle_life = handle.create_dataset("cycle_life_0", data=np.array([1000.0]))
         policy_refs[0, 0] = policy.ref
+        if extra_policy_reference:
+            policy_refs[1, 0] = policy.ref
         life_refs[0, 0] = cycle_life.ref
 
         summary = handle.create_group("summary_0")
@@ -205,3 +210,11 @@ def test_rejects_manifest_for_another_dataset(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="dataset_id must be MATR"):
         load_matr_batch(path, manifest, batch_index=1, time_unit="seconds")
+
+
+def test_rejects_inconsistent_batch_reference_counts(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path, extra_policy_reference=True)
+
+    with pytest.raises(ValueError, match="inconsistent cell reference counts"):
+        load_matr_batch(path, _manifest(path), batch_index=1, time_unit="seconds")
