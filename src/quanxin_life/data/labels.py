@@ -29,7 +29,9 @@ def derive_eol80(
     if confirmations < 1:
         raise ValueError("confirmations must be positive")
 
-    valid_points = sorted((point for point in points if point.valid), key=lambda point: point.cycle_index)
+    valid_points = sorted(
+        (point for point in points if point.valid), key=lambda point: point.cycle_index
+    )
     for index in range(len(valid_points) - confirmations + 1):
         window = valid_points[index : index + confirmations]
         if all(point.soh <= threshold for point in window):

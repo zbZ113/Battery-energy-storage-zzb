@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -28,7 +28,7 @@ def _uuid_string(value: str) -> str:
 def _utc_datetime(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("datetime must include a timezone")
-    return value.astimezone(timezone.utc)
+    return value.astimezone(UTC)
 
 
 def _json_mapping(value: JsonMapping | None) -> JsonMapping | None:
@@ -64,7 +64,7 @@ class ToolResult(ContractModel):
     uncertainty: JsonMapping | None = None
     warnings: list[str] = Field(default_factory=list)
     provenance: list[ProvenanceRecord] = Field(min_length=1)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     _result_id_uuid = field_validator("result_id")(_uuid_string)
     _created_at_utc = field_validator("created_at")(_utc_datetime)
@@ -77,7 +77,7 @@ class CellMetadata(ContractModel):
     cell_id: str = Field(min_length=1)
     chemistry: str = Field(min_length=1)
     nominal_capacity_ah: float = Field(gt=0)
-    reference_capacity_ah: float = Field(gt=0)
+    reference_capacity_ah: float | None = Field(default=None, gt=0)
     eol_threshold: float = Field(default=0.8, gt=0, lt=1)
     protocol_id: str | None = None
     source_uri: str = Field(min_length=1)

@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -23,7 +23,7 @@ class CycleRecord(BaseModel):
     valid: bool = True
 
 
-class SplitName(str, Enum):
+class SplitName(StrEnum):
     TRAIN = "train"
     VALIDATION = "validation"
     CALIBRATION = "calibration"
@@ -55,7 +55,7 @@ class SplitManifest(BaseModel):
         return self.train + self.validation + self.calibration + self.test
 
 
-class DataQualitySeverity(str, Enum):
+class DataQualitySeverity(StrEnum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"

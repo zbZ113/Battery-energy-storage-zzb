@@ -15,6 +15,7 @@ def _write_matr_file(
     include_temperature: bool = True,
     include_resistance: bool = True,
     mismatched_voltage: bool = False,
+    mismatched_auxiliary: bool = False,
 ) -> None:
     with h5py.File(path, "w") as handle:
         batch = handle.create_group("batch")
@@ -47,6 +48,14 @@ def _write_matr_file(
                     f"T_{cycle_index}", data=np.array([25.0, 26.0, 27.0])
                 )
                 refs[cycle_index, 0] = dataset.ref
+        auxiliary = cycles.create_dataset(
+            "Qdlin", (1 if mismatched_auxiliary else 2, 1), dtype=h5py.ref_dtype
+        )
+        for cycle_index in range(auxiliary.shape[0]):
+            dataset = handle.create_dataset(
+                f"Qdlin_{cycle_index}", data=np.array([0.0, 0.1, 0.2])
+            )
+            auxiliary[cycle_index, 0] = dataset.ref
         cycle_refs[0, 0] = cycles.ref
 
 
@@ -74,7 +83,7 @@ def test_loads_cells_with_provenance_and_preserves_cycle_zero(tmp_path: Path) ->
     assert metadata.source_uri == manifest.source_uri
     assert metadata.source_sha256 == manifest.sha256
     assert metadata.nominal_capacity_ah == 1.1
-    assert metadata.reference_capacity_ah == 1.1
+    assert metadata.reference_capacity_ah is None
     assert metadata.protocol_id == "MATR_batch_3"
     assert isinstance(records, tuple)
     assert {record.cycle_index for record in records} == {0, 1}
@@ -157,3 +166,14 @@ def test_time_unit_must_be_explicit(tmp_path: Path) -> None:
 
     with pytest.raises(TypeError, match="time_unit"):
         load_matr_batch(path, _manifest(path), batch_index=1)  # type: ignore[call-arg]
+
+
+def test_unconsumed_auxiliary_cycle_arrays_do_not_block_ingestion(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path, mismatched_auxiliary=True)
+
+    _, records = load_matr_batch(
+        path, _manifest(path), batch_index=1, time_unit="seconds"
+    )[0]
+
+    assert len(records) == 6

@@ -62,7 +62,7 @@ def load_matr_batch(
     time_scale = 1.0 if time_unit == "seconds" else 60.0
 
     try:
-        import h5py
+        import h5py  # type: ignore[import-untyped]
     except ImportError as exc:  # pragma: no cover - exercised only without the data extra
         raise RuntimeError("MATR loading requires the 'data' optional dependencies") from exc
 
@@ -86,7 +86,12 @@ def load_matr_batch(
                 raise ValueError(f"{cell_id} is missing required cycle arrays: {missing_fields}")
 
             cycle_count = cycles["I"].shape[0]
-            if any(cycles[field].shape[0] != cycle_count for field in cycles):
+            consumed_fields = (*_REQUIRED_SAMPLE_FIELDS, "T")
+            if any(
+                cycles[field].shape[0] != cycle_count
+                for field in consumed_fields
+                if field in cycles
+            ):
                 raise ValueError(f"{cell_id} has inconsistent cycle counts")
             resistance = _optional_summary_values(handle, summary, "IR")
             if resistance is not None and len(resistance) != cycle_count:
@@ -137,7 +142,7 @@ def load_matr_batch(
                 cell_id=cell_id,
                 chemistry="LFP/graphite",
                 nominal_capacity_ah=1.1,
-                reference_capacity_ah=1.1,
+                reference_capacity_ah=None,
                 protocol_id=f"MATR_batch_{batch_index}",
                 source_uri=manifest.source_uri,
                 source_sha256=source_sha256,

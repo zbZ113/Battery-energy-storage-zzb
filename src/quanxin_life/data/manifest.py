@@ -1,5 +1,5 @@
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -22,14 +22,14 @@ class RawFileManifest(BaseModel):
     license_name: str = Field(min_length=1)
     license_uri: str | None = None
     paper_doi: str | None = None
-    downloaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    downloaded_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @field_validator("downloaded_at")
     @classmethod
     def normalize_download_time(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("downloaded_at must include a timezone")
-        return value.astimezone(timezone.utc)
+        return value.astimezone(UTC)
 
 
 def _sha256_file(path: Path) -> str:
@@ -48,6 +48,7 @@ def verify_raw_file(path: Path, manifest: RawFileManifest) -> str:
     actual = _sha256_file(path)
     if actual != manifest.sha256:
         raise ValueError(
-            f"SHA-256 mismatch for {manifest.relative_path}: expected {manifest.sha256}, got {actual}"
+            f"SHA-256 mismatch for {manifest.relative_path}: "
+            f"expected {manifest.sha256}, got {actual}"
         )
     return actual

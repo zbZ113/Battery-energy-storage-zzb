@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class EvidenceLevel(str, Enum):
+class EvidenceLevel(StrEnum):
     DATA_DIRECT = "DATA_DIRECT"
     MODEL_INFERENCE = "MODEL_INFERENCE"
     PHYSICS_REFERENCE = "PHYSICS_REFERENCE"
@@ -9,14 +9,14 @@ class EvidenceLevel(str, Enum):
     UNDETERMINED = "UNDETERMINED"
 
 
-class Decision(str, Enum):
+class Decision(StrEnum):
     ADMIT = "ADMIT"
     RECHECK = "RECHECK"
     DOWNGRADE = "DOWNGRADE"
     REJECT = "REJECT"
 
 
-class SourceKind(str, Enum):
+class SourceKind(StrEnum):
     OBSERVED = "OBSERVED"
     PREDICTED = "PREDICTED"
     NEWLY_OBSERVED = "NEWLY_OBSERVED"

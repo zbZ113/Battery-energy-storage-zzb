@@ -10,7 +10,8 @@ def test_split_is_deterministic_and_cell_disjoint() -> None:
     second = build_cell_split("MATR", list(reversed(cells)))
 
     assert first == second
-    assert [len(first.train), len(first.validation), len(first.calibration), len(first.test)] == [12, 3, 2, 3]
+    counts = [len(first.train), len(first.validation), len(first.calibration), len(first.test)]
+    assert counts == [12, 3, 2, 3]
     assert set(first.all_cells) == set(cells)
 
 

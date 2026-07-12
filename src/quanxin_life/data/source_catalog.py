@@ -1,11 +1,11 @@
 import json
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class IngestionMode(str, Enum):
+class IngestionMode(StrEnum):
     HDF5 = "hdf5"
     TABULAR = "tabular"
     QUARANTINE_CONVERSION = "quarantine_conversion"
@@ -53,4 +53,3 @@ class SourceCatalog(BaseModel):
             if entry.dataset_id == dataset_id:
                 return entry
         raise KeyError(f"dataset source is not registered: {dataset_id}")
-

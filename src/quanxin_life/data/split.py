@@ -13,8 +13,11 @@ def _target_counts(total: int, ratios: Sequence[float]) -> tuple[int, int, int, 
         raise ValueError("four non-negative split ratios are required")
     if not math.isclose(sum(ratios), 1.0, abs_tol=1e-9):
         raise ValueError("split ratios must sum to one")
-    first_three = tuple(math.floor(total * ratio) for ratio in ratios[:3])
-    return (*first_three, total - sum(first_three))
+    train = math.floor(total * ratios[0])
+    validation = math.floor(total * ratios[1])
+    calibration = math.floor(total * ratios[2])
+    test = total - train - validation - calibration
+    return train, validation, calibration, test
 
 
 def build_cell_split(
@@ -49,7 +52,13 @@ def build_cell_split(
 
     remaining = [cell for cell in cells if cell not in claimed]
     random.Random(seed).shuffle(remaining)
-    targets = dict(zip((name.value for name in SplitName), _target_counts(len(cells), ratios)))
+    targets = dict(
+        zip(
+            (name.value for name in SplitName),
+            _target_counts(len(cells), ratios),
+            strict=True,
+        )
+    )
     for name in (member.value for member in SplitName):
         needed = max(targets[name] - len(assignments[name]), 0)
         assignments[name].extend(remaining[:needed])
