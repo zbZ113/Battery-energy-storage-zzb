@@ -6,6 +6,7 @@ from quanxin_life.core.schemas import (
     AnalysisState,
     CellMetadata,
     LifePrediction,
+    LifetimeMetrics,
     ProvenanceRecord,
     ToolResult,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "Decision",
     "EvidenceLevel",
     "LifePrediction",
+    "LifetimeMetrics",
     "PredictionTarget",
     "ProvenanceRecord",
     "SourceKind",

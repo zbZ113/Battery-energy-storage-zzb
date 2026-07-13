@@ -139,6 +139,18 @@ class LifePrediction(ContractModel):
         return max(self.predicted_eol_cycle - self.cutoff_cycle, 0.0)
 
 
+class LifetimeMetrics(ContractModel):
+    """Cell-level EOL80 regression metrics from an explicit evaluation cohort."""
+
+    target: PredictionTarget = PredictionTarget.EOL80_CYCLE
+    evaluated_cell_count: int = Field(gt=0)
+    mae_cycle: float = Field(ge=0, allow_inf_nan=False)
+    rmse_cycle: float = Field(ge=0, allow_inf_nan=False)
+    mape_percent: float = Field(ge=0, allow_inf_nan=False)
+    r2: float | None = Field(default=None, allow_inf_nan=False)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class AnalysisState(ContractModel):
     request_id: str
     status: str = Field(min_length=1)

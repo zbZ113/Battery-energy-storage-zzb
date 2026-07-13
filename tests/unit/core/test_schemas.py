@@ -9,6 +9,7 @@ from quanxin_life.core.schemas import (
     AnalysisState,
     CellMetadata,
     LifePrediction,
+    LifetimeMetrics,
     ProvenanceRecord,
     ToolResult,
 )
@@ -189,6 +190,17 @@ def test_life_prediction_rejects_non_finite_eol_prediction(non_finite: float) ->
             split_version="matr-v1",
             model_version="dummy-v1",
             data_version="matr-v1",
+        )
+
+
+def test_lifetime_metrics_rejects_non_finite_values_and_empty_evaluation() -> None:
+    with pytest.raises(ValidationError):
+        LifetimeMetrics(
+            evaluated_cell_count=0,
+            mae_cycle=float("inf"),
+            rmse_cycle=10.0,
+            mape_percent=2.0,
+            r2=None,
         )
 
 
