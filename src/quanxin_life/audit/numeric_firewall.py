@@ -64,6 +64,25 @@ class AuditLedger:
             indexed[validated.result_id] = validated
         self._results = indexed
 
+    def resolve_registered_result(self, result_id: str) -> ToolResult:
+        """Return a revalidated, detached result only when it is ledger-registered.
+
+        Dependent domain tools use this method to bind an upstream ``result_id``
+        to its audited context before consuming any numerical payload.  A fresh
+        Pydantic reconstruction prevents a caller from mutating the ledger's
+        internal evidence after resolution.
+        """
+
+        try:
+            UUID(result_id)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("result_id must be a UUID string") from exc
+
+        result = self._results.get(result_id)
+        if result is None:
+            raise ValueError("referenced ToolResult is not registered in the audit ledger")
+        return ToolResult.model_validate(result.model_dump(mode="json"))
+
     def verify_numeric_evidence(self, evidence: NumericEvidence) -> float:
         """Resolve one evidence path and reject altered or nonnumeric report values."""
 

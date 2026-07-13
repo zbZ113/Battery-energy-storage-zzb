@@ -55,6 +55,27 @@ def test_numeric_evidence_must_exactly_match_a_registered_tool_result_value() ->
     assert resolved == 333.0
 
 
+def test_audit_ledger_resolves_only_registered_results_as_detached_contract_values() -> None:
+    from quanxin_life.audit.numeric_firewall import AuditLedger
+
+    result = _result()
+    ledger = AuditLedger((result,))
+
+    resolved = ledger.resolve_registered_result(result.result_id)
+    assert resolved == result
+
+    resolved.values["lifetime"]["predicted_eol_cycle"] = 999.0  # type: ignore[index]
+    assert ledger.resolve_registered_result(result.result_id).values["lifetime"] == {
+        "predicted_eol_cycle": 333.0
+    }
+
+    with pytest.raises(ValueError, match="not registered"):
+        ledger.resolve_registered_result(str(uuid4()))
+
+    with pytest.raises(ValueError, match="UUID"):
+        ledger.resolve_registered_result("not-a-uuid")
+
+
 def test_numeric_firewall_rejects_mismatched_unknown_or_non_numeric_evidence() -> None:
     from quanxin_life.audit.numeric_firewall import AuditLedger, NumericEvidence
 
