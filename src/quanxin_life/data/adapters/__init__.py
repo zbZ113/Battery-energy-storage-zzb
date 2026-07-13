@@ -7,12 +7,34 @@ from quanxin_life.data.adapters.naumann import (
     NaumannWorkbookUnits,
     load_naumann_workbook,
 )
+from quanxin_life.data.adapters.naumann_calendar import (
+    CalendarCapacityObservation,
+    CalendarConditionColumn,
+    NaumannCalendarLayout,
+    load_naumann_calendar_capacity,
+    load_naumann_calendar_layout,
+)
+from quanxin_life.data.adapters.naumann_cycle_mat import (
+    CycleConditionColumn,
+    CycleMatrixObservation,
+    NaumannCycleMatrixLayout,
+    load_naumann_cycle_matrix,
+)
 
 __all__ = [
+    "CalendarCapacityObservation",
+    "CalendarConditionColumn",
+    "CycleConditionColumn",
+    "CycleMatrixObservation",
     "MatrCell",
+    "NaumannCalendarLayout",
     "NaumannCell",
+    "NaumannCycleMatrixLayout",
     "NaumannWorkbookLayout",
     "NaumannWorkbookUnits",
     "load_matr_batch",
+    "load_naumann_calendar_capacity",
+    "load_naumann_calendar_layout",
+    "load_naumann_cycle_matrix",
     "load_naumann_workbook",
 ]

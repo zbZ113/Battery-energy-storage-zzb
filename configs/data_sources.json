@@ -26,8 +26,8 @@
     "source_uri": "https://data.mendeley.com/datasets/6hgyr25h8d/1",
     "paper_uri": "https://doi.org/10.1016/j.jpowsour.2019.227666",
     "license_status": "CC BY 4.0",
-    "ingestion_mode": "tabular",
-    "expected_suffixes": [".xlsx"],
+    "ingestion_mode": "matlab",
+    "expected_suffixes": [".mat"],
     "notes": "29个月LFP/graphite循环老化研究，19种工况。"
   },
   {

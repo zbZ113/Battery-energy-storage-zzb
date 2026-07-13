@@ -19,6 +19,8 @@ def test_catalog_uses_safe_modes_for_matr_and_naumann() -> None:
     catalog = SourceCatalog.load(Path("configs/data_sources.json"))
 
     assert catalog.require("MATR").ingestion_mode == IngestionMode.HDF5
+    assert catalog.require("NAUMANN_CYCLE").ingestion_mode == IngestionMode.MATLAB
+    assert catalog.require("NAUMANN_CYCLE").expected_suffixes == (".mat",)
     assert catalog.require("NAUMANN_CALENDAR").ingestion_mode == IngestionMode.TABULAR
 
 

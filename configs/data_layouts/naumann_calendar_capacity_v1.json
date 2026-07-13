@@ -1,0 +1,30 @@
+{
+  "layout_version": "naumann-calendar-capacity-2021-v1",
+  "sheet_name": "C_disch",
+  "capacity_header_row": 1,
+  "capacity_header_column": 2,
+  "capacity_header": "Discharge capacity C_disch / Ah",
+  "time_header_row": 2,
+  "first_observation_row": 3,
+  "time_column": 1,
+  "time_header": "Storage time / hours",
+  "condition_columns": [
+    {"column": 2, "expected_header": "TP_0°C,50%SOC", "condition_id": "T0_SOC50", "temperature_c": 0.0, "mean_soc": 0.5},
+    {"column": 3, "expected_header": "TP_10°C,50%SOC", "condition_id": "T10_SOC50", "temperature_c": 10.0, "mean_soc": 0.5},
+    {"column": 4, "expected_header": "TP_25°C,0%SOC", "condition_id": "T25_SOC0", "temperature_c": 25.0, "mean_soc": 0.0},
+    {"column": 5, "expected_header": "TP_25°C,50%SOC", "condition_id": "T25_SOC50", "temperature_c": 25.0, "mean_soc": 0.5},
+    {"column": 6, "expected_header": "TP_25°C,100%SOC", "condition_id": "T25_SOC100", "temperature_c": 25.0, "mean_soc": 1.0},
+    {"column": 7, "expected_header": "TP_40°C,0%SOC", "condition_id": "T40_SOC0", "temperature_c": 40.0, "mean_soc": 0.0},
+    {"column": 8, "expected_header": "TP_40°C,12.5%SOC", "condition_id": "T40_SOC12_5", "temperature_c": 40.0, "mean_soc": 0.125},
+    {"column": 9, "expected_header": "TP_40°C,25%SOC", "condition_id": "T40_SOC25", "temperature_c": 40.0, "mean_soc": 0.25},
+    {"column": 10, "expected_header": "TP_40°C,37.5%SOC", "condition_id": "T40_SOC37_5", "temperature_c": 40.0, "mean_soc": 0.375},
+    {"column": 11, "expected_header": "TP_40°C,50%SOC", "condition_id": "T40_SOC50", "temperature_c": 40.0, "mean_soc": 0.5},
+    {"column": 12, "expected_header": "TP_40°C,62.5%SOC", "condition_id": "T40_SOC62_5", "temperature_c": 40.0, "mean_soc": 0.625},
+    {"column": 13, "expected_header": "TP_40°C,75%SOC", "condition_id": "T40_SOC75", "temperature_c": 40.0, "mean_soc": 0.75},
+    {"column": 14, "expected_header": "TP_40°C,87.5%SOC", "condition_id": "T40_SOC87_5", "temperature_c": 40.0, "mean_soc": 0.875},
+    {"column": 15, "expected_header": "TP_40°C,100%SOC", "condition_id": "T40_SOC100", "temperature_c": 40.0, "mean_soc": 1.0},
+    {"column": 16, "expected_header": "TP_60°C,0%SOC", "condition_id": "T60_SOC0", "temperature_c": 60.0, "mean_soc": 0.0},
+    {"column": 17, "expected_header": "TP_60°C,50%SOC", "condition_id": "T60_SOC50", "temperature_c": 60.0, "mean_soc": 0.5},
+    {"column": 18, "expected_header": "TP_60°C,100%SOC", "condition_id": "T60_SOC100", "temperature_c": 60.0, "mean_soc": 1.0}
+  ]
+}

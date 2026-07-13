@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class IngestionMode(StrEnum):
     HDF5 = "hdf5"
+    MATLAB = "matlab"
     TABULAR = "tabular"
     QUARANTINE_CONVERSION = "quarantine_conversion"
 
