@@ -69,6 +69,19 @@ def test_service_delegates_external_invocation_to_shared_registry() -> None:
     assert result.input_hash == sha256_canonical({"batch_id": "batch-A"})
 
 
+def test_available_service_uses_the_shared_available_tool_assembly() -> None:
+    from quanxin_life.api.service import create_available_tool_invocation_service
+
+    service = create_available_tool_invocation_service()
+
+    assert [schema.tool_name.value for schema in service.registry.list_schemas()] == [
+        "audit_dataset_split",
+        "check_operating_condition",
+        "make_batch_decision",
+        "validate_battery_data",
+    ]
+
+
 def test_service_requires_explicit_nonempty_allowlist_for_agent_invocation() -> None:
     from quanxin_life.api.service import ToolInvocation, ToolInvocationService
     from quanxin_life.tools import ToolAuthorizationError

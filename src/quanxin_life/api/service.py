@@ -14,7 +14,7 @@ from pydantic import field_validator
 
 from quanxin_life.core import ToolResult, sha256_canonical
 from quanxin_life.core.schemas import ContractModel, JsonMapping
-from quanxin_life.tools import StandardToolName, ToolRegistry
+from quanxin_life.tools import StandardToolName, ToolRegistry, create_available_tool_registry
 
 
 class ToolInvocation(ContractModel):
@@ -55,3 +55,8 @@ class ToolInvocationService:
             invocation.input_value,
             allowed_tool_names=allowed_tool_names,
         )
+
+
+def create_available_tool_invocation_service() -> ToolInvocationService:
+    """Construct a service from the single shared implemented-tool assembly."""
+    return ToolInvocationService(registry=create_available_tool_registry())
