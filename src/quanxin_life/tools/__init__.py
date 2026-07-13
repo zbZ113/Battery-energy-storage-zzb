@@ -6,6 +6,7 @@ from quanxin_life.tools.batch_decision import (
     execute_batch_decision_tool,
     register_batch_decision_tool,
 )
+from quanxin_life.tools.bootstrap import create_available_tool_registry
 from quanxin_life.tools.data_quality import (
     DATA_QUALITY_MODEL_VERSION,
     DATA_QUALITY_TOOL_VERSION,
@@ -77,6 +78,7 @@ __all__ = [
     "ToolSchema",
     "UnknownToolError",
     "ValidateBatteryDataToolInput",
+    "create_available_tool_registry",
     "execute_audit_dataset_split_tool",
     "execute_batch_decision_tool",
     "execute_check_operating_condition_tool",
