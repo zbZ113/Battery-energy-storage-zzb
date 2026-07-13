@@ -7,7 +7,7 @@
 - 输入只能是 `PredictionInterval` 或 `NormalizedPredictionInterval`；其数据、模型、特征和校准版本已由上游模型登记。
 - `DataQualityReport.dataset_id` 必须与区间一致。任何 `BLOCKING` 数据质量问题会阻断数值决策。
 - `target_domain_calibrated` 是必填布尔状态。它为 `false` 表示目标域没有独立校准证据；系统不会假定源域覆盖率可直接迁移。
-- 后续正式工具会把结果包装为带 `ToolResult`、输入哈希、模型版本和来源链的审计记录；本模块只输出确定性领域对象。
+- `batch-decision-tool-v1` 已将结果包装为 `make_batch_decision` 的 `ToolResult`。工具输入必须提供至少两个互异的上游 `result_id`（预测区间和数据质量报告）、来源链、模型/数据/特征版本以及输入哈希；包装层只保留确定性领域决策结果，不生成新的寿命或区间数值。
 
 ## 规则与优先级
 
