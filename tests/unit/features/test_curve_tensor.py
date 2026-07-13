@@ -1,0 +1,90 @@
+import pytest
+
+from quanxin_life.data.schemas import CycleRecord
+from quanxin_life.features.curve_tensor import CurveTensorConfig, build_discharge_curve_tensor
+
+
+def _record(
+    *,
+    cycle_index: int,
+    sample_index: int,
+    voltage_v: float,
+    discharge_capacity_ah: float | None,
+) -> CycleRecord:
+    return CycleRecord(
+        dataset_id="MATR",
+        cell_id="MATR_b1c0",
+        cycle_index=cycle_index,
+        sample_index=sample_index,
+        time_s=float(sample_index + 1),
+        voltage_v=voltage_v,
+        current_a=-1.0,
+        discharge_capacity_ah=discharge_capacity_ah,
+    )
+
+
+def _records(*, second_cycle_has_capacity: bool = True) -> tuple[CycleRecord, ...]:
+    first_cycle = tuple(
+        _record(
+            cycle_index=1,
+            sample_index=sample_index,
+            voltage_v=voltage_v,
+            discharge_capacity_ah=capacity,
+        )
+        for sample_index, (voltage_v, capacity) in enumerate(((3.6, 0.0), (3.3, 0.3), (3.0, 0.6)))
+    )
+    second_cycle = tuple(
+        _record(
+            cycle_index=2,
+            sample_index=sample_index,
+            voltage_v=voltage_v,
+            discharge_capacity_ah=capacity if second_cycle_has_capacity else None,
+        )
+        for sample_index, (voltage_v, capacity) in enumerate(((3.6, 0.0), (3.3, 0.27), (3.0, 0.54)))
+    )
+    return first_cycle + second_cycle
+
+
+def test_builds_a_fixed_voltage_grid_and_explicit_cycle_mask() -> None:
+    result = build_discharge_curve_tensor(
+        tuple(reversed(_records())),
+        config=CurveTensorConfig(cutoff_cycle=20, voltage_grid_step_v=0.1),
+    )
+
+    assert result.dataset_id == "MATR"
+    assert result.cell_id == "MATR_b1c0"
+    assert result.cycle_indices == tuple(range(21))
+    assert result.observed_mask[0] is False
+    assert result.observed_mask[1] is True
+    assert result.observed_mask[2] is True
+    assert result.voltage_grid_v == pytest.approx((3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6))
+    assert all(value is None for value in result.values[0])
+    assert result.values[1][0] == pytest.approx(0.6)
+    assert result.values[2][-1] == pytest.approx(0.0)
+
+
+def test_rejects_any_record_after_the_declared_cutoff() -> None:
+    future = _record(
+        cycle_index=21,
+        sample_index=0,
+        voltage_v=3.6,
+        discharge_capacity_ah=0.0,
+    )
+
+    with pytest.raises(ValueError, match="after cutoff 20"):
+        build_discharge_curve_tensor(
+            (*_records(), future),
+            config=CurveTensorConfig(cutoff_cycle=20),
+        )
+
+
+def test_preserves_missing_curves_as_masked_none_rows_without_zero_fill() -> None:
+    result = build_discharge_curve_tensor(
+        _records(second_cycle_has_capacity=False),
+        config=CurveTensorConfig(cutoff_cycle=20, voltage_grid_step_v=0.1),
+    )
+
+    assert result.observed_mask[1] is True
+    assert result.observed_mask[2] is False
+    assert all(value is None for value in result.values[2])
+    assert "CURVE_UNAVAILABLE_CYCLE_2" in result.warnings

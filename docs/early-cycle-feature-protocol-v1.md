@@ -45,3 +45,12 @@
 输入原语。调用方必须显式传入 `anchor_cycle` 和 `comparison_cycle`，两者都不得超过
 截断点；模块不会依据数组下标或文件顺序猜测比较周期。输出保留两个 cycle、固定网格
 有效点数及不可用原因，供模型层在训练前决定排除样本或执行已登记的缺失策略。
+
+## CPMLP 曲线输入
+
+`discharge-curve-tensor-v1` 为后续 CPMLP 提供安全的前置表示。它输出固定的
+`0..cutoff_cycle` cycle 轴和跨可用曲线的共同固定电压网格。每个 cycle 的容量曲线只由
+`discharge_capacity_ah` 生成；重复电压确定性合并后再 PCHIP 插值，绝不按采样序号或
+时间长度重采样。没有曲线、曲线点不足或不在共同电压区间内的 cycle 全行保持 `null`，
+并由 `observed_mask=false` 显式标出。Torch 适配器只能在这个掩码基础上转换数据，
+不得把 `null` 填作容量零值。
