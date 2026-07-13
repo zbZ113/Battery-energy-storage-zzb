@@ -12,6 +12,7 @@ from quanxin_life.data.manifest import RawFileManifest
 def _write_matr_file(
     path: Path,
     *,
+    cell_count: int = 1,
     include_temperature: bool = True,
     include_resistance: bool = True,
     mismatched_voltage: bool = False,
@@ -20,57 +21,66 @@ def _write_matr_file(
 ) -> None:
     with h5py.File(path, "w") as handle:
         batch = handle.create_group("batch")
-        summary_refs = batch.create_dataset("summary", (1, 1), dtype=h5py.ref_dtype)
-        cycle_refs = batch.create_dataset("cycles", (1, 1), dtype=h5py.ref_dtype)
+        summary_refs = batch.create_dataset("summary", (cell_count, 1), dtype=h5py.ref_dtype)
+        cycle_refs = batch.create_dataset("cycles", (cell_count, 1), dtype=h5py.ref_dtype)
         policy_refs = batch.create_dataset(
-            "policy_readable", (2 if extra_policy_reference else 1, 1), dtype=h5py.ref_dtype
+            "policy_readable",
+            (cell_count + int(extra_policy_reference), 1),
+            dtype=h5py.ref_dtype,
         )
-        life_refs = batch.create_dataset("cycle_life", (1, 1), dtype=h5py.ref_dtype)
+        life_refs = batch.create_dataset("cycle_life", (cell_count, 1), dtype=h5py.ref_dtype)
 
-        policy = handle.create_dataset(
-            "policy_0", data=np.array([ord(char) for char in "3.6C(80%)-1C"], dtype=np.uint16)
-        )
-        cycle_life = handle.create_dataset("cycle_life_0", data=np.array([1000.0]))
-        policy_refs[0, 0] = policy.ref
-        if extra_policy_reference:
-            policy_refs[1, 0] = policy.ref
-        life_refs[0, 0] = cycle_life.ref
-
-        summary = handle.create_group("summary_0")
-        if include_resistance:
-            summary.create_dataset("IR", data=np.array([[0.01, 0.02]]))
-        summary_refs[0, 0] = summary.ref
-
-        cycles = handle.create_group("cycles_0")
-        for field in ("t", "V", "I", "Qc", "Qd"):
-            refs = cycles.create_dataset(field, (2, 1), dtype=h5py.ref_dtype)
-            for cycle_index in range(2):
-                values = np.array([0.0, 1.0, 2.0])
-                if field == "V":
-                    values = np.array([3.2, 3.3]) if mismatched_voltage else values + 3.2
-                elif field == "I":
-                    values = values - 1.0
-                elif field in {"Qc", "Qd"}:
-                    values = values / 10.0
-                dataset = handle.create_dataset(f"{field}_{cycle_index}", data=values)
-                refs[cycle_index, 0] = dataset.ref
-
-        if include_temperature:
-            refs = cycles.create_dataset("T", (2, 1), dtype=h5py.ref_dtype)
-            for cycle_index in range(2):
-                dataset = handle.create_dataset(
-                    f"T_{cycle_index}", data=np.array([25.0, 26.0, 27.0])
-                )
-                refs[cycle_index, 0] = dataset.ref
-        auxiliary = cycles.create_dataset(
-            "Qdlin", (1 if mismatched_auxiliary else 2, 1), dtype=h5py.ref_dtype
-        )
-        for cycle_index in range(auxiliary.shape[0]):
-            dataset = handle.create_dataset(
-                f"Qdlin_{cycle_index}", data=np.array([0.0, 0.1, 0.2])
+        for cell_index in range(cell_count):
+            policy = handle.create_dataset(
+                f"policy_{cell_index}",
+                data=np.array([ord(char) for char in "3.6C(80%)-1C"], dtype=np.uint16),
             )
-            auxiliary[cycle_index, 0] = dataset.ref
-        cycle_refs[0, 0] = cycles.ref
+            cycle_life = handle.create_dataset(
+                f"cycle_life_{cell_index}", data=np.array([1000.0 + cell_index])
+            )
+            policy_refs[cell_index, 0] = policy.ref
+            life_refs[cell_index, 0] = cycle_life.ref
+
+            summary = handle.create_group(f"summary_{cell_index}")
+            if include_resistance:
+                summary.create_dataset("IR", data=np.array([[0.01, 0.02]]))
+            summary_refs[cell_index, 0] = summary.ref
+
+            cycles = handle.create_group(f"cycles_{cell_index}")
+            for field in ("t", "V", "I", "Qc", "Qd"):
+                refs = cycles.create_dataset(field, (2, 1), dtype=h5py.ref_dtype)
+                for cycle_index in range(2):
+                    values = np.array([0.0, 1.0, 2.0])
+                    if field == "V":
+                        values = np.array([3.2, 3.3]) if mismatched_voltage else values + 3.2
+                    elif field == "I":
+                        values = values - 1.0
+                    elif field in {"Qc", "Qd"}:
+                        values = values / 10.0
+                    dataset = handle.create_dataset(
+                        f"{field}_{cell_index}_{cycle_index}", data=values
+                    )
+                    refs[cycle_index, 0] = dataset.ref
+
+            if include_temperature:
+                refs = cycles.create_dataset("T", (2, 1), dtype=h5py.ref_dtype)
+                for cycle_index in range(2):
+                    dataset = handle.create_dataset(
+                        f"T_{cell_index}_{cycle_index}", data=np.array([25.0, 26.0, 27.0])
+                    )
+                    refs[cycle_index, 0] = dataset.ref
+            auxiliary = cycles.create_dataset(
+                "Qdlin", (1 if mismatched_auxiliary else 2, 1), dtype=h5py.ref_dtype
+            )
+            for cycle_index in range(auxiliary.shape[0]):
+                dataset = handle.create_dataset(
+                    f"Qdlin_{cell_index}_{cycle_index}", data=np.array([0.0, 0.1, 0.2])
+                )
+                auxiliary[cycle_index, 0] = dataset.ref
+            cycle_refs[cell_index, 0] = cycles.ref
+
+        if extra_policy_reference:
+            policy_refs[cell_count, 0] = policy.ref
 
 
 def _manifest(path: Path, *, sha256: str | None = None) -> RawFileManifest:
@@ -103,9 +113,11 @@ def test_loads_cells_with_provenance_and_preserves_cycle_zero(tmp_path: Path) ->
     assert metadata.protocol_description == "3.6C(80%)-1C"
     assert metadata.official_life_label == 1000
     assert metadata.official_life_label_name == "MATR_cycle_life"
-    assert metadata.adapter_version == "matr-hdf5-v1.0.0"
+    assert metadata.adapter_version == "matr-hdf5-v1.1.0"
     assert metadata.ingestion_parameters == {
         "batch_index": 3,
+        "max_cycle_index": None,
+        "selected_raw_cell_ids": None,
         "skip_cycle_zero": False,
         "time_unit": "seconds",
     }
@@ -115,6 +127,70 @@ def test_loads_cells_with_provenance_and_preserves_cycle_zero(tmp_path: Path) ->
     assert records[0].time_s == 0.0
     assert records[0].voltage_v == 3.2
     assert records[0].internal_resistance_ohm == 0.01
+
+
+def test_selects_requested_cell_and_bounds_materialized_cycles(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path, cell_count=2)
+
+    cells = load_matr_batch(
+        path,
+        _manifest(path),
+        batch_index=3,
+        time_unit="seconds",
+        selected_raw_cell_ids=("b3c1",),
+        max_cycle_index=0,
+    )
+
+    assert len(cells) == 1
+    metadata, records = cells[0]
+    assert metadata.raw_cell_id == "b3c1"
+    assert metadata.official_life_label == 1001
+    assert {record.cycle_index for record in records} == {0}
+    assert metadata.ingestion_parameters["selected_raw_cell_ids"] == ["b3c1"]
+    assert metadata.ingestion_parameters["max_cycle_index"] == 0
+
+
+def test_rejects_unknown_requested_raw_cell_id(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path)
+
+    with pytest.raises(ValueError, match="unknown raw MATR cell IDs"):
+        load_matr_batch(
+            path,
+            _manifest(path),
+            batch_index=3,
+            time_unit="seconds",
+            selected_raw_cell_ids=("b3c9",),
+        )
+
+
+def test_rejects_string_instead_of_a_collection_of_raw_cell_ids(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path)
+
+    with pytest.raises(ValueError, match="collection"):
+        load_matr_batch(
+            path,
+            _manifest(path),
+            batch_index=3,
+            time_unit="seconds",
+            selected_raw_cell_ids="b3c0",  # type: ignore[arg-type]
+        )
+
+
+def test_rejects_non_integer_cycle_cutoff(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path)
+
+    with pytest.raises(ValueError, match="max_cycle_index"):
+        load_matr_batch(
+            path,
+            _manifest(path),
+            batch_index=3,
+            time_unit="seconds",
+            max_cycle_index="50",  # type: ignore[arg-type]
+        )
 
 
 def test_missing_optional_temperature_and_resistance_become_none(tmp_path: Path) -> None:

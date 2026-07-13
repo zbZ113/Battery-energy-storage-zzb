@@ -1,4 +1,5 @@
 import math
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
@@ -10,7 +11,7 @@ MatrCell: TypeAlias = tuple[CellMetadata, tuple[CycleRecord, ...]]
 
 _ALLOWED_SUFFIXES = frozenset({".mat", ".h5", ".hdf5"})
 _REQUIRED_SAMPLE_FIELDS = ("t", "V", "I", "Qc", "Qd")
-_ADAPTER_VERSION = "matr-hdf5-v1.0.0"
+_ADAPTER_VERSION = "matr-hdf5-v1.1.0"
 
 
 def _flatten_numeric(value: Any) -> list[float]:
@@ -54,6 +55,33 @@ def _resolve_text_reference(handle: Any, reference: Any) -> str:
     return text
 
 
+def _select_cell_indices(
+    *,
+    batch_index: int,
+    cell_count: int,
+    selected_raw_cell_ids: Collection[str] | None,
+) -> tuple[tuple[int, ...], list[str] | None]:
+    """Resolve an explicit raw-cell selection without silently dropping requests."""
+    if selected_raw_cell_ids is None:
+        return tuple(range(cell_count)), None
+    if isinstance(selected_raw_cell_ids, str):
+        raise ValueError("selected raw MATR cell IDs must be a collection, not a string")
+
+    selected = tuple(selected_raw_cell_ids)
+    if len(selected) != len(set(selected)):
+        raise ValueError("selected raw MATR cell IDs must not contain duplicates")
+    if any(not isinstance(raw_cell_id, str) or not raw_cell_id for raw_cell_id in selected):
+        raise ValueError("selected raw MATR cell IDs must be non-empty strings")
+
+    available_indices = {
+        f"b{batch_index}c{cell_index}": cell_index for cell_index in range(cell_count)
+    }
+    unknown = sorted(set(selected).difference(available_indices))
+    if unknown:
+        raise ValueError("unknown raw MATR cell IDs: " + ", ".join(unknown))
+    return tuple(available_indices[raw_cell_id] for raw_cell_id in selected), list(selected)
+
+
 def load_matr_batch(
     path: Path,
     manifest: RawFileManifest,
@@ -61,6 +89,8 @@ def load_matr_batch(
     batch_index: int,
     time_unit: Literal["seconds", "minutes"],
     skip_cycle_zero: bool = False,
+    selected_raw_cell_ids: Collection[str] | None = None,
+    max_cycle_index: int | None = None,
 ) -> tuple[MatrCell, ...]:
     """Load one provenance-verified MATR MATLAB v7.3/HDF5 batch.
 
@@ -77,6 +107,12 @@ def load_matr_batch(
         raise ValueError("batch_index must be at least 1")
     if time_unit not in {"seconds", "minutes"}:
         raise ValueError("time_unit must be 'seconds' or 'minutes'")
+    if max_cycle_index is not None and (
+        not isinstance(max_cycle_index, int)
+        or isinstance(max_cycle_index, bool)
+        or max_cycle_index < 0
+    ):
+        raise ValueError("max_cycle_index must be a non-negative integer or None")
     time_scale = 1.0 if time_unit == "seconds" else 60.0
 
     try:
@@ -99,7 +135,12 @@ def load_matr_batch(
         if len(set(reference_counts.values())) != 1:
             raise ValueError("MATR batch has inconsistent cell reference counts")
 
-        for cell_index in range(batch["cycles"].shape[0]):
+        selected_indices, selected_ids_for_metadata = _select_cell_indices(
+            batch_index=batch_index,
+            cell_count=batch["cycles"].shape[0],
+            selected_raw_cell_ids=selected_raw_cell_ids,
+        )
+        for cell_index in selected_indices:
             raw_cell_id = f"b{batch_index}c{cell_index}"
             cell_id = f"MATR_{raw_cell_id}"
             summary = handle[batch["summary"][cell_index, 0]]
@@ -133,7 +174,12 @@ def load_matr_batch(
                 raise ValueError(f"{cell_id} has inconsistent internal-resistance cycle count")
 
             records: list[CycleRecord] = []
-            for cycle_index in range(cycle_count):
+            bounded_cycle_count = (
+                cycle_count
+                if max_cycle_index is None
+                else min(cycle_count, max_cycle_index + 1)
+            )
+            for cycle_index in range(bounded_cycle_count):
                 if skip_cycle_zero and cycle_index == 0:
                     continue
                 arrays = {
@@ -189,6 +235,8 @@ def load_matr_batch(
                 adapter_version=_ADAPTER_VERSION,
                 ingestion_parameters={
                     "batch_index": batch_index,
+                    "max_cycle_index": max_cycle_index,
+                    "selected_raw_cell_ids": selected_ids_for_metadata,
                     "skip_cycle_zero": skip_cycle_zero,
                     "time_unit": time_unit,
                 },
