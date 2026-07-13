@@ -191,6 +191,53 @@ class PredictionInterval(ContractModel):
         return 1.0 - self.calibration.alpha
 
 
+class NormalizedConformalCalibration(ContractModel):
+    """Cell-disjoint normalized conformal calibration metadata.
+
+    The score quantile is dimensionless.  Its interval radius is obtained only
+    after multiplying it by a model-produced difficulty scale from the same
+    declared ``scale_version``.
+    """
+
+    target: PredictionTarget = PredictionTarget.EOL80_CYCLE
+    alpha: float = Field(gt=0, lt=1, allow_inf_nan=False)
+    normalized_score_quantile: float = Field(ge=0, allow_inf_nan=False)
+    calibration_cell_count: int = Field(gt=0)
+    scale_version: str = Field(min_length=1)
+    feature_version: str = Field(min_length=1)
+    split_version: str = Field(min_length=1)
+    model_version: str = Field(min_length=1)
+    data_version: str = Field(min_length=1)
+
+
+class NormalizedPredictionInterval(ContractModel):
+    """A scaled conformal EOL80 interval with auditable difficulty metadata."""
+
+    dataset_id: str = Field(min_length=1)
+    cell_id: str = Field(min_length=1)
+    cutoff_cycle: int = Field(ge=0)
+    target: PredictionTarget = PredictionTarget.EOL80_CYCLE
+    point_prediction_cycle: float = Field(ge=0, allow_inf_nan=False)
+    lower_eol_cycle: float = Field(ge=0, allow_inf_nan=False)
+    upper_eol_cycle: float = Field(ge=0, allow_inf_nan=False)
+    difficulty_scale_cycle: float = Field(gt=0, allow_inf_nan=False)
+    calibration: NormalizedConformalCalibration
+
+    @model_validator(mode="after")
+    def interval_is_ordered_and_contextualized(self) -> "NormalizedPredictionInterval":
+        if self.target is not self.calibration.target:
+            raise ValueError("interval target must match normalized conformal calibration target")
+        if self.lower_eol_cycle < self.cutoff_cycle:
+            raise ValueError("lower_eol_cycle cannot precede cutoff_cycle")
+        if not self.lower_eol_cycle <= self.point_prediction_cycle <= self.upper_eol_cycle:
+            raise ValueError("prediction interval must contain the point prediction")
+        return self
+
+    @property
+    def coverage_target(self) -> float:
+        return 1.0 - self.calibration.alpha
+
+
 class AnalysisState(ContractModel):
     request_id: str
     status: str = Field(min_length=1)
