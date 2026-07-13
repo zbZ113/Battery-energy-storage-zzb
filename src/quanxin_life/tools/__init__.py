@@ -21,6 +21,12 @@ from quanxin_life.tools.mcp_adapter import (
     McpToolCallRequest,
     load_optional_mcp_sdk,
 )
+from quanxin_life.tools.physics_check import (
+    PHYSICS_CHECK_TOOL_VERSION,
+    CheckOperatingConditionToolInput,
+    execute_check_operating_condition_tool,
+    register_check_operating_condition_tool,
+)
 from quanxin_life.tools.registry import (
     DuplicateToolError,
     RegisteredTool,
@@ -47,10 +53,12 @@ __all__ = [
     "BATCH_DECISION_TOOL_VERSION",
     "DATA_QUALITY_MODEL_VERSION",
     "DATA_QUALITY_TOOL_VERSION",
+    "PHYSICS_CHECK_TOOL_VERSION",
     "SPLIT_AUDIT_MODEL_VERSION",
     "SPLIT_AUDIT_TOOL_VERSION",
     "AuditDatasetSplitToolInput",
     "BatchDecisionToolInput",
+    "CheckOperatingConditionToolInput",
     "DuplicateToolError",
     "McpAdapterError",
     "McpRequestValidationError",
@@ -71,9 +79,11 @@ __all__ = [
     "ValidateBatteryDataToolInput",
     "execute_audit_dataset_split_tool",
     "execute_batch_decision_tool",
+    "execute_check_operating_condition_tool",
     "execute_validate_battery_data_tool",
     "load_optional_mcp_sdk",
     "register_audit_dataset_split_tool",
     "register_batch_decision_tool",
+    "register_check_operating_condition_tool",
     "register_validate_battery_data_tool",
 ]
