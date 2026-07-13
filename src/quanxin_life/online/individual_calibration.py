@@ -110,6 +110,8 @@ class FrozenGlobalTrajectory(_InternalModel):
 class NewlyObservedSOH(_InternalModel):
     """One actual, newly measured SOH point; predicted or simulated points are refused."""
 
+    dataset_id: str = Field(min_length=1)
+    cell_id: str = Field(min_length=1)
     cycle: int = Field(ge=0, strict=True)
     soh: float = Field(ge=0.0, le=1.5, strict=True)
     source_kind: SourceKind = SourceKind.NEWLY_OBSERVED
@@ -153,6 +155,16 @@ class CalibrationConfig(_InternalModel):
         # Effective time stays non-decreasing on both sides of the midpoint.
         if self.rate_multiplier_bounds[0] + self.knee_offset_bounds[0] <= 0.0:
             raise ValueError("rate and knee bounds would permit a time reversal")
+        for name, neutral_prior in (
+            ("bias_bounds", 0.0),
+            ("rate_multiplier_bounds", 1.0),
+            ("knee_offset_bounds", 0.0),
+        ):
+            lower, upper = getattr(self, name)
+            if not lower <= neutral_prior <= upper:
+                raise ValueError(
+                    f"{name} must contain its neutral prior value {neutral_prior}"
+                )
         for name in (
             "bias_regularization",
             "rate_regularization",
@@ -552,6 +564,13 @@ def _validate_observations(
     seen_cycles: set[int] = set()
     ordered: list[NewlyObservedSOH] = []
     for observation in observations:
+        if (
+            observation.dataset_id != global_trajectory.dataset_id
+            or observation.cell_id != global_trajectory.cell_id
+        ):
+            raise ValueError(
+                "newly observed SOH identity must exactly match the global trajectory"
+            )
         if observation.cycle in seen_cycles:
             raise ValueError(f"duplicate newly observed cycle: {observation.cycle}")
         seen_cycles.add(observation.cycle)

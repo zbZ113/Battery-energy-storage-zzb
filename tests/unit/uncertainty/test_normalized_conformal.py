@@ -85,7 +85,9 @@ def test_interval_width_scales_with_model_difficulty_without_changing_point_pred
     )
 
     assert narrow.point_prediction_cycle == wide.point_prediction_cycle == 100.0
-    assert wide.upper_eol_cycle - wide.lower_eol_cycle > narrow.upper_eol_cycle - narrow.lower_eol_cycle
+    wide_width = wide.upper_eol_cycle - wide.lower_eol_cycle
+    narrow_width = narrow.upper_eol_cycle - narrow.lower_eol_cycle
+    assert wide_width > narrow_width
     assert narrow.lower_eol_cycle >= 20.0
 
 

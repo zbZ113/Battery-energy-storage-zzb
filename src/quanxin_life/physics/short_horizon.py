@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib
 import math
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from numbers import Real
 from types import ModuleType
@@ -97,7 +98,7 @@ class PhysicsValidationResult(_PhysicsModel):
     pybamm_version: str | None = None
     validator_version: str = PHYSICS_VALIDATOR_VERSION
     warnings: tuple[str, ...] = (UNCALIBRATED_PARAMETER_WARNING,)
-    configuration: dict[str, str] = Field(default_factory=dict)
+    configuration: dict[str, str | tuple[str, ...]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_execution_outcome(self) -> PhysicsValidationResult:
@@ -113,6 +114,15 @@ class PhysicsValidationResult(_PhysicsModel):
 PyBaMMLoader = Callable[[], ModuleType | None]
 
 
+@dataclass(frozen=True)
+class _ExperimentProgram:
+    """The exact short-horizon programme and cut-offs handed to PyBaMM."""
+
+    steps: tuple[str, ...]
+    lower_voltage_cutoff_volts: float
+    upper_voltage_cutoff_volts: float
+
+
 def validate_short_horizon(
     request: PhysicsValidationRequest,
     *,
@@ -126,17 +136,28 @@ def validate_short_horizon(
     """
 
     loader = pybamm_loader or _load_pybamm
-    pybamm_module = loader()
+    try:
+        pybamm_module = loader()
+    except Exception as exc:  # Optional dependency import can fail beyond ModuleNotFoundError.
+        return _degraded_result(
+            request,
+            status=PhysicsValidationStatus.UNAVAILABLE,
+            termination_reason=f"pybamm_load_failed:{type(exc).__name__}",
+            boundary_risks=("PYBAMM_LOAD_FAILED",),
+            program_state="not-generated: pybamm loader failed",
+        )
     if pybamm_module is None:
         return _degraded_result(
             request,
             status=PhysicsValidationStatus.UNAVAILABLE,
             termination_reason="pybamm_unavailable",
             boundary_risks=("PYBAMM_UNAVAILABLE",),
+            program_state="not-generated: pybamm unavailable",
         )
 
+    program: _ExperimentProgram | None = None
     try:
-        experiment_steps = _build_experiment_steps(request, pybamm_module)
+        program = _build_experiment_program(request, pybamm_module)
         parameter_values = pybamm_module.ParameterValues("Prada2013")
         parameter_values.update(
             {
@@ -146,7 +167,7 @@ def validate_short_horizon(
             check_already_exists=False,
         )
         model = pybamm_module.lithium_ion.SPMe()
-        experiment = pybamm_module.Experiment(experiment_steps)
+        experiment = pybamm_module.Experiment(program.steps)
         simulation = pybamm_module.Simulation(
             model,
             parameter_values=parameter_values,
@@ -162,6 +183,8 @@ def validate_short_horizon(
             termination_reason=f"pybamm_execution_failed:{type(exc).__name__}",
             boundary_risks=("PHYSICS_EXECUTION_FAILED",),
             pybamm_version=_pybamm_version(pybamm_module),
+            program=program,
+            program_state="not-generated: programme construction failed",
         )
 
     boundary_risks = _boundary_risks(termination_reason)
@@ -172,7 +195,7 @@ def validate_short_horizon(
         termination_reason=termination_reason,
         boundary_risks=boundary_risks,
         pybamm_version=_pybamm_version(pybamm_module),
-        configuration=_configuration(request),
+        configuration=_configuration(request, program=program),
     )
 
 
@@ -186,16 +209,14 @@ def _load_pybamm() -> ModuleType | None:
     return module
 
 
-def _build_experiment_steps(
+def _build_experiment_program(
     request: PhysicsValidationRequest, pybamm_module: ModuleType
-) -> tuple[str, ...]:
+) -> _ExperimentProgram:
     parameter_values = pybamm_module.ParameterValues("Prada2013")
     lower_voltage = float(parameter_values["Lower voltage cut-off [V]"])
     upper_voltage = float(parameter_values["Upper voltage cut-off [V]"])
 
-    discharge_to_lower = _duration_hours(
-        request.initial_soc - request.lower_soc_bound, request.discharge_c_rate
-    )
+    initial_discharge_span = request.initial_soc - request.lower_soc_bound
     charge_window = _duration_hours(
         request.upper_soc_bound - request.lower_soc_bound, request.charge_c_rate
     )
@@ -204,7 +225,8 @@ def _build_experiment_steps(
     )
 
     steps: list[str] = []
-    if discharge_to_lower > 0.0:
+    if initial_discharge_span > 0.0:
+        discharge_to_lower = _duration_hours(initial_discharge_span, request.discharge_c_rate)
         steps.append(
             _discharge_step(
                 request.discharge_c_rate,
@@ -221,7 +243,11 @@ def _build_experiment_steps(
                 lower_voltage,
             )
         )
-    return tuple(steps)
+    return _ExperimentProgram(
+        steps=tuple(steps),
+        lower_voltage_cutoff_volts=lower_voltage,
+        upper_voltage_cutoff_volts=upper_voltage,
+    )
 
 
 def _duration_hours(soc_span: float, c_rate: float) -> float:
@@ -322,13 +348,38 @@ def _pybamm_version(pybamm_module: ModuleType) -> str | None:
     return str(version) if version is not None else None
 
 
-def _configuration(request: PhysicsValidationRequest) -> dict[str, str]:
-    return {
+def _configuration(
+    request: PhysicsValidationRequest,
+    *,
+    program: _ExperimentProgram | None = None,
+    program_state: str | None = None,
+) -> dict[str, str | tuple[str, ...]]:
+    configuration: dict[str, str | tuple[str, ...]] = {
         "temperature_unit": "celsius",
         "programme": "constant-current short-horizon experiment",
         "soc_window_interpretation": "C-rate durations derived from declared SOC bounds",
         "repeat_count": str(request.repeat_count),
     }
+    if program is not None:
+        configuration.update(
+            {
+                "experiment_steps": program.steps,
+                # These renderings deliberately match the values embedded in
+                # the Experiment step strings, so audit consumers can compare
+                # the recorded cut-offs without float-format ambiguity.
+                "lower_voltage_cutoff_volts": f"{program.lower_voltage_cutoff_volts:.6g}",
+                "upper_voltage_cutoff_volts": f"{program.upper_voltage_cutoff_volts:.6g}",
+            }
+        )
+    else:
+        configuration.update(
+            {
+                "experiment_steps": program_state or "not-generated: unavailable",
+                "lower_voltage_cutoff_volts": "unavailable",
+                "upper_voltage_cutoff_volts": "unavailable",
+            }
+        )
+    return configuration
 
 
 def _degraded_result(
@@ -338,6 +389,8 @@ def _degraded_result(
     termination_reason: str,
     boundary_risks: tuple[str, ...],
     pybamm_version: str | None = None,
+    program: _ExperimentProgram | None = None,
+    program_state: str | None = None,
 ) -> PhysicsValidationResult:
     return PhysicsValidationResult(
         status=status,
@@ -345,5 +398,5 @@ def _degraded_result(
         termination_reason=termination_reason,
         boundary_risks=boundary_risks,
         pybamm_version=pybamm_version,
-        configuration=_configuration(request),
+        configuration=_configuration(request, program=program, program_state=program_state),
     )

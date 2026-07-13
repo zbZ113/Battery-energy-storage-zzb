@@ -26,10 +26,11 @@
 
 `NewlyObservedSOH` 只接受来源为 `NEWLY_OBSERVED` 的真实观测。每个观测必须满足：
 
-1. 周期唯一；
-2. 周期不早于 `cutoff_cycle`；
-3. 周期处于全局轨迹的有限时间窗内；
-4. SOH 有限且在 `[0, 1.5]` 内。
+1. `dataset_id` 与 `cell_id` 必填，且必须与 `FrozenGlobalTrajectory` **完全一致**；
+2. 周期唯一；
+3. 周期不早于 `cutoff_cycle`；
+4. 周期处于全局轨迹的有限时间窗内；
+5. SOH 有限且在 `[0, 1.5]` 内。
 
 不满足条件的缺测、未来、重复、非有限或域外输入将直接拒绝；系统不插补、不截断、不伪造来源。
 
@@ -80,6 +81,8 @@ t' = \mathrm{clip}\left(r t + k\max(t-0.5,0), 0, 1\right).
 \]
 
 实现使用确定性的 `scipy.optimize.least_squares(method="trf")` 和固定初值 `(0,1,0)`。全局模型参数不属于优化变量，也不会传入优化器。
+
+构造 `CalibrationConfig` 时，系统会在优化前拒绝不包含上述三个中性先验值的边界；因此不会把无效配置延迟为 SciPy 的“初始猜测超出边界”运行时错误。
 
 ## 5. 降级与复检策略
 

@@ -1,0 +1,269 @@
+"""Shared, auditable execution registry for domain tools.
+
+The registry deliberately performs no battery-domain calculation.  It validates
+typed inputs, invokes a registered numerical tool, and rejects any returned
+result whose audit metadata does not exactly describe that invocation.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, Generic, TypeVar, cast
+
+from pydantic import ValidationError
+
+from quanxin_life.core import ToolResult, sha256_canonical
+from quanxin_life.core.schemas import ContractModel
+
+
+class StandardToolName(StrEnum):
+    """The only planned domain tool names exposed to agents and service layers."""
+
+    VALIDATE_BATTERY_DATA = "validate_battery_data"
+    AUDIT_DATASET_SPLIT = "audit_dataset_split"
+    EXTRACT_EARLY_CYCLE_FEATURES = "extract_early_cycle_features"
+    PREDICT_CYCLE_LIFE = "predict_cycle_life"
+    PREDICT_SOH_TRAJECTORY = "predict_soh_trajectory"
+    CALIBRATE_PREDICTION_INTERVAL = "calibrate_prediction_interval"
+    ADAPT_TO_TARGET_DOMAIN = "adapt_to_target_domain"
+    UPDATE_CELL_PARAMETERS = "update_cell_parameters"
+    CHECK_OPERATING_CONDITION = "check_operating_condition"
+    RECOMMEND_NEXT_EXPERIMENT = "recommend_next_experiment"
+    MAKE_BATCH_DECISION = "make_batch_decision"
+    RETRIEVE_BATTERY_EVIDENCE = "retrieve_battery_evidence"
+    GENERATE_AUDITED_REPORT = "generate_audited_report"
+
+
+class ToolRegistryError(RuntimeError):
+    """Base class for explicit tool registry failures."""
+
+
+class DuplicateToolError(ToolRegistryError):
+    """Raised when a name already has a registered implementation."""
+
+
+class UnknownToolError(ToolRegistryError):
+    """Raised when a caller requests a standard tool without an implementation."""
+
+
+class ToolAuthorizationError(ToolRegistryError):
+    """Raised when an agent attempts to execute a tool outside its allowlist."""
+
+
+class ToolInputValidationError(ToolRegistryError):
+    """Raised when untrusted input cannot satisfy a tool's Pydantic contract."""
+
+
+class ToolExecutionError(ToolRegistryError):
+    """Raised when a registered tool raises before it can return a result."""
+
+
+class ToolContractError(ToolRegistryError):
+    """Raised when a tool return value fails the shared audit contract."""
+
+
+InputContractT = TypeVar("InputContractT", bound=ContractModel)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDefinition(Generic[InputContractT]):
+    """A versioned, strongly typed domain tool implementation."""
+
+    tool_name: StandardToolName
+    tool_version: str
+    input_model: type[InputContractT]
+    executor: Callable[[InputContractT], ToolResult]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tool_name, StandardToolName):
+            raise TypeError("tool_name must be a StandardToolName")
+        if not isinstance(self.tool_version, str) or not self.tool_version.strip():
+            raise ValueError("tool_version must not be blank")
+        if not isinstance(self.input_model, type) or not issubclass(
+            self.input_model, ContractModel
+        ):
+            raise TypeError("input_model must be a ContractModel type")
+        if not callable(self.executor):
+            raise TypeError("executor must be callable")
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredTool(Generic[InputContractT]):
+    """A registry-owned tool definition with no hidden service initialization."""
+
+    definition: ToolDefinition[InputContractT]
+
+    @property
+    def tool_name(self) -> StandardToolName:
+        return self.definition.tool_name
+
+    @property
+    def tool_version(self) -> str:
+        return self.definition.tool_version
+
+
+class ToolSchema(ContractModel):
+    """Serializable metadata for a tool discovery endpoint or MCP adapter."""
+
+    tool_name: StandardToolName
+    tool_version: str
+    input_schema: dict[str, Any]
+
+
+class ToolRegistry:
+    """In-process registry shared by agents, APIs, MCP and user interfaces."""
+
+    def __init__(self) -> None:
+        self._tools: dict[StandardToolName, RegisteredTool[ContractModel]] = {}
+
+    def register(
+        self, definition: ToolDefinition[InputContractT]
+    ) -> RegisteredTool[InputContractT]:
+        """Register exactly one implementation for each standard tool name."""
+
+        if definition.tool_name in self._tools:
+            raise DuplicateToolError(
+                f"Tool '{definition.tool_name.value}' is already registered and cannot be replaced"
+            )
+
+        registered = RegisteredTool(definition=definition)
+        self._tools[definition.tool_name] = cast(RegisteredTool[ContractModel], registered)
+        return registered
+
+    def list_schemas(self) -> tuple[ToolSchema, ...]:
+        """Return deterministic discovery metadata without executing any tool."""
+
+        return tuple(
+            ToolSchema(
+                tool_name=registered.tool_name,
+                tool_version=registered.tool_version,
+                input_schema=registered.definition.input_model.model_json_schema(),
+            )
+            for _, registered in sorted(self._tools.items(), key=lambda item: item[0].value)
+        )
+
+    def execute(
+        self,
+        tool_name: StandardToolName | str,
+        input_value: Mapping[str, Any] | ContractModel,
+        *,
+        allowed_tool_names: Collection[StandardToolName | str] | None = None,
+    ) -> ToolResult:
+        """Validate, authorize and execute a tool without modifying its result."""
+
+        normalized_name = self._coerce_tool_name(tool_name)
+        registered = self._tools.get(normalized_name)
+        if registered is None:
+            raise UnknownToolError(
+                f"No implementation is registered for tool '{normalized_name.value}'"
+            )
+
+        if allowed_tool_names is not None and normalized_name not in self._normalize_allowlist(
+            allowed_tool_names
+        ):
+            raise ToolAuthorizationError(
+                f"Tool '{normalized_name.value}' is not permitted for this execution"
+            )
+
+        validated_input = self._validate_input(registered, input_value)
+        expected_input_hash = sha256_canonical(validated_input.model_dump(mode="json"))
+
+        try:
+            result = registered.definition.executor(validated_input)
+        except ToolRegistryError:
+            raise
+        except Exception as exc:
+            raise ToolExecutionError(
+                f"Tool '{normalized_name.value}' failed before returning a ToolResult"
+            ) from exc
+
+        return self._validate_result(registered, result, expected_input_hash)
+
+    def execute_for_agent(
+        self,
+        tool_name: StandardToolName | str,
+        input_value: Mapping[str, Any] | ContractModel,
+        *,
+        allowed_tool_names: Collection[StandardToolName | str] | None = None,
+    ) -> ToolResult:
+        """Execute through the strict Agent boundary with a nonempty allowlist."""
+
+        if allowed_tool_names is None:
+            raise ToolAuthorizationError("Agent execution requires a non-empty allowlist")
+        normalized_allowlist = self._normalize_allowlist(allowed_tool_names)
+        if not normalized_allowlist:
+            raise ToolAuthorizationError("Agent execution requires a non-empty allowlist")
+        return self.execute(
+            tool_name,
+            input_value,
+            allowed_tool_names=normalized_allowlist,
+        )
+
+    @staticmethod
+    def _coerce_tool_name(tool_name: StandardToolName | str) -> StandardToolName:
+        try:
+            return StandardToolName(tool_name)
+        except ValueError as exc:
+            raise UnknownToolError(f"Unknown standard tool '{tool_name}'") from exc
+
+    @classmethod
+    def _normalize_allowlist(
+        cls, allowed_tool_names: Collection[StandardToolName | str]
+    ) -> frozenset[StandardToolName]:
+        try:
+            return frozenset(cls._coerce_tool_name(tool_name) for tool_name in allowed_tool_names)
+        except UnknownToolError as exc:
+            message = "Tool allowlist contains an unknown standard tool"
+            raise ToolAuthorizationError(message) from exc
+
+    @staticmethod
+    def _validate_input(
+        registered: RegisteredTool[ContractModel],
+        input_value: Mapping[str, Any] | ContractModel,
+    ) -> ContractModel:
+        if isinstance(input_value, ContractModel):
+            raw_input: Mapping[str, Any] = input_value.model_dump(mode="json")
+        elif isinstance(input_value, Mapping):
+            raw_input = input_value
+        else:
+            raise ToolInputValidationError("Tool input must be a mapping or ContractModel")
+
+        try:
+            return registered.definition.input_model.model_validate(raw_input)
+        except (TypeError, ValueError, ValidationError) as exc:
+            raise ToolInputValidationError(
+                f"Input does not satisfy '{registered.tool_name.value}' contract"
+            ) from exc
+
+    @staticmethod
+    def _validate_result(
+        registered: RegisteredTool[ContractModel],
+        result: object,
+        expected_input_hash: str,
+    ) -> ToolResult:
+        if not isinstance(result, ToolResult):
+            raise ToolContractError("Registered tool executor must return a ToolResult")
+
+        try:
+            validated_result = ToolResult.model_validate(result.model_dump(mode="json"))
+        except (TypeError, ValueError, ValidationError) as exc:
+            raise ToolContractError(
+                "ToolResult does not satisfy its public Pydantic contract"
+            ) from exc
+
+        if validated_result.tool_name != registered.tool_name.value:
+            raise ToolContractError("ToolResult tool_name does not match the registered tool")
+        if validated_result.tool_version != registered.tool_version:
+            raise ToolContractError("ToolResult tool_version does not match the registered tool")
+        if validated_result.input_hash != expected_input_hash:
+            raise ToolContractError("ToolResult input_hash does not match validated input")
+        version_fields = ("model_version", "data_version", "feature_version")
+        for field_name in version_fields:
+            version = getattr(validated_result, field_name)
+            if version is None or not version.strip():
+                raise ToolContractError(f"ToolResult must declare nonblank {field_name}")
+        if not validated_result.provenance:
+            raise ToolContractError("ToolResult must include provenance")
+        return validated_result

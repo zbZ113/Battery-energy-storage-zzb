@@ -162,17 +162,23 @@ def evaluate_normalized_interval_coverage(
     widths: list[float] = []
     for observation in observation_cohort:
         if observation.cell_id in observed_cells:
-            raise ValueError(f"duplicate cell_id in observed prediction cohort: {observation.cell_id}")
+            raise ValueError(
+                f"duplicate cell_id in observed prediction cohort: {observation.cell_id}"
+            )
         observed_cells.add(observation.cell_id)
-        interval = interval_by_cell.get(observation.cell_id)
-        if interval is None:
+        matched_interval = interval_by_cell.get(observation.cell_id)
+        if matched_interval is None:
             raise ValueError("interval and observed prediction cell_ids must exactly match")
-        _validate_observation_context(observation, interval=interval)
+        _validate_observation_context(observation, interval=matched_interval)
         assert observation.observed_eol_cycle is not None
         coverage.append(
-            float(interval.lower_eol_cycle <= observation.observed_eol_cycle <= interval.upper_eol_cycle)
+            float(
+                matched_interval.lower_eol_cycle
+                <= observation.observed_eol_cycle
+                <= matched_interval.upper_eol_cycle
+            )
         )
-        widths.append(interval.upper_eol_cycle - interval.lower_eol_cycle)
+        widths.append(matched_interval.upper_eol_cycle - matched_interval.lower_eol_cycle)
 
     if observed_cells != set(interval_by_cell):
         raise ValueError("interval and observed prediction cell_ids must exactly match")

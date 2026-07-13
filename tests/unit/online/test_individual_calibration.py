@@ -39,11 +39,28 @@ def _global_trajectory() -> FrozenGlobalTrajectory:
 
 def _observations() -> tuple[NewlyObservedSOH, ...]:
     return (
-        NewlyObservedSOH(cycle=20, soh=0.990, source_kind=SourceKind.NEWLY_OBSERVED),
-        NewlyObservedSOH(cycle=50, soh=0.940, source_kind=SourceKind.NEWLY_OBSERVED),
-        NewlyObservedSOH(cycle=100, soh=0.865, source_kind=SourceKind.NEWLY_OBSERVED),
-        NewlyObservedSOH(cycle=150, soh=0.775, source_kind=SourceKind.NEWLY_OBSERVED),
-        NewlyObservedSOH(cycle=200, soh=0.690, source_kind=SourceKind.NEWLY_OBSERVED),
+        _observation(cycle=20, soh=0.990),
+        _observation(cycle=50, soh=0.940),
+        _observation(cycle=100, soh=0.865),
+        _observation(cycle=150, soh=0.775),
+        _observation(cycle=200, soh=0.690),
+    )
+
+
+def _observation(
+    *,
+    cycle: int,
+    soh: float,
+    dataset_id: str = "synthetic-lfp",
+    cell_id: str = "cell-online-01",
+    source_kind: SourceKind = SourceKind.NEWLY_OBSERVED,
+) -> NewlyObservedSOH:
+    return NewlyObservedSOH(
+        dataset_id=dataset_id,
+        cell_id=cell_id,
+        cycle=cycle,
+        soh=soh,
+        source_kind=source_kind,
     )
 
 
@@ -77,25 +94,25 @@ def test_calibration_preserves_frozen_global_and_returns_finite_monotone_traject
     [
         (
             (
-                NewlyObservedSOH(cycle=50, soh=0.94),
-                NewlyObservedSOH(cycle=50, soh=0.93),
-                NewlyObservedSOH(cycle=100, soh=0.86),
+                _observation(cycle=50, soh=0.94),
+                _observation(cycle=50, soh=0.93),
+                _observation(cycle=100, soh=0.86),
             ),
             "duplicate",
         ),
         (
             (
-                NewlyObservedSOH(cycle=10, soh=0.99),
-                NewlyObservedSOH(cycle=50, soh=0.94),
-                NewlyObservedSOH(cycle=100, soh=0.86),
+                _observation(cycle=10, soh=0.99),
+                _observation(cycle=50, soh=0.94),
+                _observation(cycle=100, soh=0.86),
             ),
             "cutoff",
         ),
         (
             (
-                NewlyObservedSOH(cycle=50, soh=0.94),
-                NewlyObservedSOH(cycle=100, soh=0.86),
-                NewlyObservedSOH(cycle=250, soh=0.70),
+                _observation(cycle=50, soh=0.94),
+                _observation(cycle=100, soh=0.86),
+                _observation(cycle=250, soh=0.70),
             ),
             "horizon",
         ),
@@ -114,10 +131,53 @@ def test_calibration_rejects_duplicate_or_out_of_horizon_observations(
 
 def test_observation_rejects_nonfinite_or_non_new_observation_source() -> None:
     with pytest.raises(ValueError, match="finite"):
-        NewlyObservedSOH(cycle=50, soh=float("nan"))
+        _observation(cycle=50, soh=float("nan"))
 
     with pytest.raises(ValueError, match="NEWLY_OBSERVED"):
-        NewlyObservedSOH(cycle=50, soh=0.94, source_kind=SourceKind.PREDICTED)
+        _observation(cycle=50, soh=0.94, source_kind=SourceKind.PREDICTED)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "bounds"),
+    [
+        ("bias_bounds", (0.01, 0.05)),
+        ("rate_multiplier_bounds", (1.01, 2.00)),
+        ("knee_offset_bounds", (0.01, 0.25)),
+    ],
+)
+def test_calibration_config_rejects_bounds_that_exclude_a_neutral_prior(
+    field_name: str,
+    bounds: tuple[float, float],
+) -> None:
+    with pytest.raises(ValueError, match="neutral prior"):
+        CalibrationConfig(**{field_name: bounds})
+
+
+@pytest.mark.parametrize(
+    ("dataset_id", "cell_id"),
+    [
+        ("synthetic-lfp", "different-cell"),
+        ("different-dataset", "cell-online-01"),
+    ],
+)
+def test_calibration_rejects_new_observations_with_a_different_identity(
+    dataset_id: str,
+    cell_id: str,
+) -> None:
+    with pytest.raises(ValueError, match="identity"):
+        IndividualTrajectoryCalibrator().calibrate(
+            global_trajectory=_global_trajectory(),
+            observations=(
+                NewlyObservedSOH(
+                    dataset_id=dataset_id,
+                    cell_id=cell_id,
+                    cycle=20,
+                    soh=0.990,
+                    source_kind=SourceKind.NEWLY_OBSERVED,
+                ),
+            ),
+            update_version="online-update-v1",
+        )
 
 
 def test_insufficient_observations_returns_explicit_recheck_without_adaptation() -> None:
@@ -139,9 +199,9 @@ def test_insufficient_observations_returns_explicit_recheck_without_adaptation()
 
 def test_poor_fit_returns_recheck_and_does_not_apply_untrusted_parameters() -> None:
     impossible_observations = (
-        NewlyObservedSOH(cycle=20, soh=0.20),
-        NewlyObservedSOH(cycle=50, soh=0.18),
-        NewlyObservedSOH(cycle=100, soh=0.15),
+        _observation(cycle=20, soh=0.20),
+        _observation(cycle=50, soh=0.18),
+        _observation(cycle=100, soh=0.15),
     )
     calibrator = IndividualTrajectoryCalibrator(
         config=CalibrationConfig(max_fit_rmse=0.01),
