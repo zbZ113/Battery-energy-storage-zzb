@@ -21,3 +21,9 @@ class SourceKind(StrEnum):
     PREDICTED = "PREDICTED"
     NEWLY_OBSERVED = "NEWLY_OBSERVED"
     SIMULATED = "SIMULATED"
+
+
+class PredictionTarget(StrEnum):
+    """Prediction labels permitted by the battery lifetime modeling contract."""
+
+    EOL80_CYCLE = "eol80_cycle"

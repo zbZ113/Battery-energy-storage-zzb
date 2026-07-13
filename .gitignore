@@ -5,6 +5,7 @@ __pycache__/
 .env
 .mypy_cache/
 .pytest_cache/
+.test-tmp/
 .ruff_cache/
 .venv/
 build/
@@ -16,7 +17,7 @@ data/raw/
 data/interim/
 data/processed/
 artifacts/
-models/
+/models/
 reports/generated/
 *.log
 .DS_Store

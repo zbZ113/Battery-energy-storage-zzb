@@ -4,10 +4,11 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from quanxin_life.core.enums import SourceKind
+from quanxin_life.core.enums import PredictionTarget, SourceKind
 from quanxin_life.core.schemas import (
     AnalysisState,
     CellMetadata,
+    LifePrediction,
     ProvenanceRecord,
     ToolResult,
 )
@@ -116,6 +117,78 @@ def test_cell_metadata_ingestion_parameters_must_be_json_safe() -> None:
             schema_version="1.0.0",
             adapter_version="matr-hdf5-v1.0.0",
             ingestion_parameters={"invalid": object()},
+        )
+
+
+def test_life_prediction_requires_explicit_eol80_metadata() -> None:
+    prediction = LifePrediction(
+        dataset_id="MATR",
+        cell_id="MATR_b1c0",
+        cutoff_cycle=100,
+        target=PredictionTarget.EOL80_CYCLE,
+        predicted_eol_cycle=845.5,
+        observed_eol_cycle=None,
+        right_censored=True,
+        feature_version="early-cycle-v1",
+        split_version="matr-v1",
+        model_version="dummy-v1",
+        data_version="matr-v1",
+    )
+
+    assert prediction.derived_rul == pytest.approx(745.5)
+    assert prediction.observed_eol_cycle is None
+    assert prediction.right_censored is True
+
+
+def test_life_prediction_rejects_non_eol_target() -> None:
+    with pytest.raises(ValidationError):
+        LifePrediction(
+            dataset_id="MATR",
+            cell_id="MATR_b1c0",
+            cutoff_cycle=100,
+            target="unsupported",
+            predicted_eol_cycle=99.0,
+            observed_eol_cycle=99,
+            right_censored=False,
+            feature_version="early-cycle-v1",
+            split_version="matr-v1",
+            model_version="dummy-v1",
+            data_version="matr-v1",
+        )
+
+
+def test_life_prediction_rejects_an_eol_before_the_cutoff() -> None:
+    with pytest.raises(ValidationError, match="cannot precede cutoff_cycle"):
+        LifePrediction(
+            dataset_id="MATR",
+            cell_id="MATR_b1c0",
+            cutoff_cycle=100,
+            target=PredictionTarget.EOL80_CYCLE,
+            predicted_eol_cycle=99.0,
+            observed_eol_cycle=None,
+            right_censored=True,
+            feature_version="early-cycle-v1",
+            split_version="matr-v1",
+            model_version="dummy-v1",
+            data_version="matr-v1",
+        )
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), -float("inf")])
+def test_life_prediction_rejects_non_finite_eol_prediction(non_finite: float) -> None:
+    with pytest.raises(ValidationError):
+        LifePrediction(
+            dataset_id="MATR",
+            cell_id="MATR_b1c0",
+            cutoff_cycle=100,
+            target=PredictionTarget.EOL80_CYCLE,
+            predicted_eol_cycle=non_finite,
+            observed_eol_cycle=None,
+            right_censored=True,
+            feature_version="early-cycle-v1",
+            split_version="matr-v1",
+            model_version="dummy-v1",
+            data_version="matr-v1",
         )
 
 

@@ -8,9 +8,10 @@ from pydantic import (
     Field,
     StringConstraints,
     field_validator,
+    model_validator,
 )
 
-from quanxin_life.core.enums import SourceKind
+from quanxin_life.core.enums import PredictionTarget, SourceKind
 from quanxin_life.core.hashing import sha256_canonical
 
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -98,6 +99,44 @@ class CellMetadata(ContractModel):
     def ingestion_parameters_are_json(cls, value: JsonMapping) -> JsonMapping:
         _json_mapping(value)
         return value
+
+
+class LifePrediction(ContractModel):
+    """A model-produced EOL80 estimate with explicit label observability.
+
+    This is deliberately separate from :class:`ToolResult`.  Model and
+    uncertainty services later wrap one or more predictions in a ToolResult
+    together with source provenance and an input hash.
+    """
+
+    dataset_id: str = Field(min_length=1)
+    cell_id: str = Field(min_length=1)
+    cutoff_cycle: int = Field(ge=0)
+    target: PredictionTarget = PredictionTarget.EOL80_CYCLE
+    predicted_eol_cycle: float = Field(ge=0, allow_inf_nan=False)
+    observed_eol_cycle: int | None = Field(default=None, ge=0)
+    right_censored: bool
+    feature_version: str = Field(min_length=1)
+    split_version: str = Field(min_length=1)
+    model_version: str = Field(min_length=1)
+    data_version: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def prediction_respects_cutoff_and_censoring(self) -> "LifePrediction":
+        if self.predicted_eol_cycle < self.cutoff_cycle:
+            raise ValueError("predicted_eol_cycle cannot precede cutoff_cycle")
+        if self.observed_eol_cycle is not None and self.observed_eol_cycle < self.cutoff_cycle:
+            raise ValueError("observed_eol_cycle cannot precede cutoff_cycle")
+        if self.right_censored and self.observed_eol_cycle is not None:
+            raise ValueError("right-censored predictions cannot contain an observed EOL80 cycle")
+        if not self.right_censored and self.observed_eol_cycle is None:
+            raise ValueError("observed EOL80 is required when right_censored is false")
+        return self
+
+    @property
+    def derived_rul(self) -> float:
+        """Derived RUL; no model is allowed to produce an independent RUL value."""
+        return max(self.predicted_eol_cycle - self.cutoff_cycle, 0.0)
 
 
 class AnalysisState(ContractModel):
