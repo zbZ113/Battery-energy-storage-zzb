@@ -35,11 +35,21 @@ from quanxin_life.tools.registry import (
     ToolSchema,
     UnknownToolError,
 )
+from quanxin_life.tools.split_audit import (
+    SPLIT_AUDIT_MODEL_VERSION,
+    SPLIT_AUDIT_TOOL_VERSION,
+    AuditDatasetSplitToolInput,
+    execute_audit_dataset_split_tool,
+    register_audit_dataset_split_tool,
+)
 
 __all__ = [
     "BATCH_DECISION_TOOL_VERSION",
     "DATA_QUALITY_MODEL_VERSION",
     "DATA_QUALITY_TOOL_VERSION",
+    "SPLIT_AUDIT_MODEL_VERSION",
+    "SPLIT_AUDIT_TOOL_VERSION",
+    "AuditDatasetSplitToolInput",
     "BatchDecisionToolInput",
     "DuplicateToolError",
     "McpAdapterError",
@@ -59,9 +69,11 @@ __all__ = [
     "ToolSchema",
     "UnknownToolError",
     "ValidateBatteryDataToolInput",
+    "execute_audit_dataset_split_tool",
     "execute_batch_decision_tool",
     "execute_validate_battery_data_tool",
     "load_optional_mcp_sdk",
+    "register_audit_dataset_split_tool",
     "register_batch_decision_tool",
     "register_validate_battery_data_tool",
 ]
