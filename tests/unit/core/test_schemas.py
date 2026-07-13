@@ -8,8 +8,10 @@ from quanxin_life.core.enums import PredictionTarget, SourceKind
 from quanxin_life.core.schemas import (
     AnalysisState,
     CellMetadata,
+    ConformalCalibration,
     LifePrediction,
     LifetimeMetrics,
+    PredictionInterval,
     ProvenanceRecord,
     ToolResult,
 )
@@ -201,6 +203,42 @@ def test_lifetime_metrics_rejects_non_finite_values_and_empty_evaluation() -> No
             rmse_cycle=10.0,
             mape_percent=2.0,
             r2=None,
+        )
+
+
+def test_conformal_contract_requires_finite_quantile_and_ordered_interval() -> None:
+    calibration = ConformalCalibration(
+        target=PredictionTarget.EOL80_CYCLE,
+        alpha=0.1,
+        residual_quantile_cycle=12.5,
+        calibration_cell_count=10,
+        feature_version="early-cycle-v1",
+        split_version="matr-split-v1",
+        model_version="xgboost-eol80-v1",
+        data_version="matr-data-v1",
+    )
+    interval = PredictionInterval(
+        dataset_id="MATR",
+        cell_id="MATR_b1c0",
+        cutoff_cycle=100,
+        target=PredictionTarget.EOL80_CYCLE,
+        point_prediction_cycle=250.0,
+        lower_eol_cycle=237.5,
+        upper_eol_cycle=262.5,
+        calibration=calibration,
+    )
+
+    assert interval.coverage_target == pytest.approx(0.9)
+    with pytest.raises(ValidationError):
+        PredictionInterval(
+            dataset_id="MATR",
+            cell_id="MATR_b1c0",
+            cutoff_cycle=100,
+            target=PredictionTarget.EOL80_CYCLE,
+            point_prediction_cycle=250.0,
+            lower_eol_cycle=260.0,
+            upper_eol_cycle=255.0,
+            calibration=calibration,
         )
 
 

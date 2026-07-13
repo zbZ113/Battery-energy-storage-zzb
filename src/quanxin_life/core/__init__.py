@@ -5,8 +5,10 @@ from quanxin_life.core.hashing import canonical_json_bytes, sha256_canonical
 from quanxin_life.core.schemas import (
     AnalysisState,
     CellMetadata,
+    ConformalCalibration,
     LifePrediction,
     LifetimeMetrics,
+    PredictionInterval,
     ProvenanceRecord,
     ToolResult,
 )
@@ -14,10 +16,12 @@ from quanxin_life.core.schemas import (
 __all__ = [
     "AnalysisState",
     "CellMetadata",
+    "ConformalCalibration",
     "Decision",
     "EvidenceLevel",
     "LifePrediction",
     "LifetimeMetrics",
+    "PredictionInterval",
     "PredictionTarget",
     "ProvenanceRecord",
     "SourceKind",
