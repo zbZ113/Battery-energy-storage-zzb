@@ -24,6 +24,7 @@ class StandardToolName(StrEnum):
     VALIDATE_BATTERY_DATA = "validate_battery_data"
     AUDIT_DATASET_SPLIT = "audit_dataset_split"
     EXTRACT_EARLY_CYCLE_FEATURES = "extract_early_cycle_features"
+    INGEST_NEWLY_OBSERVED_SOH = "ingest_newly_observed_soh"
     PREDICT_CYCLE_LIFE = "predict_cycle_life"
     PREDICT_SOH_TRAJECTORY = "predict_soh_trajectory"
     CALIBRATE_PREDICTION_INTERVAL = "calibrate_prediction_interval"
