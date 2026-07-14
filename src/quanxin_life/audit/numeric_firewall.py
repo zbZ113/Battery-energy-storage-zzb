@@ -86,17 +86,26 @@ class AuditLedger:
     def verify_numeric_evidence(self, evidence: NumericEvidence) -> float:
         """Resolve one evidence path and reject altered or nonnumeric report values."""
 
-        result = self._results.get(evidence.result_id)
-        if result is None:
-            raise ValueError("referenced ToolResult is not registered in the audit ledger")
-        actual = _resolve_mapping_path(result.model_dump(mode="json"), evidence.json_path)
+        numeric_actual = self.resolve_numeric_value(evidence.result_id, evidence.json_path)
+        if numeric_actual != evidence.reported_value:
+            raise ValueError("reported numeric evidence does not match the ToolResult value")
+        return numeric_actual
+
+    def resolve_numeric_value(self, result_id: str, json_path: str) -> float:
+        """Resolve one finite numeric field from a ledger-registered result.
+
+        Public report-tool inputs use only a result ID and JSON path.  This
+        method keeps the actual business number inside the trusted ledger
+        boundary until the renderer creates its internal ``NumericEvidence``.
+        """
+
+        result = self.resolve_registered_result(result_id)
+        actual = _resolve_mapping_path(result.model_dump(mode="json"), json_path)
         if isinstance(actual, bool) or not isinstance(actual, Real):
             raise ValueError("referenced ToolResult path is not numeric")
         numeric_actual = float(actual)
         if not math.isfinite(numeric_actual):
             raise ValueError("referenced ToolResult numeric value must be finite")
-        if numeric_actual != evidence.reported_value:
-            raise ValueError("reported numeric evidence does not match the ToolResult value")
         return numeric_actual
 
 
