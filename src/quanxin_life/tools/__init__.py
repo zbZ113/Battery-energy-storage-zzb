@@ -22,6 +22,13 @@ from quanxin_life.tools.mcp_adapter import (
     McpToolCallRequest,
     load_optional_mcp_sdk,
 )
+from quanxin_life.tools.next_experiment_recommendation import (
+    EXPERIMENT_RECOMMENDATION_EVIDENCE_TYPE,
+    NEXT_EXPERIMENT_RECOMMENDATION_TOOL_VERSION,
+    RecommendNextExperimentToolInput,
+    execute_recommend_next_experiment_tool,
+    register_recommend_next_experiment_tool,
+)
 from quanxin_life.tools.physics_check import (
     PHYSICS_CHECK_TOOL_VERSION,
     CheckOperatingConditionToolInput,
@@ -60,6 +67,8 @@ __all__ = [
     "BATCH_DECISION_TOOL_VERSION",
     "DATA_QUALITY_MODEL_VERSION",
     "DATA_QUALITY_TOOL_VERSION",
+    "EXPERIMENT_RECOMMENDATION_EVIDENCE_TYPE",
+    "NEXT_EXPERIMENT_RECOMMENDATION_TOOL_VERSION",
     "PHYSICS_CHECK_TOOL_VERSION",
     "SPLIT_AUDIT_MODEL_VERSION",
     "SPLIT_AUDIT_TOOL_VERSION",
@@ -74,6 +83,7 @@ __all__ = [
     "McpSdkUnavailableError",
     "McpToolAdapter",
     "McpToolCallRequest",
+    "RecommendNextExperimentToolInput",
     "RegisteredTool",
     "StandardToolName",
     "ToolAuthorizationError",
@@ -91,11 +101,13 @@ __all__ = [
     "execute_audit_dataset_split_tool",
     "execute_batch_decision_tool",
     "execute_check_operating_condition_tool",
+    "execute_recommend_next_experiment_tool",
     "execute_validate_battery_data_tool",
     "load_optional_mcp_sdk",
     "register_adapt_to_target_domain_tool",
     "register_audit_dataset_split_tool",
     "register_batch_decision_tool",
     "register_check_operating_condition_tool",
+    "register_recommend_next_experiment_tool",
     "register_validate_battery_data_tool",
 ]
