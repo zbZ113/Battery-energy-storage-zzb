@@ -27,10 +27,15 @@ TEMPORARY_PASSWORD = "temporary passphrase 2026"
 NEW_PASSWORD = "new private passphrase 2026"
 
 
-@pytest.fixture
-def auth_client(tmp_path: Path) -> TestClient:
+def _build_auth_client(
+    tmp_path: Path,
+    *,
+    role: UserRole,
+    must_change_credential: bool,
+    database_name: str,
+) -> TestClient:
     engine = create_engine_from_config(
-        DatabaseConfig(url=f"sqlite+pysqlite:///{tmp_path / 'api-auth.sqlite3'}")
+        DatabaseConfig(url=f"sqlite+pysqlite:///{tmp_path / database_name}")
     )
     Base.metadata.create_all(engine)
     session_factory = create_session_factory(engine)
@@ -42,8 +47,8 @@ def auth_client(tmp_path: Path) -> TestClient:
                 id=str(uuid4()),
                 username=USERNAME,
                 credential_hash=hasher.hash_password(TEMPORARY_PASSWORD),
-                must_change_credential=True,
-                role=UserRole.MEMBER.value,
+                must_change_credential=must_change_credential,
+                role=role.value,
                 status=UserStatus.ACTIVE.value,
                 created_at=now,
                 updated_at=now,
@@ -63,6 +68,26 @@ def auth_client(tmp_path: Path) -> TestClient:
         create_available_tool_invocation_service(), auth_adapter=adapter
     )
     return TestClient(app, base_url="https://api.example.test")
+
+
+@pytest.fixture
+def auth_client(tmp_path: Path) -> TestClient:
+    return _build_auth_client(
+        tmp_path,
+        role=UserRole.MEMBER,
+        must_change_credential=True,
+        database_name="api-auth.sqlite3",
+    )
+
+
+@pytest.fixture
+def judge_client(tmp_path: Path) -> TestClient:
+    return _build_auth_client(
+        tmp_path,
+        role=UserRole.JUDGE,
+        must_change_credential=False,
+        database_name="judge-auth.sqlite3",
+    )
 
 
 def test_login_sets_a_host_only_secure_cookie_without_returning_the_token(
@@ -163,6 +188,55 @@ def test_me_change_password_and_logout_use_the_server_side_session(
     assert logout.status_code == 204
     assert logout.headers["cache-control"] == "no-store"
     assert auth_client.get("/v1/auth/me").status_code == 401
+
+
+def test_business_routes_require_login_and_completed_first_password_change(
+    auth_client: TestClient,
+) -> None:
+    assert auth_client.get("/v1/tools").status_code == 401
+    login = auth_client.post(
+        "/v1/auth/login",
+        headers={"Origin": ORIGIN},
+        json={"username": USERNAME, "password": TEMPORARY_PASSWORD},
+    )
+    assert login.status_code == 200
+    blocked = auth_client.get("/v1/tools")
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "credential_change_required"
+
+    changed = auth_client.post(
+        "/v1/auth/change-password",
+        headers={"Origin": ORIGIN},
+        json={
+            "current_password": TEMPORARY_PASSWORD,
+            "new_password": NEW_PASSWORD,
+        },
+    )
+    assert changed.status_code == 200
+    assert auth_client.get("/v1/tools").status_code == 200
+    cross_site_write = auth_client.post("/v1/tools/validate_battery_data", json={})
+    assert cross_site_write.status_code == 403
+    assert cross_site_write.json()["detail"] == "origin_not_allowed"
+
+
+def test_judge_can_inspect_tools_but_cannot_invoke_arbitrary_domain_tools(
+    judge_client: TestClient,
+) -> None:
+    login = judge_client.post(
+        "/v1/auth/login",
+        headers={"Origin": ORIGIN},
+        json={"username": USERNAME, "password": TEMPORARY_PASSWORD},
+    )
+    assert login.status_code == 200
+    assert judge_client.get("/v1/tools").status_code == 200
+
+    blocked = judge_client.post(
+        "/v1/tools/validate_battery_data",
+        headers={"Origin": ORIGIN},
+        json={},
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "role_not_allowed"
 
 
 def test_auth_failures_are_generic_and_never_echo_credentials(

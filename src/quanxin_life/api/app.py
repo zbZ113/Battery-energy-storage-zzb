@@ -25,6 +25,7 @@ from quanxin_life.application.lifetime_workflow import (
     LifetimeDecisionWorkflowResult,
 )
 from quanxin_life.audit import AuditLedgerError
+from quanxin_life.core import UserRole
 from quanxin_life.core.schemas import ContractModel
 from quanxin_life.tools import (
     StandardToolName,
@@ -80,6 +81,8 @@ def create_fastapi_app(
         raise FastApiDependencyUnavailable(message) from exc
 
     app: Any = fastapi_module.FastAPI(title="泉芯智寿 Tool API", version="v1")
+    ready_user_dependencies: list[Any] = []
+    operator_dependencies: list[Any] = []
     if auth_adapter is not None:
         cors_module = importlib.import_module("fastapi.middleware.cors")
         app.add_middleware(
@@ -90,16 +93,33 @@ def create_fastapi_app(
             allow_headers=["Accept", "Content-Type", "Idempotency-Key", "Origin"],
         )
         app.include_router(auth_adapter.router)
+        ready_user_dependencies = [
+            fastapi_module.Depends(auth_adapter.require_ready_user)
+        ]
+        operator_dependencies = [
+            fastapi_module.Depends(
+                auth_adapter.require_roles({UserRole.ADMIN, UserRole.MEMBER})
+            ),
+            fastapi_module.Depends(auth_adapter.require_trusted_origin),
+        ]
+    ready_route_options = (
+        {"dependencies": ready_user_dependencies} if ready_user_dependencies else {}
+    )
+    operator_route_options = (
+        {"dependencies": operator_dependencies} if operator_dependencies else {}
+    )
 
     @app.get("/health")  # type: ignore[untyped-decorator]
     async def health() -> dict[str, str]:
         return {"status": "ok", "service": "quanxin-life-tool-api"}
 
-    @app.get("/v1/tools")  # type: ignore[untyped-decorator]
+    @app.get("/v1/tools", **ready_route_options)  # type: ignore[untyped-decorator]
     async def list_tools() -> list[dict[str, Any]]:
         return [schema.model_dump(mode="json") for schema in service.registry.list_schemas()]
 
-    @app.get("/v1/results/{result_id}")  # type: ignore[untyped-decorator]
+    @app.get(  # type: ignore[untyped-decorator]
+        "/v1/results/{result_id}", **ready_route_options
+    )
     async def get_audit_result(result_id: str) -> dict[str, Any]:
         if service.audit_ledger is None:
             raise fastapi_module.HTTPException(
@@ -115,7 +135,9 @@ def create_fastapi_app(
             ) from exc
         return result.model_dump(mode="json")
 
-    @app.get("/v1/reports/{result_id}")  # type: ignore[untyped-decorator]
+    @app.get(  # type: ignore[untyped-decorator]
+        "/v1/reports/{result_id}", **ready_route_options
+    )
     async def get_audited_report(result_id: str) -> dict[str, str]:
         if service.audit_ledger is None:
             raise fastapi_module.HTTPException(
@@ -141,7 +163,9 @@ def create_fastapi_app(
             )
         return {"result_id": result.result_id, "markdown": markdown}
 
-    @app.post("/v1/tools/{tool_name}")  # type: ignore[untyped-decorator]
+    @app.post(  # type: ignore[untyped-decorator]
+        "/v1/tools/{tool_name}", **operator_route_options
+    )
     async def invoke_tool(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             invocation = ToolInvocation(
@@ -172,7 +196,9 @@ def create_fastapi_app(
 
     if lifetime_workflow_runner is not None:
 
-        @app.post("/v1/workflows/lifetime-decision")  # type: ignore[untyped-decorator]
+        @app.post(  # type: ignore[untyped-decorator]
+            "/v1/workflows/lifetime-decision", **operator_route_options
+        )
         async def run_lifetime_decision(payload: dict[str, Any]) -> dict[str, Any]:
             try:
                 request = LifetimeDecisionWorkflowRequest.model_validate(payload)
@@ -189,7 +215,9 @@ def create_fastapi_app(
 
     if canonical_csv_registrar is not None:
 
-        @app.post("/v1/batches/canonical-csv")  # type: ignore[untyped-decorator]
+        @app.post(  # type: ignore[untyped-decorator]
+            "/v1/batches/canonical-csv", **operator_route_options
+        )
         async def register_canonical_csv(payload: dict[str, Any]) -> dict[str, str]:
             try:
                 request = CanonicalCsvUploadRequest.model_validate(payload)

@@ -92,6 +92,7 @@ class AuthHttpAdapter:
     router: APIRouter
     allowed_origins: tuple[str, ...]
     get_principal: Any
+    require_trusted_origin: Any
     require_ready_user: Any
     require_roles: Any
 
@@ -241,6 +242,7 @@ def create_auth_http_adapter(
         router=router,
         allowed_origins=config.allowed_origins,
         get_principal=get_principal,
+        require_trusted_origin=verify_origin,
         require_ready_user=require_ready_user,
         require_roles=require_roles,
     )
