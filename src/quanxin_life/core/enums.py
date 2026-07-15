@@ -97,3 +97,17 @@ class UserRole(StrEnum):
     ADMIN = "ADMIN"
     MEMBER = "MEMBER"
     JUDGE = "JUDGE"
+
+
+class UserStatus(StrEnum):
+    """Account states enforced by server-side authentication."""
+
+    ACTIVE = "ACTIVE"
+    DISABLED = "DISABLED"
+
+
+class SessionStatus(StrEnum):
+    """Opaque browser-session states stored only on the server."""
+
+    ACTIVE = "ACTIVE"
+    REVOKED = "REVOKED"

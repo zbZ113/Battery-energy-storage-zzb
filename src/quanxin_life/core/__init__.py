@@ -11,8 +11,10 @@ from quanxin_life.core.enums import (
     EvidenceLevel,
     KnowledgeReviewStatus,
     PredictionTarget,
+    SessionStatus,
     SourceKind,
     UserRole,
+    UserStatus,
 )
 from quanxin_life.core.hashing import canonical_json_bytes, sha256_canonical
 from quanxin_life.core.product import (
@@ -70,9 +72,11 @@ __all__ = [
     "ProvenanceRecord",
     "ScenarioLifetimeRequest",
     "ScenarioLifetimeResult",
+    "SessionStatus",
     "SourceKind",
     "ToolResult",
     "UserRole",
+    "UserStatus",
     "canonical_json_bytes",
     "sha256_canonical",
 ]
