@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import importlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from workbench.client import ApiClient, WorkbenchError
+from workbench.presenters import (
+    EvidenceSection,
+    build_audit_section,
+    build_decision_section,
+    build_lifetime_section,
+    build_quality_section,
+)
+
+NAVIGATION_PAGES = ("服务与数据", "工作流执行", "结果展示", "审计报告")
+_WORKFLOW_SESSION_KEY = "signed_lifetime_workflow"
 
 
 class StreamlitDependencyUnavailable(RuntimeError):
@@ -26,22 +36,48 @@ def load_streamlit() -> Any:
         raise StreamlitDependencyUnavailable(message) from exc
 
 
+def section_rows(section: EvidenceSection) -> list[dict[str, object]]:
+    """Convert presentation fields to rows without transforming backend values."""
+    return [
+        {
+            "字段": field.label,
+            "值": field.display_value(),
+            "JSON 路径": field.json_path,
+        }
+        for field in section.fields
+    ]
+
+
 def render_workbench(
     st: Any,
     *,
     client_factory: Callable[[str], ApiClient] = ApiClient,
 ) -> None:
-    """Render identifiers and server-issued evidence without numeric logic."""
+    """Render server-issued identifiers and evidence without numeric logic."""
     st.set_page_config(page_title="泉芯智寿科研工作台", layout="wide")
     st.title("泉芯智寿科研工作台")
     st.caption("薄客户端: 所有工程数值、决策与审计报告均由 FastAPI 服务签发。")
 
-    base_url = st.text_input("FastAPI 地址", value="http://127.0.0.1:8000")
+    base_url = st.sidebar.text_input("FastAPI 地址", value="http://127.0.0.1:8000")
+    page = st.sidebar.radio("导航", NAVIGATION_PAGES)
     client = client_factory(base_url)
+
+    if page == "服务与数据":
+        _render_service_and_data(st, client)
+    elif page == "工作流执行":
+        _render_workflow(st, client)
+    elif page == "结果展示":
+        _render_signed_results(st, client)
+    else:
+        _render_audit(st, client)
+
+
+def _render_service_and_data(st: Any, client: ApiClient) -> None:
+    st.header("服务连接与可信数据")
+    st.write("仅连接 FastAPI, 不在工作台进程加载模型或数据处理代码。")
 
     if st.button("检查服务健康状态"):
         _show_action(st, lambda: st.json(client.health().display_payload()))
-
     if st.button("发现可用工具"):
         _show_action(st, lambda: st.json(list(client.list_tools())))
 
@@ -71,7 +107,10 @@ def render_workbench(
 
         _show_action(st, register_csv)
 
-    st.subheader("按服务端 ID 执行寿命决策工作流")
+
+def _render_workflow(st: Any, client: ApiClient) -> None:
+    st.header("寿命决策工作流")
+    st.write("这里只提交服务端签发或审核的 ID, 不接受手工工程数值。")
     record_batch_id = st.text_input("可信批次 ID", placeholder="record_batch_id")
     calibration_cohort_id = st.text_input(
         "校准队列 ID", placeholder="calibration_cohort_id"
@@ -80,27 +119,103 @@ def render_workbench(
 
     if st.button("提交寿命决策工作流", type="primary"):
 
-        def run_and_render() -> None:
+        def run_and_store() -> None:
             result = client.run_lifetime_workflow(
                 record_batch_id=record_batch_id,
                 calibration_cohort_id=calibration_cohort_id,
                 policy_id=policy_id,
             )
-            st.json(result.display_payload())
+            payload = result.display_payload()
+            st.session_state[_WORKFLOW_SESSION_KEY] = payload
+            st.json(payload)
             if result.report_result_id is None:
                 st.info("当前终态没有审计报告; 请检查质量阻断状态和服务端警告。")
-                return
-            report = client.get_audited_markdown(result.report_result_id)
-            st.subheader("审计 Markdown")
-            st.markdown(report.markdown)
-            st.download_button(
-                "下载审计 Markdown",
-                data=report.download_bytes(),
-                file_name=f"audited-report-{report.result_id}.md",
-                mime="text/markdown; charset=utf-8",
-            )
 
-        _show_action(st, run_and_render)
+        _show_action(st, run_and_store)
+    else:
+        stored = _stored_workflow(st)
+        if stored is not None:
+            st.subheader("最近一次服务端工作流结果")
+            st.json(dict(stored))
+
+
+def _render_signed_results(st: Any, client: ApiClient) -> None:
+    st.header("已签发结果")
+    workflow = _stored_workflow(st)
+    if workflow is None:
+        st.info("尚无工作流结果, 请先在“工作流执行”区提交服务端 ID。")
+        return
+    st.subheader("工作流结果 ID")
+    st.json(dict(workflow))
+
+    quality = _fetch_optional_result(client, workflow.get("quality_result_id"))
+    prediction = _fetch_optional_result(client, workflow.get("prediction_result_id"))
+    interval = _fetch_optional_result(client, workflow.get("interval_result_id"))
+    decision = _fetch_optional_result(client, workflow.get("decision_result_id"))
+
+    _render_evidence_section(st, build_quality_section(quality))
+    _render_evidence_section(st, build_lifetime_section(prediction, interval))
+    _render_evidence_section(st, build_decision_section(decision))
+
+
+def _render_audit(st: Any, client: ApiClient) -> None:
+    st.header("审计证据与报告")
+    workflow = _stored_workflow(st)
+    if workflow is None:
+        st.info("尚无工作流结果, 无法定位已签发 ToolResult。")
+        return
+
+    result_ids = [
+        value
+        for key, value in workflow.items()
+        if key.endswith("_result_id") and isinstance(value, str) and value
+    ]
+    if result_ids:
+        selected_id = st.selectbox("选择 ToolResult", result_ids)
+
+        def show_evidence() -> None:
+            payload = client.get_tool_result(selected_id)
+            _render_evidence_section(st, build_audit_section(payload))
+
+        _show_action(st, show_evidence)
+    else:
+        st.info("工作流响应未提供可读取的 ToolResult ID。")
+
+    report_id = workflow.get("report_result_id")
+    if not isinstance(report_id, str) or not report_id:
+        st.info("后端未提供审计报告 ID。")
+        return
+
+    def show_report() -> None:
+        report = client.get_audited_markdown(report_id)
+        st.subheader("审计 Markdown")
+        st.markdown(report.markdown)
+        st.download_button(
+            "下载审计 Markdown",
+            data=report.download_bytes(),
+            file_name=f"audited-report-{report.result_id}.md",
+            mime="text/markdown; charset=utf-8",
+        )
+
+    _show_action(st, show_report)
+
+
+def _render_evidence_section(st: Any, section: EvidenceSection) -> None:
+    st.subheader(section.title)
+    st.dataframe(section_rows(section), use_container_width=True, hide_index=True)
+
+
+def _fetch_optional_result(client: ApiClient, result_id: object) -> Mapping[str, object]:
+    if not isinstance(result_id, str) or not result_id:
+        return {}
+    return client.get_tool_result(result_id)
+
+
+def _stored_workflow(st: Any) -> Mapping[str, object] | None:
+    value = st.session_state.get(_WORKFLOW_SESSION_KEY)
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        return None
+    return value
 
 
 def _show_action(st: Any, action: Callable[[], None]) -> None:

@@ -12,7 +12,7 @@ from quanxin_life.application.assembly import (
 )
 from quanxin_life.application.ingestion import (
     CanonicalCsvBatchRegistration,
-    InMemoryVerifiedEarlyCycleBatchStore,
+    VerifiedEarlyCycleBatchStore,
 )
 from quanxin_life.application.lifetime_workflow import (
     LifetimeDecisionWorkflowRequest,
@@ -24,7 +24,7 @@ from quanxin_life.application.lifetime_workflow import (
 def create_competition_fastapi_app(
     dependencies: CompetitionToolDependencies,
     *,
-    batch_store: InMemoryVerifiedEarlyCycleBatchStore,
+    batch_store: VerifiedEarlyCycleBatchStore,
 ) -> Any:
     """Wire HTTP, tools, uploads and workflow to the same trusted state."""
 

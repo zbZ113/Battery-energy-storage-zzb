@@ -7,11 +7,13 @@ from quanxin_life.audit.numeric_firewall import (
     InvalidAuditResultError,
     NumericEvidence,
 )
+from quanxin_life.audit.persistent_ledger import JsonlAuditLedger
 
 __all__ = [
     "AuditLedger",
     "AuditLedgerError",
     "DuplicateAuditResultError",
     "InvalidAuditResultError",
+    "JsonlAuditLedger",
     "NumericEvidence",
 ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -124,3 +125,44 @@ def test_rejects_untrusted_csv_that_breaks_the_canonical_contract(
             payload,
             registration=registration,
         )
+
+
+def test_filesystem_canonical_csv_store_survives_restart(tmp_path: Path) -> None:
+    from quanxin_life.application import FileSystemVerifiedEarlyCycleBatchStore
+
+    payload = _csv_payload()
+    registration = _registration(payload)
+    root = tmp_path / "verified-batches"
+
+    first = FileSystemVerifiedEarlyCycleBatchStore(root)
+    batch_id = first.register_canonical_csv(payload, registration=registration)
+
+    restored = FileSystemVerifiedEarlyCycleBatchStore(root)
+    batch = restored.resolve_verified_early_cycle_batch(batch_id)
+    assert batch.record_batch_id == batch_id
+    assert batch.metadata == registration.metadata
+    assert batch.records[0].cell_id == registration.metadata.cell_id
+
+
+def test_filesystem_canonical_csv_store_detects_payload_tampering(tmp_path: Path) -> None:
+    from quanxin_life.application import FileSystemVerifiedEarlyCycleBatchStore
+
+    payload = _csv_payload()
+    registration = _registration(payload)
+    store = FileSystemVerifiedEarlyCycleBatchStore(tmp_path)
+    batch_id = store.register_canonical_csv(payload, registration=registration)
+    csv_path = tmp_path / f"{batch_id}.csv"
+    csv_path.write_bytes(csv_path.read_bytes() + b"\n")
+
+    with pytest.raises(ValueError, match="SHA-256"):
+        store.resolve_verified_early_cycle_batch(batch_id)
+
+
+def test_filesystem_canonical_csv_store_rejects_untrusted_batch_identifier(
+    tmp_path: Path,
+) -> None:
+    from quanxin_life.application import FileSystemVerifiedEarlyCycleBatchStore
+
+    store = FileSystemVerifiedEarlyCycleBatchStore(tmp_path)
+    with pytest.raises(ValueError, match="record_batch_id"):
+        store.resolve_verified_early_cycle_batch("../outside")

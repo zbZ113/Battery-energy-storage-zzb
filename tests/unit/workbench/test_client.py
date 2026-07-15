@@ -148,6 +148,24 @@ def test_audited_markdown_is_returned_unchanged_for_display_and_download() -> No
     ]
 
 
+def test_signed_tool_result_is_fetched_by_id_without_rewriting_payload() -> None:
+    signed_payload = {
+        "result_id": "prediction/id",
+        "tool_name": "predict_cycle_life",
+        "values": {"artifact": {"life_prediction": {"predicted_eol_cycle": 0}}},
+        "warnings": [],
+    }
+    transport = RecordingTransport([HttpResponse(200, signed_payload)])
+    client = ApiClient("http://localhost:8000", transport=transport)
+
+    result = client.get_tool_result("prediction/id")
+
+    assert result == signed_payload
+    assert transport.calls == [
+        ("GET", "http://localhost:8000/v1/results/prediction%2Fid", None)
+    ]
+
+
 def test_http_and_malformed_response_fail_explicitly() -> None:
     http_error = ApiClient(
         "http://localhost:8000",

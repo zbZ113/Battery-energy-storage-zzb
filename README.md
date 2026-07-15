@@ -1,148 +1,167 @@
 # 泉芯智寿
 
-## 项目定位
+## 项目简介
 
-“泉芯智寿”是面向新能源装备产业的储能电芯退化感知与决策系统。当前仓库定位为**可信领域工具与算法原型**：以可复现的数据处理、寿命预测、不确定性校准、试验推荐和决策工具为数值来源，由受约束的工作流负责组织工具调用、证据链和报告。
+泉芯智寿是面向新能源装备产业的储能电芯退化感知与研发决策原型。系统把数据质检、早期寿命预测、SOH 轨迹、预测区间、在线校正、短时物理核验、主动试验推荐和批次决策组织成一条可审计工具链。
 
-项目正在按“华为杯”地方赛道目标向真实数据驱动、可端到端演示的作品推进，但目前**不应视为生产系统，也没有形成可对外宣称的真实模型性能**。
+项目的基本原则是：LLM 只负责理解任务、选择工具和解释结果；SOH、RUL、预测区间、阈值比较及其他工程数值必须由版本化工具返回，并能追溯到 `ToolResult`、输入哈希、模型/数据/特征版本与来源记录。
 
-完整实施路线见 [批准计划](docs/superpowers/plans/2026-07-12-quanxin-zhishou-full-implementation.md)。
+完整研发路线见[批准实施计划](docs/superpowers/plans/2026-07-12-quanxin-zhishou-full-implementation.md)，运行环境和部署说明见[运行指南](docs/runtime-setup.md)。
 
-## 不可突破的可信边界
+## 核心功能
 
-- LLM 只能编排工具和解释工具结果，不能计算、猜测、补齐或改写 SOH、RUL、预测区间、阈值比较及经营指标。
-- 每个业务数值必须来自有效、版本化的 `ToolResult`，并可追溯到 `result_id`、工具版本、模型版本、数据版本、特征版本、输入哈希和来源记录。
-- 训练、验证、校准与测试必须按 `cell_id` 划分；禁止同一电芯跨集合，也禁止特征读取预测截断点之后的数据。
-- 未经来源核验，不加载 pickle、joblib、`.pt`、`.pth` 等可执行反序列化制品；模型制品需要清单与 SHA-256 校验。
-- PyBaMM 只用于短时滚动物理核验和敏感性参考，不生成长期退化标签，也不替代真实测试数据。
-- 缺测、域外、未校准和工具失败必须显式降级；不得静默填补或返回示例数值冒充结果。
-- 所有外部接口复用 `quanxin_life.core` 的公共枚举和 Pydantic 契约。
+- 统一电芯元数据、循环记录、数据来源和 SHA-256 清单。
+- 按 `cell_id` 进行训练、验证、校准和测试划分，并扫描截断点后特征泄漏。
+- 提供 Dummy、Variance、XGBoost、[独立 CPMLP](docs/cpmlp-implementation-note-v1.md) 与混合退化模型组件。
+- 使用 Split/Normalized Conformal 签发可审计预测区间。
+- 通过个体参数更新持续校正新到达观测，不在线改写全局模型。
+- 使用 Naumann 工况数据、Gaussian Process 和成本约束策略推荐补充试验。
+- 使用 PyBaMM 做短时间窗工况和边界核验，不生成长期退化标签。
+- 依据数据质量、区间和审核策略输出入组、复检、降级或拒绝决策。
+- 通过 FastAPI、Streamlit 和可选 MCP Host 复用同一 `ToolInvocationService`。
 
-## 当前已实现
-
-### 数据与治理
-
-- 统一的电芯、循环记录、来源清单和哈希契约；数据验证、存储、标签、泄漏审计与电芯级划分。
-- MATR 有界读取适配器和 Naumann Excel/MAT 布局适配器。
-- HUST 压缩包静态安全审计；主进程不会直接反序列化其 `.pkl` 文件。
-- 规范化 CSV 的严格表头、逐行 Pydantic 校验、来源 SHA-256 绑定与内存批次注册器。
-- 早期循环特征、曲线张量与 `ΔQ(V)` 方差特征。
-
-### 模型与不确定性
-
-- Dummy、Variance、XGBoost 和 CPMLP 寿命基线。
-- 单调趋势与累计残差结合的混合退化轨迹模型。
-- Split Conformal、Normalized Conformal，以及独立校准集约束。
-- CORAL、DANN 目标域适应原型；在线个体参数校正。
-- 受治理的模型制品注册表：仅接受 XGBoost JSON/UBJ 与透明 Variance JSON，注册和读取均复核大小、SHA-256、版本、数据集、截断周期与特征模式；显式拒绝 pickle、joblib、`.pt`、`.pth`。
-- XGBoost 原生制品可从已核验注册表安全加载；只有这一路径的寿命预测结果才会标记为 `VERIFIED_ARTIFACT`，制品哈希同时进入来源链。
-
-### 试验、物理与决策
-
-- Naumann 工况数据到高斯过程训练输入的桥接。
-- 高斯过程、最大方差和成本约束主动试验推荐与回放组件。
-- PyBaMM 短时工况核验适配器，包含明确的不可用/失败降级。
-- 基于预测区间、质量状态和策略来源的入组、复检、降级与拒绝决策。
-
-### 工具、智能体与审计
-
-- 统一 `ToolResult`、白名单 `ToolRegistry`、角色权限、输入哈希和追加式 `AuditLedger`。
-- 十四个标准领域工具的显式应用装配：数据质检、划分审计、早期特征、新观测入库、寿命预测、SOH 轨迹预测、区间校准、目标域适应、个体更新、工况核验、试验推荐、批次决策、知识证据检索和审计报告。
-- 下游工具只能消费已登记的上游结果；正式 Markdown 报告按结果 ID 和数值路径取值，阻止客户端或 LLM 注入工程数值。
-- 确定性的寿命决策工作流已形成代码原型：它从服务端可信批次解析器取得完整记录，质量检查通过后依次执行特征提取、寿命预测、Conformal 校准与区间签发、批次决策和审计报告；质量阻断时不继续产生下游数值。正式模式拒绝未登记或未核验的模型制品。
-- 通用 FastAPI 工具传输层；支持 Canonical CSV 注册、ID-only 寿命工作流、审计结果读取和 Markdown 报告读取。
-- 薄 Streamlit 科研工作台通过 HTTP 调用 FastAPI，可上传 Canonical CSV 与审核后的注册 JSON、提交三个服务端 ID、原样显示和下载审计 Markdown，不复制数值逻辑。
-- 传输中立 MCP 适配器及 stdio/Streamable HTTP Host；SDK 采用可选依赖与惰性加载，所有调用仍委托共享 `ToolInvocationService`。
-
-## 当前限制
-
-- MATR 仅保留读取与接入接口，原始数据未纳入仓库，也尚未形成 MATR 真实训练和评测结果。
-- HUST 的安全隔离转换流程尚未实现；在此之前不能进行真实 MATR→HUST 外测、域适应或目标域重校准。
-- Naumann 适配与 GP 组件已经存在，但仓库尚无可作为比赛结论的正式回放结果。
-- 现有算法测试主要验证契约、边界和合成样例；仓库不提供真实性能承诺，不应引用虚构的 MAE、RUL、覆盖率或业务收益。
-- PyBaMM 是可选依赖，且只承担短期核验；默认参数集不代表目标工业电芯已经标定。
-- 当前已有单请求上传—工作流—报告的内存原型，但没有异步任务状态、跨进程持久化审计数据库、BMS/EMS 接口或生产部署配置；服务重启后内存批次与审计结果不会恢复。
-- 本机尚未安装 MCP SDK，因此 Host 契约通过伪 SDK 测试，但不能声称真实 stdio/Streamable HTTP 传输已经运行。
-- 知识检索目前以可信契约和后端接口为主，不等于已经建成生产级电池知识库。
-- 本仓库是学习与竞赛研发原型，不具备生产安全、质保或现场控制用途。
-
-## 目录结构
+## 系统架构
 
 ```text
-Battery-energy-storage-zzb/
-├── configs/                         # 数据源与运行配置
-├── docs/                            # 协议、契约与批准实施计划
-├── src/quanxin_life/
-│   ├── core/                        # 公共枚举、Pydantic 契约与哈希
-│   ├── data/                        # 数据治理、划分、存储与数据集适配器
-│   ├── features/                    # 早期循环、曲线张量和方差特征
-│   ├── models/                      # Dummy/Variance/XGBoost/CPMLP/Hybrid
-│   ├── uncertainty/                 # Split/Normalized Conformal
-│   ├── adaptation/                  # CORAL 与 DANN
-│   ├── online/                      # 在线个体参数校正
-│   ├── experiments/                 # Naumann 桥接、GP 与主动试验
-│   ├── physics/                     # PyBaMM 短时核验
-│   ├── decision/                    # 批次决策策略
-│   ├── tools/                       # 十四个强类型领域工具及 MCP 适配器
-│   ├── audit/                       # 数值防火墙与审计账本
-│   ├── agents/                      # 角色受限的确定性工具编排
-│   ├── application/                 # 完整工具装配与寿命决策工作流
-│   ├── api/                         # 通用 FastAPI 工具调用层
-│   └── reporting/                   # 可审计 Markdown 报告
-├── workbench/                       # HTTP-only Streamlit 科研工作台
-├── tests/
-│   ├── unit/                        # 模块契约与边界测试
-│   ├── leakage/                     # 截断点和数据泄漏测试
-│   ├── integration/                 # 应用装配集成测试
-│   └── e2e/                         # 确定性寿命决策工作流测试
-├── AGENTS.md                        # 仓库协作与安全规则
-└── pyproject.toml                   # Python 3.11 包与可选依赖
+可信数据/审核配置
+        │
+        ▼
+数据治理 ──→ 特征与模型 ──→ Conformal/在线校正
+        │                         │
+        └──→ 物理核验/主动试验 ──┤
+                                  ▼
+                         批次决策与审计报告
+                                  │
+                    ┌─────────────┼─────────────┐
+                    ▼             ▼             ▼
+                 FastAPI      Streamlit       MCP Host
 ```
 
-## Python 3.11 开发环境
+核心包采用 Python 3.11 和 `src/quanxin_life` 布局。`ToolRegistry` 负责强类型输入、白名单与结果契约；`AuditLedger`/`JsonlAuditLedger` 负责结果证据链；FastAPI、Streamlit 与 MCP 只提供传输和展示，不复制算法逻辑。
 
-项目要求 Python `>=3.11,<3.12`，采用 `src/quanxin_life` 布局。以下命令使用当前 `pyproject.toml` 声明的可选依赖：
+## 快速开始
+
+### 1. 建立 Python 3.11 环境
+
+Windows PowerShell：
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[data,dev,ml,physics,api,streamlit,agents,mcp]"
+python -m pip install -e ".[data,dev,ml,api,streamlit]"
 ```
 
-若只开发核心契约和不依赖科学计算栈的模块，可使用：
+需要短时物理核验或 MCP Host 时，再按需安装：
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[physics]"
+python -m pip install -e ".[mcp]"
 ```
 
-可选依赖不会在导入核心包时自动启动模型训练、网络访问或服务。
+Linux：
 
-## 本地质量检查
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[data,dev,ml,api,streamlit]"
+```
 
-执行以下命令可运行仓库当前配置的完整本地门禁；README 不预先声明其结果，实际状态以当前工作区命令输出为准。
+### 2. 启动可独立验证的基础 API
+
+仓库提供的 [`deploy/foundation_api.py`](deploy/foundation_api.py) 仅装配当前无外部企业依赖即可运行的三个工具，用于验证健康检查、工具发现和通用工具调用：
 
 ```powershell
-.\.venv\python.exe -m pytest -q
-.\.venv\python.exe -m ruff check .
-.\.venv\python.exe -m mypy
-.\.venv\python.exe -m compileall -q src workbench
+python -m uvicorn deploy.foundation_api:app --host 127.0.0.1 --port 8000
 ```
 
-开发单个模块时可以先运行目标测试，完成集成前仍应重新执行上述完整门禁。
+访问 `http://127.0.0.1:8000/health`、`/v1/tools` 或 `/docs`。基础 API 不包含 Canonical CSV 上传和寿命决策工作流；完整接口必须由调用方提供审核后的模型、校准队列、策略和知识后端后，通过 `create_competition_fastapi_app` 装配。
 
-## 当前开发优先级
+也可以使用最小 Compose 配置：
 
-下一阶段重点不是继续增加协议或 Agent 角色，而是打通一条有真实证据的纵向链：
-
-```text
-可信数据接入
-→ 固定电芯级划分
-→ 基线与混合模型评测
-→ Conformal 覆盖率
-→ 批次决策
-→ API/界面
-→ 审计报告与复现包
+```powershell
+docker compose -f deploy/compose.yaml up --build
 ```
 
-在真实数据、实验指标、应用装配和演示链路完成前，任何模型效果、区间覆盖率和工业价值都只能作为待验证目标，不能作为项目既有成果。
+### 3. 执行质量门禁
+
+```powershell
+python -m pytest -q
+python -m ruff check .
+python -m mypy
+python -m compileall -q src workbench deploy
+```
+
+安装 `dev` 依赖后可启用同一组本地提交门禁：
+
+```powershell
+python -m pre_commit install
+python -m pre_commit run --all-files
+```
+
+### 4. 运行 Naumann 主动试验回放
+
+先用已审核的 Naumann Excel/MAT 适配器生成条件观测，再把观测、工况边界、初始队列以及有来源的时间/设备成本写入严格 JSON 请求：
+
+```powershell
+python scripts/naumann_gp_pipeline.py --request reviewed-request.json --output-dir runtime/naumann-run
+```
+
+成功运行会生成可追溯的实验数据 JSON/CSV、GP 回放结果和运行清单；缺少审核成本时只生成明确的降级清单，不会补默认成本或伪造推荐结果。
+
+## API、Streamlit 与 MCP
+
+### FastAPI
+
+基础入口为 `deploy/foundation_api.py`，公开：
+
+- `GET /health`
+- `GET /v1/tools`
+- `POST /v1/tools/{tool_name}`
+
+完整应用工厂位于 `src/quanxin_life/application/http_application.py`。当调用方注入完整 `CompetitionToolDependencies` 与可信批次存储后，还可提供批次上传、寿命工作流、结果查询和报告读取端点。
+
+### Streamlit
+
+[`workbench/streamlit_app.py`](workbench/streamlit_app.py) 是 HTTP-only 薄客户端：
+
+```powershell
+python -m streamlit run workbench/streamlit_app.py
+```
+
+工作台的完整上传和决策功能要求它连接到已装配的竞赛 API；连接基础 API 时只能使用健康检查与工具发现。
+
+### MCP
+
+[`src/quanxin_life/tools/mcp_host.py`](src/quanxin_life/tools/mcp_host.py) 提供惰性加载的 stdio/Streamable HTTP Host 工厂。MCP SDK 当前不是项目的默认依赖，宿主应用需安装经自身环境验证的兼容 SDK，再把已装配的 `ToolInvocationService` 传给 `create_mcp_host` 或 `run_mcp_host`。SDK 缺失时会显式报告不可用，不会返回占位结果。
+
+## 数据与安全边界
+
+- 原始文件必须登记来源、许可证/使用条件、SHA-256、下载时间和数据版本。
+- 未核验来源时禁止加载 pickle、joblib、`.pt`、`.pth` 等可执行反序列化制品。
+- 所有数据集必须按 `cell_id` 划分；标准化器、插值器和特征提取器不得读取测试集合或预测截断点后的信息。
+- Canonical CSV 采用固定表头、逐行 Pydantic 校验、大小限制和来源哈希绑定。
+- PyBaMM 仅用于短时滚动核验；默认参数集不能被描述为目标工业电芯标定结果。
+- 缺测、域外、未校准、工具失败或数据质量阻断必须显式降级。
+- 日志不得保存密钥、完整用户提示或原始敏感企业数据。
+
+MATR 按需求暂时只保留接口，不下载大体量原始数据。HUST 官方 pickle 必须在隔离环境完成来源核验和安全转换后才能进入统一格式。企业数据不得放入源码仓库，建议由受控路径或对象存储提供。
+
+## 已实现能力
+
+- MATR 有界读取接口，以及 Naumann Excel/MAT 审核布局适配器。
+- HUST ZIP 静态安全审计与 Canonical CSV 可信批次存储。
+- 数据质检、标签、划分、泄漏扫描和早期循环特征。
+- Dummy、Variance、XGBoost、CPMLP、混合退化、Conformal、CORAL/DANN 和在线个体校正组件。
+- 受治理 XGBoost/Variance 制品注册与安全加载边界。
+- `FileSystemVerifiedEarlyCycleBatchStore` 与 `JsonlAuditLedger` 提供重启可恢复、读取时复验的本地持久化。
+- Naumann-GP 主动试验、PyBaMM 短时核验和批次决策组件。
+- 十四个标准领域工具的显式装配、角色白名单、共享审计账本与 Markdown 报告。
+- Canonical CSV 到寿命决策报告的确定性工作流代码与 FastAPI 传输层。
+- HTTP-only Streamlit 工作台及可选 MCP Host 工厂。
+- pytest、Ruff、mypy、compileall 与 GitHub Actions 门禁配置。
+
+## 验证边界
+
+仓库当前提供的是学习和竞赛研发原型。MATR 原始数据按需求未落盘，HUST 安全转换和跨数据集真实评测仍待完成；仓库不发布未经真实数据复现的模型性能、覆盖率或业务收益。完整寿命工作流还要求使用方提供经过审核的模型制品、校准队列、策略及相关来源记录，现有结果不能用于现场控制、质保或安全承诺。

@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _read(relative_path: str) -> str:
+    return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def test_readme_is_user_facing_and_only_documents_real_entry_points() -> None:
+    readme = _read("README.md")
+
+    for section in (
+        "## 项目简介",
+        "## 核心功能",
+        "## 系统架构",
+        "## 快速开始",
+        "## API、Streamlit 与 MCP",
+        "## 数据与安全边界",
+        "## 已实现能力",
+        "## 验证边界",
+    ):
+        assert section in readme
+
+    assert "deploy/foundation_api.py" in readme
+    assert "workbench/streamlit_app.py" in readme
+    assert "src/quanxin_life/tools/mcp_host.py" in readme
+    assert "docs/runtime-setup.md" in readme
+    assert ".[mcp]" in readme
+    assert "FileSystemVerifiedEarlyCycleBatchStore" in readme
+    assert "JsonlAuditLedger" in readme
+    assert "生产系统" not in readme
+
+
+def test_runtime_guide_covers_windows_linux_and_operator_owned_inputs() -> None:
+    guide = _read("docs/runtime-setup.md")
+
+    for required in (
+        "## Windows 10 本机运行",
+        "## Linux 服务器运行",
+        "## Docker Compose 基础 API",
+        "## 完整竞赛应用装配",
+        "## 外部需提供项",
+        "LLM Provider",
+        "企业数据",
+        "决策策略",
+        "飞书",
+        "MCP",
+    ):
+        assert required in guide
+
+    assert "uvicorn deploy.foundation_api:app" in guide
+    assert "streamlit run workbench/streamlit_app.py" in guide
+    assert "create_competition_fastapi_app" in guide
+    assert "Windows 10 足够" in guide
+    assert "FileSystemVerifiedEarlyCycleBatchStore" in guide
+    assert "JsonlAuditLedger" in guide
+    assert "MATR" in guide and "接口" in guide
+    assert "HUST" in guide and "pickle" in guide
+
+
+def test_env_template_contains_no_secret_values() -> None:
+    template = _read(".env.example")
+
+    for name in (
+        "QUANXIN_DATA_ROOT",
+        "QUANXIN_ARTIFACT_ROOT",
+        "QUANXIN_POLICY_ROOT",
+        "QUANXIN_LLM_PROVIDER",
+        "QUANXIN_LLM_API_KEY",
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+    ):
+        assert re.search(rf"(?m)^{name}=\s*$", template)
+
+    assert "sk-" not in template
+    sensitive_lines = re.findall(
+        r"(?mi)^[A-Z0-9_]*(?:SECRET|TOKEN|API_KEY)[A-Z0-9_]*=(.*)$",
+        template,
+    )
+    assert sensitive_lines
+    assert all(not value.strip() for value in sensitive_lines)
+
+
+def test_compose_starts_only_the_real_foundation_api_entrypoint() -> None:
+    compose = _read("deploy/compose.yaml")
+    dockerfile = _read("deploy/Dockerfile")
+    entrypoint = _read("deploy/foundation_api.py")
+
+    assert "foundation-api:" in compose
+    assert "deploy.foundation_api:app" in compose
+    assert "8000:8000" in compose
+    assert "/health" in compose
+    assert "streamlit" not in compose.lower()
+    assert "mcp" not in compose.lower()
+    assert "COPY pyproject.toml README.md" in dockerfile
+    assert 'pip install --no-cache-dir -e ".[api]"' in dockerfile
+    assert "create_available_tool_invocation_service" in entrypoint
+    assert "create_fastapi_app" in entrypoint
+    assert "app =" in entrypoint
+
+
+def test_local_pre_commit_gate_matches_the_project_quality_commands() -> None:
+    config = _read(".pre-commit-config.yaml")
+    pyproject = _read("pyproject.toml")
+
+    assert "repo: local" in config
+    assert "python -m ruff check ." in config
+    assert "python -m mypy" in config
+    assert "python -m pytest -q" in config
+    assert "python -m compileall -q src workbench deploy" in config
+    assert '"pre-commit>=' in pyproject

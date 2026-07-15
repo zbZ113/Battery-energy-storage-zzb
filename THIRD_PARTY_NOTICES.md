@@ -20,6 +20,7 @@ MATR、HUST、Naumann 数据只在对应数据卡记录的授权范围内使用�
 ## 概念参考代码
 
 - BatteryML（Microsoft，MIT License）：MATR/HUST 原始字段语义和电芯—周期分层结构的概念参考。目标仓库的数据适配、校验、划分和安全持久化均为独立实现，不复制其 pickle 持久化、Severson 特征或划分逻辑。许可证原文位于本地审计工程 `BatteryML-main/BatteryML-main/LICENSE`，正式发布时随 SBOM 固化准确版本与版权声明。
+- BatteryLife（Ruifeng Tan，MIT License）：仅作为 CPMLP 命名、逐循环曲线编码与跨循环聚合思想的对照参考。当前 `src/quanxin_life/models/cpmlp.py` 为 clean-room 独立实现，采用不同的强类型曲线契约、显式缺失掩码、掩码池化和 EOL80 下界约束，未复制 `BatteryLife/models/CPMLP.py` 源码或权重。许可证原文位于本地审计工程 `BatteryLife-main/BatteryLife-main/LICENSE`；若未来改为复用其源码，必须另行保留原版权声明与修改说明。
 
 ## 待发布清单
 

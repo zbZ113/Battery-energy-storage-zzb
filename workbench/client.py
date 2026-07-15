@@ -240,6 +240,17 @@ class ApiClient:
         markdown = _require_nonblank_string(response, "markdown", "audited report response")
         return AuditedMarkdown(result_id=returned_id, markdown=markdown)
 
+    def get_tool_result(self, result_id: str) -> dict[str, object]:
+        """Fetch one server-signed ToolResult without interpreting its values."""
+        normalized_id = _normalize_identifier(result_id, "result_id")
+        encoded_id = quote(normalized_id, safe="")
+        body = self._request("GET", f"/v1/results/{encoded_id}")
+        response = _require_mapping(body, "tool result response")
+        returned_id = _require_nonblank_string(response, "result_id", "tool result response")
+        if returned_id != normalized_id:
+            raise ApiResponseError("tool result result_id does not match the request")
+        return dict(response)
+
     def _request(
         self,
         method: str,

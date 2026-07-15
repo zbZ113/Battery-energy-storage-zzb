@@ -159,7 +159,8 @@ def test_fastapi_factory_fails_explicitly_when_optional_dependency_is_unavailabl
 
 
 class _FakeFastApiApp:
-    def __init__(self, **_: object) -> None:
+    def __init__(self, **options: object) -> None:
+        self.options = options
         self.routes: dict[tuple[str, str], Callable[..., object]] = {}
 
     def get(self, path: str) -> Callable[[Callable[..., object]], Callable[..., object]]:
@@ -188,6 +189,20 @@ class _FakeHttpException(Exception):
 class _FakeFastApiModule:
     FastAPI = _FakeFastApiApp
     HTTPException = _FakeHttpException
+
+
+def test_fastapi_factory_uses_the_project_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    from quanxin_life.api.app import create_fastapi_app
+    from quanxin_life.api.service import ToolInvocationService
+
+    monkeypatch.setattr(
+        "quanxin_life.api.app.importlib.import_module",
+        lambda _: _FakeFastApiModule,
+    )
+
+    app = create_fastapi_app(ToolInvocationService(registry=_registry()))
+
+    assert app.options["title"] == "泉芯智寿 Tool API"
 
 
 def test_fastapi_lifetime_workflow_endpoint_delegates_without_numeric_logic(

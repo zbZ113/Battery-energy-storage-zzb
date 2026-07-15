@@ -37,4 +37,4 @@ jobs:
         run: python -m mypy
 
       - name: Compile Python sources
-        run: python -m compileall -q src workbench
+        run: python -m compileall -q src workbench deploy
