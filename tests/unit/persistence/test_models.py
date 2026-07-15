@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, UniqueConstraint
+from sqlalchemy import JSON, String, UniqueConstraint
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateTable
 
@@ -13,6 +13,7 @@ EXPECTED_TABLES = {
     "dataset_files",
     "cell_splits",
     "agent_runs",
+    "agent_run_dispatches",
     "agent_steps",
     "agent_events",
     "tool_results",
@@ -51,8 +52,56 @@ def test_cell_splits_are_unique_per_dataset_and_cell() -> None:
 
 def test_idempotency_and_evidence_constraints_are_declared() -> None:
     assert ("dataset_id", "sha256") in _unique_column_sets("dataset_files")
+    assert ("created_by_user_id", "idempotency_key_hash") in _unique_column_sets(
+        "agent_runs"
+    )
+    assert ("run_id",) in _unique_column_sets("agent_run_dispatches")
     assert ("run_id", "step_id") in _unique_column_sets("agent_steps")
+    assert ("run_id", "step_id") in _unique_column_sets("approval_requests")
+    assert ("approval_request_id",) in _unique_column_sets("approval_actions")
     assert ("event_id",) in _unique_column_sets("feishu_event_receipts")
+
+
+def test_agent_run_control_plane_columns_are_strictly_declared() -> None:
+    agent_runs = Base.metadata.tables["agent_runs"]
+    assert agent_runs.c.created_by_user_id.nullable is False
+    assert {
+        foreign_key.target_fullname
+        for foreign_key in agent_runs.c.created_by_user_id.foreign_keys
+    } == {"users.id"}
+    for column_name in ("idempotency_key_hash", "request_hash"):
+        column = agent_runs.c[column_name]
+        assert isinstance(column.type, String)
+        assert column.type.length == 64
+        assert column.nullable is False
+    assert isinstance(agent_runs.c.plan_json.type, JSON)
+    assert agent_runs.c.plan_json.nullable is False
+    assert isinstance(agent_runs.c.execution_plan_hash.type, String)
+    assert agent_runs.c.execution_plan_hash.type.length == 64
+    assert agent_runs.c.execution_plan_hash.nullable is True
+
+    agent_steps = Base.metadata.tables["agent_steps"]
+    assert isinstance(agent_steps.c.depends_on_json.type, JSON)
+    assert agent_steps.c.depends_on_json.nullable is False
+    assert isinstance(agent_steps.c.failure_policy.type, String)
+    assert agent_steps.c.failure_policy.nullable is False
+
+
+def test_agent_run_dispatch_is_a_durable_one_row_per_run_outbox() -> None:
+    dispatches = Base.metadata.tables["agent_run_dispatches"]
+    assert {
+        foreign_key.target_fullname for foreign_key in dispatches.c.run_id.foreign_keys
+    } == {"agent_runs.id"}
+    assert dispatches.c.run_id.nullable is False
+    assert isinstance(dispatches.c.plan_hash.type, String)
+    assert dispatches.c.plan_hash.type.length == 64
+    assert dispatches.c.plan_hash.nullable is False
+    assert dispatches.c.status.nullable is False
+    assert dispatches.c.task_id.nullable is True
+    assert dispatches.c.attempts.nullable is False
+    assert dispatches.c.last_error_code.nullable is True
+    assert dispatches.c.created_at.nullable is False
+    assert dispatches.c.updated_at.nullable is False
 
 
 def test_structured_payloads_use_json_and_timestamps_require_timezones() -> None:

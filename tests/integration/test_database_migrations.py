@@ -14,6 +14,7 @@ EXPECTED_TABLES = {
     "dataset_files",
     "cell_splits",
     "agent_runs",
+    "agent_run_dispatches",
     "agent_steps",
     "agent_events",
     "tool_results",
@@ -47,16 +48,63 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
     database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
     config = _config(database_url)
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0001")
 
     engine = create_engine(database_url)
     try:
+        initial_inspector = inspect(engine)
+        assert "agent_run_dispatches" not in initial_inspector.get_table_names()
+        assert "created_by_user_id" not in {
+            column["name"] for column in initial_inspector.get_columns("agent_runs")
+        }
+
+        command.upgrade(config, "head")
+
         upgraded_tables = set(inspect(engine).get_table_names())
         assert upgraded_tables >= EXPECTED_TABLES
+
+        upgraded_inspector = inspect(engine)
+        assert {
+            "created_by_user_id",
+            "idempotency_key_hash",
+            "request_hash",
+            "plan_json",
+            "execution_plan_hash",
+        } <= {column["name"] for column in upgraded_inspector.get_columns("agent_runs")}
+        assert {"depends_on_json", "failure_policy"} <= {
+            column["name"] for column in upgraded_inspector.get_columns("agent_steps")
+        }
+        assert ("created_by_user_id", "idempotency_key_hash") in {
+            tuple(constraint["column_names"])
+            for constraint in upgraded_inspector.get_unique_constraints("agent_runs")
+        }
+        assert ("run_id", "step_id") in {
+            tuple(constraint["column_names"])
+            for constraint in upgraded_inspector.get_unique_constraints("approval_requests")
+        }
+        assert ("approval_request_id",) in {
+            tuple(constraint["column_names"])
+            for constraint in upgraded_inspector.get_unique_constraints("approval_actions")
+        }
+        assert ("run_id",) in {
+            tuple(constraint["column_names"])
+            for constraint in upgraded_inspector.get_unique_constraints("agent_run_dispatches")
+        }
 
         # The declared metadata must also round-trip through the lightweight
         # SQLite migration target without producing type drift.
         command.check(config)
+
+        command.downgrade(config, "0001")
+
+        revision_one_inspector = inspect(engine)
+        assert "agent_run_dispatches" not in revision_one_inspector.get_table_names()
+        assert "created_by_user_id" not in {
+            column["name"] for column in revision_one_inspector.get_columns("agent_runs")
+        }
+        assert "depends_on_json" not in {
+            column["name"] for column in revision_one_inspector.get_columns("agent_steps")
+        }
 
         command.downgrade(config, "base")
 

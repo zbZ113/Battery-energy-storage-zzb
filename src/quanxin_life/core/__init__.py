@@ -1,6 +1,8 @@
 """Stable, service-independent domain contracts."""
 
 from quanxin_life.core.enums import (
+    AgentDispatchStatus,
+    AgentEventType,
     AgentFailurePolicy,
     AgentPlanningMode,
     AgentRole,
@@ -45,6 +47,8 @@ from quanxin_life.core.schemas import (
 )
 
 __all__ = [
+    "AgentDispatchStatus",
+    "AgentEventType",
     "AgentFailurePolicy",
     "AgentIntent",
     "AgentPlan",

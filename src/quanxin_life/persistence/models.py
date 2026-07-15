@@ -24,6 +24,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
 from quanxin_life.core.enums import (
+    AgentDispatchStatus,
     AgentRunStatus,
     ApprovalStatus,
     KnowledgeReviewStatus,
@@ -206,6 +207,11 @@ class CellSplit(Base):
 class AgentRun(Base):
     __tablename__ = "agent_runs"
     __table_args__ = (
+        UniqueConstraint(
+            "created_by_user_id",
+            "idempotency_key_hash",
+            name="uq_agent_run_user_idempotency_key",
+        ),
         Index("ix_agent_runs_project_created", "project_id", "created_at"),
         Index("ix_agent_runs_status", "status"),
     )
@@ -213,12 +219,17 @@ class AgentRun(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
     session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.id"))
+    created_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), default=AgentRunStatus.PLANNING.value, nullable=False
     )
     planning_mode: Mapped[str] = mapped_column(String(32), nullable=False)
     intent_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    plan_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     plan_hash: Mapped[str | None] = mapped_column(String(64))
+    execution_plan_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -226,6 +237,32 @@ class AgentRun(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentRunDispatch(Base):
+    __tablename__ = "agent_run_dispatches"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_agent_run_dispatch_run_id"),
+        Index("ix_agent_run_dispatches_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    plan_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), default=AgentDispatchStatus.PENDING.value, nullable=False
+    )
+    task_id: Mapped[str | None] = mapped_column(String(200))
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
 
 
 class AgentStep(Base):
@@ -246,6 +283,8 @@ class AgentStep(Base):
     tool_name: Mapped[str] = mapped_column(String(200), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     input_refs_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    depends_on_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    failure_policy: Mapped[str] = mapped_column(String(32), nullable=False)
     requires_human_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -385,7 +424,10 @@ class DecisionPolicy(Base):
 
 class ApprovalRequestRow(Base):
     __tablename__ = "approval_requests"
-    __table_args__ = (Index("ix_approval_requests_run_status", "run_id", "status"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_id", name="uq_approval_request_run_step"),
+        Index("ix_approval_requests_run_status", "run_id", "status"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), nullable=False)
@@ -404,7 +446,10 @@ class ApprovalRequestRow(Base):
 
 class ApprovalAction(Base):
     __tablename__ = "approval_actions"
-    __table_args__ = (Index("ix_approval_actions_request_id", "approval_request_id"),)
+    __table_args__ = (
+        UniqueConstraint("approval_request_id", name="uq_approval_action_request_id"),
+        Index("ix_approval_actions_request_id", "approval_request_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     approval_request_id: Mapped[str] = mapped_column(

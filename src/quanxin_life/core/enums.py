@@ -59,6 +59,27 @@ class AgentRunStatus(StrEnum):
     FALLBACK = "FALLBACK"
 
 
+class AgentDispatchStatus(StrEnum):
+    """Durable outbox state for an Agent run."""
+
+    PENDING = "PENDING"
+    DISPATCHED = "DISPATCHED"
+
+
+class AgentEventType(StrEnum):
+    """Public, non-sensitive Agent run timeline events."""
+
+    RUN_CREATED = "RUN_CREATED"
+    RUN_DISPATCHED = "RUN_DISPATCHED"
+    DISPATCH_FAILED = "DISPATCH_FAILED"
+    RUN_CANCELLED = "RUN_CANCELLED"
+    APPROVAL_REQUESTED = "APPROVAL_REQUESTED"
+    APPROVAL_APPROVED = "APPROVAL_APPROVED"
+    APPROVAL_REJECTED = "APPROVAL_REJECTED"
+    RUN_COMPLETED = "RUN_COMPLETED"
+    RUN_FAILED = "RUN_FAILED"
+
+
 class AgentPlanningMode(StrEnum):
     """Auditable source of one Agent plan."""
 
@@ -81,6 +102,7 @@ class ApprovalStatus(StrEnum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
 
 
 class KnowledgeReviewStatus(StrEnum):
