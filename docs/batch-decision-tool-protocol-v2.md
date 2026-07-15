@@ -35,6 +35,7 @@ v2 保留 `quanxin_life.decision.make_batch_decision()` 作为研究与单元测
 `quanxin_life.normalized_prediction_interval.v1` 制品。制品包含：
 
 - `NormalizedPredictionInterval`；
+- 其上游 `prediction_result_id` 与难度尺度来源清单哈希；
 - 对应的 `calibration_result_id`；
 - 校准域、目标域和目标域校准状态。
 

@@ -111,10 +111,14 @@ def _interval_result(
             "artifact_type": "quanxin_life.normalized_prediction_interval.v1",
             "artifact": {
                 "prediction_interval": interval.model_dump(mode="json"),
+                "prediction_result_id": str(uuid4()),
                 "target_domain_calibrated": target_domain_calibrated,
                 "calibration_result_id": calibration_result_id,
                 "calibration_domain_id": "synthetic-lfp",
                 "target_domain_id": "synthetic-lfp",
+                "difficulty_scale_source_manifest_hash": sha256_canonical(
+                    {"fixture": "difficulty-scale-manifest"}
+                ),
             },
         },
         provenance=[_provenance("interval-evidence", SourceKind.PREDICTED)],

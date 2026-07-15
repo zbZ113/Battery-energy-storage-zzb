@@ -99,18 +99,20 @@ class DecisionIntervalEvidence(_EvidenceModel):
     """A target-cell normalized interval issued by the Conformal tool chain."""
 
     prediction_interval: NormalizedPredictionInterval
+    prediction_result_id: str
     calibration_result_id: str
     calibration_domain_id: str = Field(min_length=1)
     target_domain_id: str = Field(min_length=1)
     target_domain_calibrated: bool
+    difficulty_scale_source_manifest_hash: Sha256
 
-    @field_validator("calibration_result_id")
+    @field_validator("prediction_result_id", "calibration_result_id")
     @classmethod
-    def require_calibration_result_uuid(cls, value: str) -> str:
+    def require_upstream_result_uuid(cls, value: str) -> str:
         try:
             UUID(value)
         except (TypeError, ValueError, AttributeError) as exc:
-            raise ValueError("calibration_result_id must be a UUID string") from exc
+            raise ValueError("interval upstream result IDs must be UUID strings") from exc
         return value
 
     @model_validator(mode="after")

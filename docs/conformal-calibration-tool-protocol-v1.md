@@ -1,23 +1,17 @@
-# 可信 Normalized Conformal 校准工具协议 v1
+# 可信 Normalized Conformal 校准与区间签发工具协议 v1
 
 ## 目的与边界
 
-`calibrate_prediction_interval` 负责从已经过来源核验、按 `cell_id` 完全隔离的校准队列中计算
-Normalized Conformal 的残差分位数。它输出的是**校准证据**，不是某颗电芯的寿命区间；后续
-区间应用工具必须再绑定一条已登记的点预测、同版本难度尺度以及本工具产生的校准证据。
+`calibrate_prediction_interval` 是具有两种互斥安全操作模式的受约束工具：
 
-该工具不接受、也不会从 LLM、HTTP 请求或前端传入下列值：
+1. **校准证据模式**：从已经过来源核验、按 `cell_id` 完全隔离的校准队列中计算 Normalized Conformal 残差分位数；
+2. **目标区间签发模式**：从已登记点预测、已登记校准证据，以及服务端受信任的同版本预测难度尺度中，签发一颗目标电芯的寿命区间。
 
-- 单电芯 `observed_eol_cycle` 标签；
-- 点预测、残差、难度尺度或预测区间；
-- `alpha` 覆盖率参数；
-- 模型版本、数据版本、切分版本或来源哈希。
-
-这些信息仅能由 `VerifiedNormalizedCalibrationCohortResolver` 从受信任的评测制品和数据清单中
-解析。当前版本使用平台固定的 `alpha=0.10`，即 90% 目标覆盖率；80% 和 95% 灵敏度分析应由
-独立、版本化实验任务生成，不可在调用期由智能体临时设定。
+工具不接受调用方、LLM、HTTP、MCP 或前端传入的标签、点预测、残差、难度尺度、`alpha`、区间上下界、模型版本、数据版本或来源哈希。所有工程数值只能来自受信任解析器、`AuditLedger` 和确定性 Conformal 算法。
 
 ## 公共输入
+
+### 模式 A：校准证据
 
 ```json
 {
@@ -25,26 +19,41 @@ Normalized Conformal 的残差分位数。它输出的是**校准证据**，不�
 }
 ```
 
-`calibration_cohort_id` 是服务端登记的标识，不要求调用方上传文件、预测值或标签。输入模型采用
-`extra="forbid"`，故任何附加数值字段都会被拒绝。
+`calibration_cohort_id` 是服务端登记标识，不要求调用方上传文件、预测值或标签。
 
-## 受信任队列契约
+### 模式 B：目标电芯区间签发
 
-解析器返回的 `VerifiedNormalizedCalibrationCohort` 必须包含：
+```json
+{
+  "prediction_result_id": "UUID",
+  "calibration_result_id": "UUID"
+}
+```
 
-- 仅属于 `SplitManifest.calibration` 的电芯级预测；
-- 与该切分清单相同的数据集、`cutoff_cycle`、目标、特征、切分、模型和数据版本；
-- 真实、非右删失的 `EOL80` 标签；
-- 同一 `scale_version` 和正的模型难度尺度；
-- 原始数据清单 SHA-256 与至少一条 `OBSERVED` 来源记录；
-- 已声明的 `calibration_domain_id` 与 `calibration_scope`。
+两个 ID 必须引用当前 `AuditLedger` 中已登记的结果：
 
-解析器返回的数据会再次经 Pydantic 合约验证。即使调用方绕过解析器正常构造过程，缺少观测来源、
-跨切分电芯、不同版本或删失标签都会被拒绝。
+- `prediction_result_id` 必须对应 `predict_cycle_life` 的标准点预测制品；
+- `calibration_result_id` 必须对应模式 A 输出的标准校准制品。
 
-## 输出证据
+服务端再通过 `VerifiedPredictionDifficultyScaleResolver` 解析与点预测 ID 一一绑定的模型难度尺度。尺度的电芯、数据集、截断点、特征、划分、模型、数据和 `scale_version` 必须逐项匹配已登记点预测及校准证据。
 
-输出 `ToolResult` 使用以下固定身份：
+输入模型采用 `extra="forbid"`；调用方不能混用两种模式，也不能额外传入数值字段。
+
+## 受信任校准队列
+
+模式 A 的 `VerifiedNormalizedCalibrationCohort` 必须满足：
+
+- 预测只属于 `SplitManifest.calibration` 的电芯级校准集合；
+- 预测共享同一数据集、`cutoff_cycle`、目标、特征、划分、模型、数据和尺度版本；
+- 每条预测均有真实、非右删失的 `EOL80` 标签；
+- 队列来源至少包含一条 `OBSERVED` 记录，并登记来源清单哈希；
+- 解析后的合约会再次经 Pydantic 校验。
+
+因此，调用方无法通过伪造普通 DTO、跨切分电芯、不同版本、删除标签或裸 CSV 来生成校准证据。
+
+## 输出制品
+
+### 模式 A：校准证据
 
 ```text
 tool_name: calibrate_prediction_interval
@@ -52,13 +61,26 @@ tool_version: conformal-calibration-tool-v1
 artifact_type: quanxin_life.normalized_conformal_calibration.v1
 ```
 
-`values.artifact` 含校准分位数、样本数、尺度版本、校准域、校准范围、校准电芯 ID、切分清单哈希
-和来源清单哈希。它**不**包含逐电芯真实寿命标签或残差。
+`values.artifact` 含校准分位数、样本数、尺度版本、校准域、范围、校准电芯 ID、切分清单哈希和来源清单哈希，但不含逐电芯真实寿命标签或残差。数值来自 `calibrate_normalized_conformal()`。
 
-所有输出数值来自 `calibrate_normalized_conformal()`；LLM 只能解释已登记 `ToolResult`，不得生成、
-修改或重新计算区间数值。
+### 模式 B：目标电芯区间
 
-## 覆盖率声明
+```text
+tool_name: calibrate_prediction_interval
+tool_version: conformal-calibration-tool-v1
+artifact_type: quanxin_life.normalized_prediction_interval.v1
+```
+
+`values.artifact` 至少包含：
+
+- `prediction_interval`：由 `make_normalized_prediction_interval()` 生成的 `NormalizedPredictionInterval`；
+- `prediction_result_id` 与 `calibration_result_id`：完整上游结果链；
+- `calibration_domain_id`、`target_domain_id` 与 `target_domain_calibrated`；
+- `difficulty_scale_source_manifest_hash`：受信任难度尺度的来源清单哈希。
+
+结果的 `uncertainty` 仅反映已计算的覆盖率目标、难度尺度与区间上下界；所有值由登记点预测、校准制品和受信任尺度导出。其 `provenance` 合并点预测、校准和难度尺度来源，并去重保留来源链。
+
+## 覆盖率与跨域声明
 
 每份结果始终带有：
 
@@ -66,27 +88,30 @@ artifact_type: quanxin_life.normalized_conformal_calibration.v1
 COVERAGE_VALID_ONLY_FOR_DECLARED_CALIBRATION_COHORT
 ```
 
-当解析器声明 `target_domain_recalibration` 时，额外带有：
+当校准队列声明 `target_domain_recalibration`，且目标域与校准域匹配时，额外带有：
 
 ```text
 TARGET_DOMAIN_RECALIBRATION_APPLIED
 ```
 
-这些警告表示该结果只能用于已声明的校准队列；它不构成对 HUST、Naumann、工业储能电芯或未重校准
-目标域的覆盖率承诺。跨域 PICP/MPIW 必须以独立目标域评测电芯报告。
+当目标域与校准域不匹配时，模式 B 必须带有：
+
+```text
+TARGET_DOMAIN_UNCALIBRATED
+```
+
+此时 `target_domain_calibrated=false`，后续批次决策工具必须降级为 `RECHECK`，不得将源域 90% 覆盖率外推为目标域保证。跨域 PICP/MPIW 必须基于独立目标域评测电芯报告。
 
 ## 注册与运行时依赖
 
-工具依赖可信解析器，故不得被无参的 `create_available_tool_registry()` 自动注册。装配层必须显式注入
-来源核验器；不得为了方便调用而读取裸 CSV、加载未登记模型制品或构造占位标签。
+工具依赖可信解析器，故不得被无参的 `create_available_tool_registry()` 自动注册。装配层必须显式注入校准队列解析器；模式 B 还必须显式注入 `AuditLedger` 与难度尺度解析器。不得为了方便调用而读取裸 CSV、加载未登记模型制品或构造占位标签。
 
-当前工具也不直接应用预测区间，因此 `uncertainty` 字段为 `null`。这避免将校准统计量误表述为某个
-工程对象的寿命结论。
+模式 A 的 `uncertainty` 为 `null`，因为它不是单电芯结论；模式 B 的 `uncertainty` 必须绑定已登记上游数值。
 
 ## 验收测试
 
 ```powershell
-.\.venv\python.exe -m pytest tests\unit\tools\test_conformal_calibration_tool.py tests\unit\uncertainty\test_normalized_conformal.py -q
-.\.venv\Scripts\ruff.exe check src\quanxin_life\tools\conformal_calibration.py tests\unit\tools\test_conformal_calibration_tool.py
-.\.venv\Scripts\mypy.exe src\quanxin_life\tools\conformal_calibration.py tests\unit\tools\test_conformal_calibration_tool.py
+.\.venv\python.exe -m pytest tests\unit\tools\test_conformal_calibration_tool.py tests\unit\tools\test_conformal_interval_issuance_tool.py tests\unit\uncertainty\test_normalized_conformal.py -q
+.\.venv\Scripts\ruff.exe check src\quanxin_life\tools\conformal_calibration.py tests\unit\tools\test_conformal_calibration_tool.py tests\unit\tools\test_conformal_interval_issuance_tool.py
+.\.venv\Scripts\mypy.exe src\quanxin_life\tools\conformal_calibration.py
 ```
