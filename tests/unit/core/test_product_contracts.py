@@ -65,6 +65,7 @@ def test_llm_provider_config_excludes_secrets_and_normalizes_capability_time() -
         base_url="https://llm.example.test/v1",
         primary_model="reasoning-model",
         economy_model="economy-model",
+        embedding_model="embedding-model",
         timeout_seconds=30,
         monthly_budget_cny=100,
         supports_json_schema=True,
@@ -77,6 +78,7 @@ def test_llm_provider_config_excludes_secrets_and_normalizes_capability_time() -
     assert config.capability_checked_at is not None
     assert config.capability_checked_at.tzinfo is UTC
     assert "api_key" not in config.model_dump(mode="json")
+    assert config.embedding_model == "embedding-model"
     with pytest.raises(ValidationError):
         LlmProviderConfig.model_validate(
             {

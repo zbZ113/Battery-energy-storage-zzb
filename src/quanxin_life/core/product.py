@@ -59,6 +59,7 @@ class LlmProviderConfig(ContractModel):
     base_url: HttpUrl
     primary_model: str = Field(min_length=1)
     economy_model: str | None = Field(default=None, min_length=1)
+    embedding_model: str | None = Field(default=None, min_length=1)
     timeout_seconds: float = Field(gt=0, le=120, allow_inf_nan=False)
     monthly_budget_cny: float = Field(gt=0, le=100, allow_inf_nan=False)
     supports_json_schema: bool | None = None
@@ -66,15 +67,23 @@ class LlmProviderConfig(ContractModel):
     supports_streaming: bool | None = None
     supports_embeddings: bool | None = None
     capability_checked_at: datetime | None = None
+    capability_warnings: tuple[str, ...] = ()
 
     _capability_checked_at_utc = field_validator("capability_checked_at")(
         _optional_utc_datetime
     )
 
-    @field_validator("config_version", "provider_id", "primary_model", "economy_model")
+    @field_validator(
+        "config_version", "provider_id", "primary_model", "economy_model", "embedding_model"
+    )
     @classmethod
     def text_fields_are_not_blank(cls, value: str | None) -> str | None:
         return _nonblank(value) if value is not None else None
+
+    @field_validator("capability_warnings")
+    @classmethod
+    def warnings_are_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _unique_nonblank(value, field_name="capability_warnings")
 
 
 class AgentIntent(ContractModel):
