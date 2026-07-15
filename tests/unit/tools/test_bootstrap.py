@@ -11,6 +11,5 @@ def test_available_tool_registry_registers_each_implemented_standard_tool_once()
     assert [schema.tool_name for schema in registry.list_schemas()] == [
         StandardToolName.AUDIT_DATASET_SPLIT,
         StandardToolName.CHECK_OPERATING_CONDITION,
-        StandardToolName.MAKE_BATCH_DECISION,
         StandardToolName.VALIDATE_BATTERY_DATA,
     ]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from quanxin_life.tools.batch_decision import register_batch_decision_tool
 from quanxin_life.tools.data_quality import register_validate_battery_data_tool
 from quanxin_life.tools.physics_check import register_check_operating_condition_tool
 from quanxin_life.tools.registry import ToolRegistry
@@ -20,5 +19,4 @@ def create_available_tool_registry() -> ToolRegistry:
     register_validate_battery_data_tool(registry)
     register_audit_dataset_split_tool(registry)
     register_check_operating_condition_tool(registry)
-    register_batch_decision_tool(registry)
     return registry

@@ -77,7 +77,6 @@ def test_available_service_uses_the_shared_available_tool_assembly() -> None:
     assert [schema.tool_name.value for schema in service.registry.list_schemas()] == [
         "audit_dataset_split",
         "check_operating_condition",
-        "make_batch_decision",
         "validate_battery_data",
     ]
 
