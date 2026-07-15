@@ -1,7 +1,31 @@
 """Stable, service-independent domain contracts."""
 
-from quanxin_life.core.enums import Decision, EvidenceLevel, PredictionTarget, SourceKind
+from quanxin_life.core.enums import (
+    AgentFailurePolicy,
+    AgentRole,
+    AgentRunStatus,
+    ApprovalKind,
+    ApprovalStatus,
+    Decision,
+    EvidenceLevel,
+    KnowledgeReviewStatus,
+    PredictionTarget,
+    SourceKind,
+    UserRole,
+)
 from quanxin_life.core.hashing import canonical_json_bytes, sha256_canonical
+from quanxin_life.core.product import (
+    AgentIntent,
+    AgentPlan,
+    AgentPlanStep,
+    AgentRunState,
+    ApprovalRequest,
+    FeishuBinding,
+    KnowledgeDocumentManifest,
+    LlmProviderConfig,
+    ScenarioLifetimeRequest,
+    ScenarioLifetimeResult,
+)
 from quanxin_life.core.schemas import (
     AnalysisState,
     CellMetadata,
@@ -16,20 +40,37 @@ from quanxin_life.core.schemas import (
 )
 
 __all__ = [
+    "AgentFailurePolicy",
+    "AgentIntent",
+    "AgentPlan",
+    "AgentPlanStep",
+    "AgentRole",
+    "AgentRunState",
+    "AgentRunStatus",
     "AnalysisState",
+    "ApprovalKind",
+    "ApprovalRequest",
+    "ApprovalStatus",
     "CellMetadata",
     "ConformalCalibration",
     "Decision",
     "EvidenceLevel",
+    "FeishuBinding",
+    "KnowledgeDocumentManifest",
+    "KnowledgeReviewStatus",
     "LifePrediction",
     "LifetimeMetrics",
+    "LlmProviderConfig",
     "NormalizedConformalCalibration",
     "NormalizedPredictionInterval",
     "PredictionInterval",
     "PredictionTarget",
     "ProvenanceRecord",
+    "ScenarioLifetimeRequest",
+    "ScenarioLifetimeResult",
     "SourceKind",
     "ToolResult",
+    "UserRole",
     "canonical_json_bytes",
     "sha256_canonical",
 ]

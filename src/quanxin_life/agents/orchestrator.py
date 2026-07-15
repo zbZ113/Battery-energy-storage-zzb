@@ -18,21 +18,11 @@ from pydantic import Field, field_validator
 
 from quanxin_life.api.service import ToolInvocation, ToolInvocationService
 from quanxin_life.audit import AuditLedgerError
-from quanxin_life.core import ToolResult, sha256_canonical
+from quanxin_life.core import AgentRole, ToolResult, sha256_canonical
 from quanxin_life.core.schemas import ContractModel
 from quanxin_life.tools import StandardToolName, ToolRegistryError
 
 ORCHESTRATOR_VERSION = "constrained-agent-workflow-v1"
-
-
-class AgentRole(StrEnum):
-    """Bounded professional roles specified by the competition system design."""
-
-    DATA_QUALITY = "data_quality"
-    LIFETIME = "lifetime"
-    PHYSICS = "physics"
-    EXPERIMENT = "experiment"
-    SUPERVISOR = "supervisor"
 
 
 class WorkflowStatus(StrEnum):

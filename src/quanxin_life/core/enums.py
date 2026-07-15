@@ -27,3 +27,66 @@ class PredictionTarget(StrEnum):
     """Prediction labels permitted by the battery lifetime modeling contract."""
 
     EOL80_CYCLE = "eol80_cycle"
+
+
+class AgentRole(StrEnum):
+    """Bounded professional roles used by planners and the safe executor."""
+
+    DATA_QUALITY = "data_quality"
+    LIFETIME = "lifetime"
+    PHYSICS = "physics"
+    EXPERIMENT = "experiment"
+    SUPERVISOR = "supervisor"
+
+
+class AgentFailurePolicy(StrEnum):
+    """Allowed handling for one failed planned step."""
+
+    STOP = "STOP"
+    RETRY_ONCE = "RETRY_ONCE"
+    REPLAN = "REPLAN"
+
+
+class AgentRunStatus(StrEnum):
+    """Persisted lifecycle states for one user-visible Agent run."""
+
+    PLANNING = "PLANNING"
+    RUNNING = "RUNNING"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    FALLBACK = "FALLBACK"
+
+
+class ApprovalKind(StrEnum):
+    """Actions that may not be performed without a human decision."""
+
+    EXTERNAL_WRITE = "EXTERNAL_WRITE"
+    FORMAL_DECISION = "FORMAL_DECISION"
+    EXPERIMENT_ACTION = "EXPERIMENT_ACTION"
+
+
+class ApprovalStatus(StrEnum):
+    """Persisted state of one approval request."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class KnowledgeReviewStatus(StrEnum):
+    """Review state controlling whether a document may be cited."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class UserRole(StrEnum):
+    """Application roles used for server-side authorization."""
+
+    ADMIN = "ADMIN"
+    MEMBER = "MEMBER"
+    JUDGE = "JUDGE"
