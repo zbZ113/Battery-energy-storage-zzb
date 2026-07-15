@@ -70,6 +70,7 @@ def create_fastapi_app(
     *,
     lifetime_workflow_runner: LifetimeWorkflowRunner | None = None,
     canonical_csv_registrar: CanonicalCsvRegistrar | None = None,
+    auth_adapter: Any | None = None,
 ) -> Any:
     """Create the HTTP adapter without duplicating domain-tool execution logic."""
     try:
@@ -79,6 +80,16 @@ def create_fastapi_app(
         raise FastApiDependencyUnavailable(message) from exc
 
     app: Any = fastapi_module.FastAPI(title="泉芯智寿 Tool API", version="v1")
+    if auth_adapter is not None:
+        cors_module = importlib.import_module("fastapi.middleware.cors")
+        app.add_middleware(
+            cors_module.CORSMiddleware,
+            allow_origins=list(auth_adapter.allowed_origins),
+            allow_credentials=True,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Accept", "Content-Type", "Idempotency-Key", "Origin"],
+        )
+        app.include_router(auth_adapter.router)
 
     @app.get("/health")  # type: ignore[untyped-decorator]
     async def health() -> dict[str, str]:
