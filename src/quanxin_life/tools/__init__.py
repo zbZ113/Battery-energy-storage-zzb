@@ -49,6 +49,12 @@ from quanxin_life.tools.split_audit import (
     execute_audit_dataset_split_tool,
     register_audit_dataset_split_tool,
 )
+from quanxin_life.tools.target_domain_adaptation import (
+    TARGET_DOMAIN_ADAPTATION_TOOL_VERSION,
+    AdaptToTargetDomainToolInput,
+    execute_adapt_to_target_domain_tool,
+    register_adapt_to_target_domain_tool,
+)
 
 __all__ = [
     "BATCH_DECISION_TOOL_VERSION",
@@ -57,6 +63,8 @@ __all__ = [
     "PHYSICS_CHECK_TOOL_VERSION",
     "SPLIT_AUDIT_MODEL_VERSION",
     "SPLIT_AUDIT_TOOL_VERSION",
+    "TARGET_DOMAIN_ADAPTATION_TOOL_VERSION",
+    "AdaptToTargetDomainToolInput",
     "AuditDatasetSplitToolInput",
     "BatchDecisionToolInput",
     "CheckOperatingConditionToolInput",
@@ -79,11 +87,13 @@ __all__ = [
     "UnknownToolError",
     "ValidateBatteryDataToolInput",
     "create_available_tool_registry",
+    "execute_adapt_to_target_domain_tool",
     "execute_audit_dataset_split_tool",
     "execute_batch_decision_tool",
     "execute_check_operating_condition_tool",
     "execute_validate_battery_data_tool",
     "load_optional_mcp_sdk",
+    "register_adapt_to_target_domain_tool",
     "register_audit_dataset_split_tool",
     "register_batch_decision_tool",
     "register_check_operating_condition_tool",
