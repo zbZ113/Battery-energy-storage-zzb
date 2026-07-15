@@ -8,7 +8,6 @@ Importing this module does not import or initialize the MCP SDK.
 
 from __future__ import annotations
 
-import importlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -76,7 +75,7 @@ def create_mcp_host(
     service: ToolInvocationServiceLike,
     *,
     config: McpHostConfig | None = None,
-    sdk_loader: SdkLoader = load_optional_mcp_sdk,
+    sdk_loader: SdkLoader | None = None,
 ) -> McpHost:
     """Create, but do not start, a FastMCP host over one shared service.
 
@@ -92,7 +91,7 @@ def create_mcp_host(
         raise TypeError("service must be a ToolInvocationService")
 
     resolved_config = config or McpHostConfig()
-    sdk = sdk_loader()
+    sdk = (sdk_loader or load_optional_mcp_sdk)()
     fastmcp_factory = _resolve_fastmcp_factory(sdk)
     server = fastmcp_factory(
         resolved_config.server_name,
@@ -111,7 +110,7 @@ def run_mcp_host(
     service: ToolInvocationServiceLike,
     *,
     config: McpHostConfig | None = None,
-    sdk_loader: SdkLoader = load_optional_mcp_sdk,
+    sdk_loader: SdkLoader | None = None,
 ) -> None:
     """Construct and run one stdio or Streamable HTTP MCP host."""
 
@@ -120,15 +119,6 @@ def run_mcp_host(
 
 def _resolve_fastmcp_factory(sdk: object) -> Callable[..., Any]:
     fastmcp_factory = _nested_attribute(sdk, "server", "fastmcp", "FastMCP")
-    if fastmcp_factory is None:
-        try:
-            fastmcp_module = importlib.import_module("mcp.server.fastmcp")
-        except (ImportError, ModuleNotFoundError) as exc:
-            raise McpSdkUnavailableError(
-                "The optional MCP SDK does not provide the required FastMCP host"
-            ) from exc
-        fastmcp_factory = getattr(fastmcp_module, "FastMCP", None)
-
     if not callable(fastmcp_factory):
         raise McpSdkUnavailableError(
             "The optional MCP SDK does not provide the required FastMCP host"
