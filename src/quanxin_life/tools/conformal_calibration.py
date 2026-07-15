@@ -285,6 +285,8 @@ class PointPredictionEvidence(_IntervalEvidenceModel):
     split_version: str = Field(min_length=1)
     used_feature_names: tuple[str, ...] = Field(min_length=1)
     model_artifact_status: str = Field(min_length=1)
+    model_artifact_id: str | None = None
+    model_artifact_sha256: Sha256 | None = None
 
     @field_validator("upstream_result_id")
     @classmethod
@@ -294,6 +296,19 @@ class PointPredictionEvidence(_IntervalEvidenceModel):
         except (TypeError, ValueError, AttributeError) as exc:
             raise ValueError("upstream_result_id must be a UUID string") from exc
         return value
+
+    @model_validator(mode="after")
+    def require_verified_artifact_identity(self) -> PointPredictionEvidence:
+        if self.model_artifact_status == "VERIFIED_ARTIFACT":
+            if self.model_artifact_id is None or self.model_artifact_sha256 is None:
+                raise ValueError("verified model artifact requires ID and SHA-256")
+            try:
+                UUID(self.model_artifact_id)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValueError("model_artifact_id must be a UUID string") from exc
+        elif self.model_artifact_id is not None or self.model_artifact_sha256 is not None:
+            raise ValueError("unverified model output must not claim an artifact identity")
+        return self
 
 
 def _require_result_artifact(

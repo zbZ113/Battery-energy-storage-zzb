@@ -29,6 +29,13 @@ from quanxin_life.tools.mcp_adapter import (
     McpToolCallRequest,
     load_optional_mcp_sdk,
 )
+from quanxin_life.tools.mcp_host import (
+    McpHost,
+    McpHostConfig,
+    McpTransport,
+    create_mcp_host,
+    run_mcp_host,
+)
 from quanxin_life.tools.next_experiment_recommendation import (
     EXPERIMENT_RECOMMENDATION_EVIDENCE_TYPE,
     NEXT_EXPERIMENT_RECOMMENDATION_TOOL_VERSION,
@@ -88,10 +95,13 @@ __all__ = [
     "CheckOperatingConditionToolInput",
     "DuplicateToolError",
     "McpAdapterError",
+    "McpHost",
+    "McpHostConfig",
     "McpRequestValidationError",
     "McpSdkUnavailableError",
     "McpToolAdapter",
     "McpToolCallRequest",
+    "McpTransport",
     "RecommendNextExperimentToolInput",
     "RegisteredTool",
     "RetrieveBatteryEvidenceToolInput",
@@ -107,6 +117,7 @@ __all__ = [
     "UnknownToolError",
     "ValidateBatteryDataToolInput",
     "create_available_tool_registry",
+    "create_mcp_host",
     "execute_adapt_to_target_domain_tool",
     "execute_audit_dataset_split_tool",
     "execute_batch_decision_tool",
@@ -122,4 +133,5 @@ __all__ = [
     "register_recommend_next_experiment_tool",
     "register_retrieve_battery_evidence_tool",
     "register_validate_battery_data_tool",
+    "run_mcp_host",
 ]

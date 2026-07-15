@@ -12,9 +12,11 @@ from dataclasses import dataclass
 
 from pydantic import field_validator
 
+from quanxin_life.audit import AuditLedger
 from quanxin_life.core import ToolResult, sha256_canonical
 from quanxin_life.core.schemas import ContractModel, JsonMapping
-from quanxin_life.tools import StandardToolName, ToolRegistry, create_available_tool_registry
+from quanxin_life.tools.bootstrap import create_available_tool_registry
+from quanxin_life.tools.registry import StandardToolName, ToolRegistry
 
 
 class ToolInvocation(ContractModel):
@@ -38,10 +40,12 @@ class ToolInvocationService:
     """Single delegation point shared by API, MCP and interactive clients."""
 
     registry: ToolRegistry
+    audit_ledger: AuditLedger | None = None
 
     def invoke(self, invocation: ToolInvocation) -> ToolResult:
         """Execute an external invocation through the shared typed registry."""
-        return self.registry.execute(invocation.tool_name, invocation.input_value)
+        result = self.registry.execute(invocation.tool_name, invocation.input_value)
+        return self._register_result(result)
 
     def invoke_for_agent(
         self,
@@ -50,11 +54,17 @@ class ToolInvocationService:
         allowed_tool_names: Collection[StandardToolName | str] | None,
     ) -> ToolResult:
         """Execute an Agent invocation through the registry's strict allowlist path."""
-        return self.registry.execute_for_agent(
+        result = self.registry.execute_for_agent(
             invocation.tool_name,
             invocation.input_value,
             allowed_tool_names=allowed_tool_names,
         )
+        return self._register_result(result)
+
+    def _register_result(self, result: ToolResult) -> ToolResult:
+        if self.audit_ledger is None:
+            return result
+        return self.audit_ledger.register_result(result)
 
 
 def create_available_tool_invocation_service() -> ToolInvocationService:

@@ -131,6 +131,57 @@ def test_audit_ledger_revalidates_tool_results_before_accepting_them() -> None:
         AuditLedger((tampered,))
 
 
+def test_empty_audit_ledger_accepts_append_only_registered_results() -> None:
+    from quanxin_life.audit.numeric_firewall import AuditLedger
+
+    result = _result(values={"lifetime": {"eol": 333.0}})
+    ledger = AuditLedger()
+
+    registered = ledger.register_result(result)
+
+    assert registered == result
+    assert registered is not result
+    assert ledger.resolve_registered_result(result.result_id) == result
+
+    with pytest.raises(ValueError, match="duplicate ToolResult result_id"):
+        ledger.register_result(result)
+
+
+def test_audit_ledger_duplicate_registration_is_atomic_across_threads() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from quanxin_life.audit import AuditLedger, DuplicateAuditResultError
+
+    result = _result(values={"lifetime": {"eol": 333.0}})
+    ledger = AuditLedger()
+
+    def register() -> str:
+        try:
+            ledger.register_result(result)
+        except DuplicateAuditResultError:
+            return "duplicate"
+        return "registered"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = tuple(pool.map(lambda _: register(), range(32)))
+
+    assert outcomes.count("registered") == 1
+    assert outcomes.count("duplicate") == 31
+
+
+def test_audit_ledger_restores_identical_result_but_rejects_conflicting_content() -> None:
+    from quanxin_life.audit import AuditLedger, DuplicateAuditResultError
+
+    result = _result(values={"lifetime": {"eol": 333.0}})
+    ledger = AuditLedger((result,))
+
+    assert ledger.ensure_result(result) == result
+
+    conflicting = result.model_copy(update={"values": {"lifetime": {"eol": 334.0}}})
+    with pytest.raises(DuplicateAuditResultError, match="conflicting ToolResult"):
+        ledger.ensure_result(conflicting)
+
+
 def test_numeric_evidence_rejects_boolean_reported_values() -> None:
     from quanxin_life.audit.numeric_firewall import NumericEvidence
 

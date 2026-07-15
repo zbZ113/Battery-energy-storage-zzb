@@ -12,7 +12,7 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from numbers import Real
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from pydantic import ConfigDict, Field, ValidationError, field_validator
@@ -21,6 +21,7 @@ from quanxin_life.audit import AuditLedger
 from quanxin_life.core import (
     LifePrediction,
     PredictionTarget,
+    ProvenanceRecord,
     SourceKind,
     ToolResult,
     sha256_canonical,
@@ -41,6 +42,7 @@ from quanxin_life.tools.registry import (
 CYCLE_LIFE_PREDICTION_TOOL_VERSION = "cycle-life-prediction-tool-v1"
 PREDICTED_CYCLE_LIFE_EVIDENCE_TYPE = "quanxin_life.predicted_cycle_life.v1"
 MODEL_ARTIFACT_UNREGISTERED_WARNING = "MODEL_ARTIFACT_UNREGISTERED_IN_MEMORY"
+MODEL_ARTIFACT_VERIFIED_STATUS = "VERIFIED_ARTIFACT"
 Clock = Callable[[], datetime]
 
 
@@ -65,6 +67,20 @@ class CycleLifePredictor(Protocol):
         split_version: str,
         data_version: str,
     ) -> LifePrediction: ...
+
+
+class ModelArtifactResolver(Protocol):
+    """Structural boundary implemented by the governed model registry."""
+
+    def resolve(
+        self,
+        artifact_id: str,
+        *,
+        model_version: str | None = None,
+        data_version: str | None = None,
+        feature_version: str | None = None,
+        split_version: str | None = None,
+    ) -> Any: ...
 
 
 def _utc_now() -> datetime:
@@ -263,6 +279,7 @@ def execute_predict_cycle_life_tool(
     *,
     predictor: CycleLifePredictor,
     audit_ledger: AuditLedger,
+    model_artifact_registry: ModelArtifactResolver | None = None,
     clock: Clock = _utc_now,
 ) -> ToolResult:
     """Predict EOL80 from one trusted early-feature record without loading artefacts."""
@@ -284,6 +301,12 @@ def execute_predict_cycle_life_tool(
         ),
         evidence=evidence,
         predictor=predictor,
+    )
+    artifact_status, artifact_id, artifact_sha256, artifact_provenance, warnings = (
+        _resolve_model_artifact(
+            predictor=predictor,
+            registry=model_artifact_registry,
+        )
     )
     prediction_payload = prediction.model_dump(mode="json")
     return ToolResult(
@@ -307,12 +330,14 @@ def execute_predict_cycle_life_tool(
                 "upstream_result_id": validated_input.upstream_result_id,
                 "split_version": evidence.split_version,
                 "used_feature_names": list(feature_names),
-                "model_artifact_status": "UNREGISTERED_IN_MEMORY",
+                "model_artifact_status": artifact_status,
+                "model_artifact_id": artifact_id,
+                "model_artifact_sha256": artifact_sha256,
             },
         },
         uncertainty=None,
-        warnings=[MODEL_ARTIFACT_UNREGISTERED_WARNING],
-        provenance=list(upstream_result.provenance),
+        warnings=warnings,
+        provenance=[*upstream_result.provenance, *artifact_provenance],
         created_at=_execution_timestamp(clock),
     )
 
@@ -322,6 +347,7 @@ def register_predict_cycle_life_tool(
     *,
     predictor: CycleLifePredictor,
     audit_ledger: AuditLedger,
+    model_artifact_registry: ModelArtifactResolver | None = None,
     clock: Clock = _utc_now,
 ) -> RegisteredTool[PredictCycleLifeToolInput]:
     """Register the sole evidence-bound EOL80 predictor for this service context."""
@@ -335,7 +361,55 @@ def register_predict_cycle_life_tool(
                 input_value,
                 predictor=predictor,
                 audit_ledger=audit_ledger,
+                model_artifact_registry=model_artifact_registry,
                 clock=clock,
             ),
         )
+    )
+
+
+def _resolve_model_artifact(
+    *,
+    predictor: CycleLifePredictor,
+    registry: ModelArtifactResolver | None,
+) -> tuple[str, str | None, str | None, list[ProvenanceRecord], list[str]]:
+    artifact_id = getattr(predictor, "model_artifact_id", None)
+    artifact_sha256 = getattr(predictor, "model_artifact_sha256", None)
+    if registry is None or artifact_id is None or artifact_sha256 is None:
+        return (
+            "UNREGISTERED_IN_MEMORY",
+            None,
+            None,
+            [],
+            [MODEL_ARTIFACT_UNREGISTERED_WARNING],
+        )
+    verified = registry.resolve(
+        artifact_id,
+        model_version=predictor.model_version,
+        data_version=predictor.data_version,
+        feature_version=predictor.feature_version,
+        split_version=predictor.split_version,
+    )
+    manifest = verified.manifest
+    if manifest.sha256 != artifact_sha256:
+        raise ValueError("predictor artifact SHA-256 does not match the verified registry")
+    if manifest.cutoff_cycle != predictor.cutoff_cycle:
+        raise ValueError("predictor cutoff_cycle does not match the verified artifact")
+    if manifest.feature_names != predictor.feature_names:
+        raise ValueError("predictor feature_names do not match the verified artifact")
+    return (
+        MODEL_ARTIFACT_VERIFIED_STATUS,
+        manifest.artifact_id,
+        manifest.sha256,
+        [
+            ProvenanceRecord(
+                source_id=f"model-artifact-{manifest.artifact_id}",
+                source_kind=SourceKind.PREDICTED,
+                uri=f"artifact://model/{manifest.artifact_id}",
+                sha256=manifest.sha256,
+                description="SHA-256 verified native model artifact",
+                created_at=manifest.created_at,
+            )
+        ],
+        [],
     )

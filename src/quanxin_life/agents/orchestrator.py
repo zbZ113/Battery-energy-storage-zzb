@@ -16,9 +16,11 @@ from uuid import UUID
 
 from pydantic import Field, field_validator
 
+from quanxin_life.api.service import ToolInvocation, ToolInvocationService
+from quanxin_life.audit import AuditLedgerError
 from quanxin_life.core import ToolResult, sha256_canonical
 from quanxin_life.core.schemas import ContractModel
-from quanxin_life.tools import StandardToolName, ToolRegistry, ToolRegistryError
+from quanxin_life.tools import StandardToolName, ToolRegistryError
 
 ORCHESTRATOR_VERSION = "constrained-agent-workflow-v1"
 
@@ -53,6 +55,7 @@ ROLE_TOOL_ALLOWLIST: dict[AgentRole, frozenset[StandardToolName]] = {
             StandardToolName.PREDICT_SOH_TRAJECTORY,
             StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
             StandardToolName.ADAPT_TO_TARGET_DOMAIN,
+            StandardToolName.INGEST_NEWLY_OBSERVED_SOH,
             StandardToolName.UPDATE_CELL_PARAMETERS,
         }
     ),
@@ -120,7 +123,7 @@ class AgentWorkflowResult(ContractModel):
 
 def run_constrained_workflow(
     *,
-    registry: ToolRegistry,
+    service: ToolInvocationService,
     request_id: str,
     steps: tuple[AgentStep, ...],
     prior_result: AgentWorkflowResult | None = None,
@@ -136,6 +139,11 @@ def run_constrained_workflow(
         plan_hash=plan_hash,
         prior_result=prior_result,
     )
+    if prior_results:
+        if service.audit_ledger is None:
+            raise ValueError("resuming an agent workflow requires a shared audit ledger")
+        for prior_tool_result in prior_results:
+            service.audit_ledger.ensure_result(prior_tool_result)
     approved = set(approved_step_ids)
     results = list(prior_results)
 
@@ -150,12 +158,11 @@ def run_constrained_workflow(
                 pending_step_id=step.step_id,
             )
         try:
-            result = registry.execute_for_agent(
-                step.tool_name,
-                step.input_value,
+            result = service.invoke_for_agent(
+                ToolInvocation(tool_name=step.tool_name, input_value=step.input_value),
                 allowed_tool_names=ROLE_TOOL_ALLOWLIST[step.role],
             )
-        except ToolRegistryError as exc:
+        except (AuditLedgerError, ToolRegistryError) as exc:
             return _result(
                 request_id=request_id,
                 status=WorkflowStatus.FAILED,

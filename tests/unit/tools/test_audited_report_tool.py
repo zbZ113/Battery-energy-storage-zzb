@@ -87,6 +87,60 @@ def test_registered_audited_report_tool_resolves_numeric_values_only_from_ledger
     assert "333.0" in output.values["markdown"]
 
 
+def test_decision_policy_threshold_is_not_labeled_as_model_inference() -> None:
+    from quanxin_life.tools.audited_report import (
+        AuditedReportClaimReference,
+        GenerateAuditedReportToolInput,
+        NumericEvidenceReference,
+        ReportClaimKind,
+        ReportKind,
+        execute_generate_audited_report_tool,
+    )
+
+    prediction = _result()
+    policy = _result(value=444.0).model_copy(
+        update={
+            "tool_name": StandardToolName.MAKE_BATCH_DECISION.value,
+            "values": {"required_eol_cycle": 444.0},
+        }
+    )
+    tool_input = GenerateAuditedReportToolInput(
+        report_kind=ReportKind.LIFETIME_DECISION,
+        claims=(
+            AuditedReportClaimReference(
+                claim_kind=ReportClaimKind.LIFETIME_PREDICTION,
+                numeric_evidence=(
+                    NumericEvidenceReference(
+                        result_id=prediction.result_id,
+                        json_path="values.lifetime.predicted_eol_cycle",
+                    ),
+                ),
+            ),
+            AuditedReportClaimReference(
+                claim_kind=ReportClaimKind.DECISION_POLICY,
+                numeric_evidence=(
+                    NumericEvidenceReference(
+                        result_id=policy.result_id,
+                        json_path="values.required_eol_cycle",
+                    ),
+                ),
+            ),
+        ),
+        upstream_result_ids=(prediction.result_id, policy.result_id),
+    )
+
+    output = execute_generate_audited_report_tool(
+        tool_input,
+        audit_ledger=AuditLedger((prediction, policy)),
+        clock=lambda: datetime(2026, 7, 14, 8, 30, tzinfo=UTC),
+    )
+
+    markdown = output.values["markdown"]
+    assert output.values["claim_ids"] == ["lifetime_prediction", "decision_policy"]
+    assert "values.required_eol_cycle" in markdown
+    assert "DOMAIN_KNOWLEDGE" in markdown
+
+
 @pytest.mark.parametrize(
     ("field_name", "value"),
     (

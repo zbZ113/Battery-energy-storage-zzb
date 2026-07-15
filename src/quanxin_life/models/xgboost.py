@@ -11,6 +11,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from numbers import Real
+from pathlib import Path
 from typing import Any, Self
 
 from xgboost import XGBRegressor
@@ -38,6 +39,8 @@ class XGBoostLifePredictor:
     feature_names: tuple[str, ...]
     _estimator: XGBRegressor | None = field(default=None, init=False, repr=False)
     _dataset_id: str | None = field(default=None, init=False, repr=False)
+    _model_artifact_id: str | None = field(default=None, init=False, repr=False)
+    _model_artifact_sha256: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -101,6 +104,63 @@ class XGBoostLifePredictor:
         self._estimator = estimator
         self._dataset_id = split_manifest.dataset_id
         return self
+
+    @property
+    def model_artifact_id(self) -> str | None:
+        """Verified artifact identity when this instance was loaded from the registry."""
+
+        return self._model_artifact_id
+
+    @property
+    def model_artifact_sha256(self) -> str | None:
+        """Verified native-model digest bound by the application loader."""
+
+        return self._model_artifact_sha256
+
+    def export_native_model(self, destination: Path) -> None:
+        """Export a fitted estimator only as XGBoost's JSON or UBJ format."""
+
+        if self._estimator is None:
+            raise RuntimeError("XGBoostLifePredictor must be fitted before export")
+        if destination.suffix.lower() not in {".json", ".ubj"}:
+            raise ValueError("XGBoost native model destination must use JSON or UBJ")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        self._estimator.get_booster().save_model(str(destination))
+
+    @classmethod
+    def _from_verified_native_model(
+        cls,
+        path: Path,
+        *,
+        dataset_id: str,
+        model_version: str,
+        feature_version: str,
+        split_version: str,
+        data_version: str,
+        cutoff_cycle: int,
+        feature_names: tuple[str, ...],
+        artifact_id: str,
+        artifact_sha256: str,
+    ) -> Self:
+        """Construct from bytes already verified by ``ModelArtifactRegistry``."""
+
+        if path.suffix.lower() not in {".json", ".ubj"}:
+            raise ValueError("verified XGBoost model must use JSON or UBJ")
+        estimator = XGBRegressor()
+        estimator.load_model(str(path))
+        predictor = cls(
+            model_version=model_version,
+            feature_version=feature_version,
+            split_version=split_version,
+            data_version=data_version,
+            cutoff_cycle=cutoff_cycle,
+            feature_names=feature_names,
+        )
+        predictor._estimator = estimator
+        predictor._dataset_id = dataset_id
+        predictor._model_artifact_id = artifact_id
+        predictor._model_artifact_sha256 = artifact_sha256
+        return predictor
 
     def predict(
         self,

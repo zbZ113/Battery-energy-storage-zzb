@@ -61,6 +61,13 @@ def _registry() -> ToolRegistry:
     return registry
 
 
+def _service():
+    from quanxin_life.api.service import ToolInvocationService
+    from quanxin_life.audit import AuditLedger
+
+    return ToolInvocationService(registry=_registry(), audit_ledger=AuditLedger())
+
+
 def _step(role: object, tool_name: StandardToolName, *, approval: bool = False):
     from quanxin_life.agents.orchestrator import AgentStep
 
@@ -77,7 +84,7 @@ def test_constrained_agents_execute_only_whitelisted_tools_and_preserve_results(
     from quanxin_life.agents.orchestrator import AgentRole, run_constrained_workflow
 
     outcome = run_constrained_workflow(
-        registry=_registry(),
+        service=_service(),
         request_id=str(uuid4()),
         steps=(
             _step(AgentRole.DATA_QUALITY, StandardToolName.VALIDATE_BATTERY_DATA),
@@ -99,7 +106,7 @@ def test_agent_rejects_role_tool_boundary_before_execution() -> None:
 
     with pytest.raises(ValueError, match="not allowed"):
         run_constrained_workflow(
-            registry=_registry(),
+            service=_service(),
             request_id=str(uuid4()),
             steps=(
                 _step(AgentRole.PHYSICS, StandardToolName.PREDICT_CYCLE_LIFE),
@@ -118,16 +125,16 @@ def test_workflow_stops_for_human_approval_and_resumes_without_replanning() -> N
             approval=True,
         ),
     )
-    paused = run_constrained_workflow(
-        registry=_registry(), request_id=str(uuid4()), steps=steps
-    )
+    service = _service()
+    paused = run_constrained_workflow(service=service, request_id=str(uuid4()), steps=steps)
 
     assert paused.status is WorkflowStatus.AWAITING_HUMAN_APPROVAL
     assert len(paused.tool_results) == 1
     assert paused.pending_step_id == steps[1].step_id
 
+    resumed_service = _service()
     resumed = run_constrained_workflow(
-        registry=_registry(),
+        service=resumed_service,
         request_id=paused.request_id,
         steps=steps,
         prior_result=paused,
@@ -135,6 +142,9 @@ def test_workflow_stops_for_human_approval_and_resumes_without_replanning() -> N
     )
     assert resumed.status is WorkflowStatus.COMPLETED
     assert len(resumed.tool_results) == 2
+    assert resumed_service.audit_ledger is not None
+    for result in resumed.tool_results:
+        assert resumed_service.audit_ledger.resolve_registered_result(result.result_id) == result
 
 
 def test_workflow_rejects_a_tampered_prior_result() -> None:
@@ -142,7 +152,7 @@ def test_workflow_rejects_a_tampered_prior_result() -> None:
 
     steps = (_step(AgentRole.DATA_QUALITY, StandardToolName.VALIDATE_BATTERY_DATA),)
     completed = run_constrained_workflow(
-        registry=_registry(), request_id=str(uuid4()), steps=steps
+        service=_service(), request_id=str(uuid4()), steps=steps
     )
     tampered = completed.model_copy(
         update={
@@ -154,8 +164,30 @@ def test_workflow_rejects_a_tampered_prior_result() -> None:
 
     with pytest.raises(ValueError, match="prior ToolResult"):
         run_constrained_workflow(
-            registry=_registry(),
+            service=_service(),
             request_id=completed.request_id,
             steps=steps,
             prior_result=tampered,
         )
+
+
+def test_agent_results_are_registered_in_the_shared_audit_ledger() -> None:
+    from quanxin_life.agents.orchestrator import AgentRole, run_constrained_workflow
+
+    service = _service()
+    outcome = run_constrained_workflow(
+        service=service,
+        request_id=str(uuid4()),
+        steps=(_step(AgentRole.DATA_QUALITY, StandardToolName.VALIDATE_BATTERY_DATA),),
+    )
+
+    assert service.audit_ledger is not None
+    assert service.audit_ledger.resolve_registered_result(
+        outcome.tool_results[0].result_id
+    ) == outcome.tool_results[0]
+
+
+def test_lifetime_agent_may_ingest_new_observations_for_online_update() -> None:
+    from quanxin_life.agents.orchestrator import ROLE_TOOL_ALLOWLIST, AgentRole
+
+    assert StandardToolName.INGEST_NEWLY_OBSERVED_SOH in ROLE_TOOL_ALLOWLIST[AgentRole.LIFETIME]

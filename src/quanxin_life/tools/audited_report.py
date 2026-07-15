@@ -43,6 +43,7 @@ class ReportClaimKind(StrEnum):
     """Controlled non-numeric narratives accepted by the formal report path."""
 
     LIFETIME_PREDICTION = "lifetime_prediction"
+    DECISION_POLICY = "decision_policy"
 
 
 _REPORT_TITLES: dict[ReportKind, str] = {
@@ -51,8 +52,12 @@ _REPORT_TITLES: dict[ReportKind, str] = {
 _CLAIM_NARRATIVES: dict[ReportClaimKind, str] = {
     ReportClaimKind.LIFETIME_PREDICTION: "下列数值仅由已登记工具结果中的证据路径解析并渲染。",
 }
+_CLAIM_NARRATIVES[ReportClaimKind.DECISION_POLICY] = (
+    "Decision policy thresholds are resolved from a registered, human-approved policy result."
+)
 _CLAIM_EVIDENCE_LEVELS: dict[ReportClaimKind, EvidenceLevel] = {
     ReportClaimKind.LIFETIME_PREDICTION: EvidenceLevel.MODEL_INFERENCE,
+    ReportClaimKind.DECISION_POLICY: EvidenceLevel.DOMAIN_KNOWLEDGE,
 }
 
 

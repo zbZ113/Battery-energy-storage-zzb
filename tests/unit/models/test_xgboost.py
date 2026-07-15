@@ -209,3 +209,24 @@ def test_predict_rejects_nonfinite_or_schema_mismatched_features() -> None:
             split_version="matr-split-v1",
             data_version="matr-data-v1",
         )
+
+
+def test_xgboost_native_export_requires_fitted_model_and_safe_suffix(tmp_path) -> None:
+    predictor = _predictor()
+
+    with pytest.raises(RuntimeError, match="fitted"):
+        predictor.export_native_model(tmp_path / "model.json")
+
+    fitted = predictor.fit(
+        _training_labels(),
+        training_features=_training_features(),
+        split_manifest=_split(),
+    )
+    with pytest.raises(ValueError, match="JSON or UBJ"):
+        fitted.export_native_model(tmp_path / "model.pkl")
+
+    destination = tmp_path / "model.json"
+    fitted.export_native_model(destination)
+
+    assert destination.is_file()
+    assert destination.stat().st_size > 0

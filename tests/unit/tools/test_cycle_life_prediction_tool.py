@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -221,6 +223,68 @@ def test_cycle_life_tool_uses_actual_early_feature_evidence_and_declared_predict
     assert "MODEL_ARTIFACT_UNREGISTERED_IN_MEMORY" in result.warnings
     assert result.provenance == upstream.provenance
     assert result.uncertainty is None
+
+
+def test_cycle_life_tool_marks_only_registry_loaded_native_model_as_verified(
+    fitted_predictor: XGBoostLifePredictor,
+    tmp_path: Path,
+) -> None:
+    from quanxin_life.application.model_artifacts import (
+        ArtifactFormat,
+        ArtifactKind,
+        ModelArtifactManifest,
+        ModelArtifactRegistry,
+        load_verified_xgboost_life_predictor,
+    )
+    from quanxin_life.tools.cycle_life_prediction import register_predict_cycle_life_tool
+
+    relative_path = Path("models/xgboost.json")
+    fitted_predictor.export_native_model(tmp_path / relative_path)
+    payload = (tmp_path / relative_path).read_bytes()
+    manifest = ModelArtifactManifest(
+        artifact_id=str(uuid4()),
+        artifact_kind=ArtifactKind.XGBOOST,
+        artifact_format=ArtifactFormat.XGBOOST_JSON,
+        relative_path=relative_path.as_posix(),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        model_version=fitted_predictor.model_version,
+        data_version=fitted_predictor.data_version,
+        feature_version=fitted_predictor.feature_version,
+        split_version=fitted_predictor.split_version,
+        schema_version="model-artifact-manifest-v1",
+        dataset_id="synthetic-lfp",
+        cutoff_cycle=fitted_predictor.cutoff_cycle,
+        feature_names=fitted_predictor.feature_names,
+        created_at=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+    model_registry = ModelArtifactRegistry(tmp_path)
+    model_registry.register(manifest)
+    predictor = load_verified_xgboost_life_predictor(
+        model_registry,
+        manifest.artifact_id,
+    )
+    upstream = _feature_result()
+    registry = ToolRegistry()
+    register_predict_cycle_life_tool(
+        registry,
+        predictor=predictor,
+        audit_ledger=AuditLedger((upstream,)),
+        model_artifact_registry=model_registry,
+        clock=lambda: datetime(2026, 7, 14, 10, tzinfo=UTC),
+    )
+
+    result = registry.execute(
+        StandardToolName.PREDICT_CYCLE_LIFE,
+        _input(upstream.result_id),
+    )
+    artifact = _artifact(result)
+
+    assert artifact["model_artifact_status"] == "VERIFIED_ARTIFACT"
+    assert artifact["model_artifact_id"] == manifest.artifact_id
+    assert artifact["model_artifact_sha256"] == manifest.sha256
+    assert "MODEL_ARTIFACT_UNREGISTERED_IN_MEMORY" not in result.warnings
+    assert manifest.sha256 in {item.sha256 for item in result.provenance}
 
 
 def test_cycle_life_input_rejects_direct_features_labels_versions_and_non_uuid_ids() -> None:

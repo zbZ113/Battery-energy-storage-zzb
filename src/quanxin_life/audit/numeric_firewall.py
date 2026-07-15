@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from numbers import Real
+from threading import RLock
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +13,18 @@ from pydantic import Field, field_validator
 
 from quanxin_life.core import EvidenceLevel, ToolResult
 from quanxin_life.core.schemas import ContractModel
+
+
+class AuditLedgerError(ValueError):
+    """Base class for failures inside the trusted append-only audit boundary."""
+
+
+class DuplicateAuditResultError(AuditLedgerError):
+    """Raised when one immutable result identifier is registered more than once."""
+
+
+class InvalidAuditResultError(AuditLedgerError):
+    """Raised when an object cannot satisfy the public ToolResult contract."""
 
 
 class NumericEvidence(ContractModel):
@@ -48,21 +61,48 @@ class NumericEvidence(ContractModel):
 
 
 class AuditLedger:
-    """Immutable-in-practice index of revalidated tool results for report checks."""
+    """Append-only index of revalidated tool results for dependent tools and reports."""
 
-    def __init__(self, tool_results: tuple[ToolResult, ...]) -> None:
-        if not tool_results:
-            raise ValueError("AuditLedger requires at least one ToolResult")
-        indexed: dict[str, ToolResult] = {}
+    def __init__(self, tool_results: tuple[ToolResult, ...] = ()) -> None:
+        self._results: dict[str, ToolResult] = {}
+        self._lock = RLock()
         for result in tool_results:
-            try:
-                validated = ToolResult.model_validate(result.model_dump(mode="json"))
-            except (TypeError, ValueError) as exc:
-                raise ValueError("ToolResult does not satisfy the public audit contract") from exc
-            if validated.result_id in indexed:
-                raise ValueError(f"duplicate ToolResult result_id: {validated.result_id}")
-            indexed[validated.result_id] = validated
-        self._results = indexed
+            self.register_result(result)
+
+    def register_result(self, result: ToolResult) -> ToolResult:
+        """Append one detached result and reject duplicate or invalid evidence."""
+
+        validated = self._validated_result(result)
+        with self._lock:
+            if validated.result_id in self._results:
+                raise DuplicateAuditResultError(
+                    f"duplicate ToolResult result_id: {validated.result_id}"
+                )
+            self._results[validated.result_id] = validated
+        return ToolResult.model_validate(validated.model_dump(mode="json"))
+
+    def ensure_result(self, result: ToolResult) -> ToolResult:
+        """Idempotently restore identical evidence and reject ID/content conflicts."""
+
+        validated = self._validated_result(result)
+        with self._lock:
+            existing = self._results.get(validated.result_id)
+            if existing is None:
+                self._results[validated.result_id] = validated
+            elif existing != validated:
+                raise DuplicateAuditResultError(
+                    f"conflicting ToolResult content for result_id: {validated.result_id}"
+                )
+        return ToolResult.model_validate(validated.model_dump(mode="json"))
+
+    @staticmethod
+    def _validated_result(result: ToolResult) -> ToolResult:
+        try:
+            return ToolResult.model_validate(result.model_dump(mode="json"))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise InvalidAuditResultError(
+                "ToolResult does not satisfy the public audit contract"
+            ) from exc
 
     def resolve_registered_result(self, result_id: str) -> ToolResult:
         """Return a revalidated, detached result only when it is ledger-registered.
@@ -78,7 +118,8 @@ class AuditLedger:
         except (TypeError, ValueError, AttributeError) as exc:
             raise ValueError("result_id must be a UUID string") from exc
 
-        result = self._results.get(result_id)
+        with self._lock:
+            result = self._results.get(result_id)
         if result is None:
             raise ValueError("referenced ToolResult is not registered in the audit ledger")
         return ToolResult.model_validate(result.model_dump(mode="json"))
