@@ -73,6 +73,7 @@ def create_fastapi_app(
     canonical_csv_registrar: CanonicalCsvRegistrar | None = None,
     auth_adapter: Any | None = None,
     project_adapter: Any | None = None,
+    dataset_adapter: Any | None = None,
 ) -> Any:
     """Create the HTTP adapter without duplicating domain-tool execution logic."""
     try:
@@ -111,6 +112,10 @@ def create_fastapi_app(
         if auth_adapter is None:
             raise ValueError("project_adapter requires auth_adapter")
         app.include_router(project_adapter.router)
+    if dataset_adapter is not None:
+        if auth_adapter is None:
+            raise ValueError("dataset_adapter requires auth_adapter")
+        app.include_router(dataset_adapter.router)
     ready_route_options = (
         {"dependencies": ready_user_dependencies} if ready_user_dependencies else {}
     )

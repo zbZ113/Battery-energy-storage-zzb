@@ -118,3 +118,10 @@ class ProjectStatus(StrEnum):
 
     ACTIVE = "ACTIVE"
     ARCHIVED = "ARCHIVED"
+
+
+class DatasetStatus(StrEnum):
+    """Lifecycle states for a versioned dataset registration."""
+
+    DRAFT = "DRAFT"
+    FROZEN = "FROZEN"

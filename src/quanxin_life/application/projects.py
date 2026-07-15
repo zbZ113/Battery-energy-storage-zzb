@@ -104,7 +104,7 @@ class ProjectService:
 
     def list_projects(self, principal: AuthPrincipal) -> tuple[ProjectRecord, ...]:
         with session_scope(self._session_factory) as session:
-            statement = self._visible_projects_statement(principal).order_by(
+            statement = self.visible_projects_statement(principal).order_by(
                 Project.created_at, Project.id
             )
             projects = tuple(session.scalars(statement).all())
@@ -115,7 +115,7 @@ class ProjectService:
         if not normalized_id:
             raise ProjectNotFoundError("project was not found")
         with session_scope(self._session_factory) as session:
-            statement = self._visible_projects_statement(principal).where(
+            statement = self.visible_projects_statement(principal).where(
                 Project.id == normalized_id
             )
             project = session.scalar(statement)
@@ -124,7 +124,8 @@ class ProjectService:
             return _project_record(project)
 
     @staticmethod
-    def _visible_projects_statement(principal: AuthPrincipal) -> Select[tuple[Project]]:
+    def visible_projects_statement(principal: AuthPrincipal) -> Select[tuple[Project]]:
+        """Return the canonical object-visibility query for project-scoped services."""
         statement = select(Project)
         if principal.role is UserRole.ADMIN:
             return statement

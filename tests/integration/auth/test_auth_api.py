@@ -9,8 +9,10 @@ from fastapi.testclient import TestClient
 
 from quanxin_life.api.app import create_fastapi_app
 from quanxin_life.api.auth import AuthCookieConfig, create_auth_http_adapter
+from quanxin_life.api.datasets import create_dataset_http_adapter
 from quanxin_life.api.projects import create_project_http_adapter
 from quanxin_life.api.service import create_available_tool_invocation_service
+from quanxin_life.application.datasets import DatasetService
 from quanxin_life.application.projects import ProjectService
 from quanxin_life.auth import (
     Argon2idPasswordHasher,
@@ -69,10 +71,14 @@ def _build_auth_client(
     project_adapter = create_project_http_adapter(
         ProjectService(session_factory), auth_adapter=adapter
     )
+    dataset_adapter = create_dataset_http_adapter(
+        DatasetService(session_factory), auth_adapter=adapter
+    )
     app = create_fastapi_app(
         create_available_tool_invocation_service(),
         auth_adapter=adapter,
         project_adapter=project_adapter,
+        dataset_adapter=dataset_adapter,
     )
     return TestClient(app, base_url="https://api.example.test")
 
@@ -294,6 +300,79 @@ def test_judge_cannot_create_projects(judge_client: TestClient) -> None:
     )
     assert response.status_code == 403
     assert response.json()["detail"] == "role_not_allowed"
+
+
+def test_member_creates_reads_and_freezes_a_dataset(auth_client: TestClient) -> None:
+    login = auth_client.post(
+        "/v1/auth/login",
+        headers={"Origin": ORIGIN},
+        json={"username": USERNAME, "password": TEMPORARY_PASSWORD},
+    )
+    assert login.status_code == 200
+    changed = auth_client.post(
+        "/v1/auth/change-password",
+        headers={"Origin": ORIGIN},
+        json={
+            "current_password": TEMPORARY_PASSWORD,
+            "new_password": NEW_PASSWORD,
+        },
+    )
+    assert changed.status_code == 200
+    project = auth_client.post(
+        "/v1/projects",
+        headers={"Origin": ORIGIN},
+        json={"name": "dataset API project"},
+    )
+    assert project.status_code == 201
+
+    created = auth_client.post(
+        "/v1/datasets",
+        headers={"Origin": ORIGIN},
+        json={
+            "project_id": project.json()["project_id"],
+            "name": "HUST safe parquet",
+            "data_version": "hust-safe-v1",
+            "schema_version": "canonical-cycle-v1",
+        },
+    )
+    assert created.status_code == 201
+    dataset_id = created.json()["dataset_id"]
+    assert created.json()["status"] == "DRAFT"
+    assert auth_client.get(f"/v1/datasets/{dataset_id}").json() == created.json()
+
+    frozen = auth_client.post(
+        f"/v1/datasets/{dataset_id}/freeze",
+        headers={"Origin": ORIGIN},
+    )
+    assert frozen.status_code == 200
+    assert frozen.json()["status"] == "FROZEN"
+    assert frozen.json()["frozen_at"] is not None
+
+
+def test_judge_cannot_create_or_freeze_datasets(judge_client: TestClient) -> None:
+    login = judge_client.post(
+        "/v1/auth/login",
+        headers={"Origin": ORIGIN},
+        json={"username": USERNAME, "password": TEMPORARY_PASSWORD},
+    )
+    assert login.status_code == 200
+    created = judge_client.post(
+        "/v1/datasets",
+        headers={"Origin": ORIGIN},
+        json={
+            "project_id": str(uuid4()),
+            "name": "forbidden",
+            "data_version": "v1",
+            "schema_version": "schema-v1",
+        },
+    )
+    assert created.status_code == 403
+    assert created.json()["detail"] == "role_not_allowed"
+    frozen = judge_client.post(
+        f"/v1/datasets/{uuid4()}/freeze", headers={"Origin": ORIGIN}
+    )
+    assert frozen.status_code == 403
+    assert frozen.json()["detail"] == "role_not_allowed"
 
 
 def test_auth_failures_are_generic_and_never_echo_credentials(
