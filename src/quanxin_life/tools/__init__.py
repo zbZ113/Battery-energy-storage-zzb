@@ -6,6 +6,13 @@ from quanxin_life.tools.batch_decision import (
     execute_batch_decision_tool,
     register_batch_decision_tool,
 )
+from quanxin_life.tools.battery_evidence import (
+    BATTERY_EVIDENCE_ARTIFACT_TYPE,
+    BATTERY_EVIDENCE_RETRIEVAL_TOOL_VERSION,
+    RetrieveBatteryEvidenceToolInput,
+    execute_retrieve_battery_evidence_tool,
+    register_retrieve_battery_evidence_tool,
+)
 from quanxin_life.tools.bootstrap import create_available_tool_registry
 from quanxin_life.tools.data_quality import (
     DATA_QUALITY_MODEL_VERSION,
@@ -65,6 +72,8 @@ from quanxin_life.tools.target_domain_adaptation import (
 
 __all__ = [
     "BATCH_DECISION_TOOL_VERSION",
+    "BATTERY_EVIDENCE_ARTIFACT_TYPE",
+    "BATTERY_EVIDENCE_RETRIEVAL_TOOL_VERSION",
     "DATA_QUALITY_MODEL_VERSION",
     "DATA_QUALITY_TOOL_VERSION",
     "EXPERIMENT_RECOMMENDATION_EVIDENCE_TYPE",
@@ -85,6 +94,7 @@ __all__ = [
     "McpToolCallRequest",
     "RecommendNextExperimentToolInput",
     "RegisteredTool",
+    "RetrieveBatteryEvidenceToolInput",
     "StandardToolName",
     "ToolAuthorizationError",
     "ToolContractError",
@@ -102,6 +112,7 @@ __all__ = [
     "execute_batch_decision_tool",
     "execute_check_operating_condition_tool",
     "execute_recommend_next_experiment_tool",
+    "execute_retrieve_battery_evidence_tool",
     "execute_validate_battery_data_tool",
     "load_optional_mcp_sdk",
     "register_adapt_to_target_domain_tool",
@@ -109,5 +120,6 @@ __all__ = [
     "register_batch_decision_tool",
     "register_check_operating_condition_tool",
     "register_recommend_next_experiment_tool",
+    "register_retrieve_battery_evidence_tool",
     "register_validate_battery_data_tool",
 ]
