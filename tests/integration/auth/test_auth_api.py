@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 
 from quanxin_life.api.app import create_fastapi_app
 from quanxin_life.api.auth import AuthCookieConfig, create_auth_http_adapter
+from quanxin_life.api.projects import create_project_http_adapter
 from quanxin_life.api.service import create_available_tool_invocation_service
+from quanxin_life.application.projects import ProjectService
 from quanxin_life.auth import (
     Argon2idPasswordHasher,
     AuthService,
@@ -64,8 +66,13 @@ def _build_auth_client(
         service,
         AuthCookieConfig(environment="production", allowed_origins=(ORIGIN,)),
     )
+    project_adapter = create_project_http_adapter(
+        ProjectService(session_factory), auth_adapter=adapter
+    )
     app = create_fastapi_app(
-        create_available_tool_invocation_service(), auth_adapter=adapter
+        create_available_tool_invocation_service(),
+        auth_adapter=adapter,
+        project_adapter=project_adapter,
     )
     return TestClient(app, base_url="https://api.example.test")
 
@@ -214,6 +221,9 @@ def test_business_routes_require_login_and_completed_first_password_change(
     )
     assert changed.status_code == 200
     assert auth_client.get("/v1/tools").status_code == 200
+    protected_result = auth_client.get(f"/v1/results/{uuid4()}")
+    assert protected_result.status_code == 403
+    assert protected_result.json()["detail"] == "role_not_allowed"
     cross_site_write = auth_client.post("/v1/tools/validate_battery_data", json={})
     assert cross_site_write.status_code == 403
     assert cross_site_write.json()["detail"] == "origin_not_allowed"
@@ -237,6 +247,53 @@ def test_judge_can_inspect_tools_but_cannot_invoke_arbitrary_domain_tools(
     )
     assert blocked.status_code == 403
     assert blocked.json()["detail"] == "role_not_allowed"
+
+
+def test_member_can_create_and_read_a_project_after_first_password_change(
+    auth_client: TestClient,
+) -> None:
+    login = auth_client.post(
+        "/v1/auth/login",
+        headers={"Origin": ORIGIN},
+        json={"username": USERNAME, "password": TEMPORARY_PASSWORD},
+    )
+    assert login.status_code == 200
+    changed = auth_client.post(
+        "/v1/auth/change-password",
+        headers={"Origin": ORIGIN},
+        json={
+            "current_password": TEMPORARY_PASSWORD,
+            "new_password": NEW_PASSWORD,
+        },
+    )
+    assert changed.status_code == 200
+
+    created = auth_client.post(
+        "/v1/projects",
+        headers={"Origin": ORIGIN},
+        json={"name": "HUST寿命诊断"},
+    )
+    assert created.status_code == 201
+    project_id = created.json()["project_id"]
+    assert created.json()["name"] == "HUST寿命诊断"
+    assert auth_client.get("/v1/projects").json() == [created.json()]
+    assert auth_client.get(f"/v1/projects/{project_id}").json() == created.json()
+
+
+def test_judge_cannot_create_projects(judge_client: TestClient) -> None:
+    login = judge_client.post(
+        "/v1/auth/login",
+        headers={"Origin": ORIGIN},
+        json={"username": USERNAME, "password": TEMPORARY_PASSWORD},
+    )
+    assert login.status_code == 200
+    response = judge_client.post(
+        "/v1/projects",
+        headers={"Origin": ORIGIN},
+        json={"name": "judge must not create"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "role_not_allowed"
 
 
 def test_auth_failures_are_generic_and_never_echo_credentials(

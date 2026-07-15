@@ -72,6 +72,7 @@ def create_fastapi_app(
     lifetime_workflow_runner: LifetimeWorkflowRunner | None = None,
     canonical_csv_registrar: CanonicalCsvRegistrar | None = None,
     auth_adapter: Any | None = None,
+    project_adapter: Any | None = None,
 ) -> Any:
     """Create the HTTP adapter without duplicating domain-tool execution logic."""
     try:
@@ -83,6 +84,7 @@ def create_fastapi_app(
     app: Any = fastapi_module.FastAPI(title="泉芯智寿 Tool API", version="v1")
     ready_user_dependencies: list[Any] = []
     operator_dependencies: list[Any] = []
+    admin_dependencies: list[Any] = []
     if auth_adapter is not None:
         cors_module = importlib.import_module("fastapi.middleware.cors")
         app.add_middleware(
@@ -102,11 +104,21 @@ def create_fastapi_app(
             ),
             fastapi_module.Depends(auth_adapter.require_trusted_origin),
         ]
+        admin_dependencies = [
+            fastapi_module.Depends(auth_adapter.require_roles({UserRole.ADMIN}))
+        ]
+    if project_adapter is not None:
+        if auth_adapter is None:
+            raise ValueError("project_adapter requires auth_adapter")
+        app.include_router(project_adapter.router)
     ready_route_options = (
         {"dependencies": ready_user_dependencies} if ready_user_dependencies else {}
     )
     operator_route_options = (
         {"dependencies": operator_dependencies} if operator_dependencies else {}
+    )
+    admin_route_options = (
+        {"dependencies": admin_dependencies} if admin_dependencies else {}
     )
 
     @app.get("/health")  # type: ignore[untyped-decorator]
@@ -118,7 +130,7 @@ def create_fastapi_app(
         return [schema.model_dump(mode="json") for schema in service.registry.list_schemas()]
 
     @app.get(  # type: ignore[untyped-decorator]
-        "/v1/results/{result_id}", **ready_route_options
+        "/v1/results/{result_id}", **admin_route_options
     )
     async def get_audit_result(result_id: str) -> dict[str, Any]:
         if service.audit_ledger is None:
@@ -136,7 +148,7 @@ def create_fastapi_app(
         return result.model_dump(mode="json")
 
     @app.get(  # type: ignore[untyped-decorator]
-        "/v1/reports/{result_id}", **ready_route_options
+        "/v1/reports/{result_id}", **admin_route_options
     )
     async def get_audited_report(result_id: str) -> dict[str, str]:
         if service.audit_ledger is None:

@@ -111,3 +111,10 @@ class SessionStatus(StrEnum):
 
     ACTIVE = "ACTIVE"
     REVOKED = "REVOKED"
+
+
+class ProjectStatus(StrEnum):
+    """Lifecycle states for a persisted analysis project."""
+
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
