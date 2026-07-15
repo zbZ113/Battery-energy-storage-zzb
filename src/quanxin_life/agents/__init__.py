@@ -6,12 +6,22 @@ from quanxin_life.agents.orchestrator import (
     WorkflowStatus,
     run_constrained_workflow,
 )
+from quanxin_life.agents.supervisor import (
+    AgentPlanPolicyError,
+    SupervisorPlanner,
+    SupervisorPlanningRequest,
+    SupervisorPlanningResult,
+)
 from quanxin_life.core import AgentRole
 
 __all__ = [
+    "AgentPlanPolicyError",
     "AgentRole",
     "AgentStep",
     "AgentWorkflowResult",
+    "SupervisorPlanner",
+    "SupervisorPlanningRequest",
+    "SupervisorPlanningResult",
     "WorkflowStatus",
     "run_constrained_workflow",
 ]

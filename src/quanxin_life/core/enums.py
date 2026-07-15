@@ -59,6 +59,13 @@ class AgentRunStatus(StrEnum):
     FALLBACK = "FALLBACK"
 
 
+class AgentPlanningMode(StrEnum):
+    """Auditable source of one Agent plan."""
+
+    LLM = "LLM"
+    FIXED_FALLBACK = "FIXED_FALLBACK"
+
+
 class ApprovalKind(StrEnum):
     """Actions that may not be performed without a human decision."""
 

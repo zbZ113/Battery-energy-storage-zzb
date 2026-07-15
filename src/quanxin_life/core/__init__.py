@@ -2,6 +2,7 @@
 
 from quanxin_life.core.enums import (
     AgentFailurePolicy,
+    AgentPlanningMode,
     AgentRole,
     AgentRunStatus,
     ApprovalKind,
@@ -44,6 +45,7 @@ __all__ = [
     "AgentIntent",
     "AgentPlan",
     "AgentPlanStep",
+    "AgentPlanningMode",
     "AgentRole",
     "AgentRunState",
     "AgentRunStatus",

@@ -8,6 +8,7 @@ from quanxin_life.core import (
     AgentFailurePolicy,
     AgentIntent,
     AgentPlan,
+    AgentPlanningMode,
     AgentPlanStep,
     AgentRole,
     AgentRunState,
@@ -137,6 +138,7 @@ def test_agent_plan_builds_and_verifies_a_canonical_hash() -> None:
     )
 
     assert len(plan.plan_hash) == 64
+    assert plan.planning_mode is AgentPlanningMode.LLM
     assert plan.steps[1].depends_on == ("validate",)
     payload = plan.model_dump(mode="json")
     payload["steps"][1]["tool_name"] = "generate_audited_report"

@@ -15,6 +15,7 @@ from pydantic import Field, HttpUrl, field_validator, model_validator
 
 from quanxin_life.core.enums import (
     AgentFailurePolicy,
+    AgentPlanningMode,
     AgentRole,
     AgentRunStatus,
     ApprovalKind,
@@ -151,6 +152,7 @@ class AgentPlan(ContractModel):
     plan_version: str = Field(min_length=1)
     intent_id: str
     steps: tuple[AgentPlanStep, ...] = Field(min_length=1, max_length=12)
+    planning_mode: AgentPlanningMode = AgentPlanningMode.LLM
     plan_hash: Sha256
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -164,12 +166,17 @@ class AgentPlan(ContractModel):
 
     @staticmethod
     def calculate_hash(
-        *, plan_version: str, intent_id: str, steps: tuple[AgentPlanStep, ...]
+        *,
+        plan_version: str,
+        intent_id: str,
+        steps: tuple[AgentPlanStep, ...],
+        planning_mode: AgentPlanningMode,
     ) -> str:
         return sha256_canonical(
             {
                 "plan_version": plan_version,
                 "intent_id": intent_id,
+                "planning_mode": planning_mode.value,
                 "steps": [step.model_dump(mode="json") for step in steps],
             }
         )
@@ -181,6 +188,7 @@ class AgentPlan(ContractModel):
         plan_version: str,
         intent_id: str,
         steps: tuple[AgentPlanStep, ...],
+        planning_mode: AgentPlanningMode = AgentPlanningMode.LLM,
         created_at: datetime | None = None,
     ) -> Self:
         normalized_version = _nonblank(plan_version)
@@ -188,11 +196,13 @@ class AgentPlan(ContractModel):
             plan_version=normalized_version,
             intent_id=intent_id,
             steps=steps,
+            planning_mode=planning_mode,
         )
         return cls(
             plan_version=normalized_version,
             intent_id=intent_id,
             steps=steps,
+            planning_mode=planning_mode,
             plan_hash=plan_hash,
             created_at=created_at or datetime.now(UTC),
         )
@@ -211,6 +221,7 @@ class AgentPlan(ContractModel):
             plan_version=self.plan_version,
             intent_id=self.intent_id,
             steps=self.steps,
+            planning_mode=self.planning_mode,
         )
         if self.plan_hash != expected:
             raise ValueError("plan_hash does not match the canonical Agent plan")
