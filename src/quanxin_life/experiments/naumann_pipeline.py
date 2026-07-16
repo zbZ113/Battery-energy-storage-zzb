@@ -11,10 +11,11 @@ import csv
 import hashlib
 import io
 import json
+import math
 from dataclasses import asdict
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -45,6 +46,8 @@ _MAX_REQUEST_BYTES = 64 * 1024 * 1024
 
 class NaumannPipelineStatus(StrEnum):
     COMPLETED = "completed"
+    COMPLETED_WITHOUT_COSTS = "completed_without_costs"
+    DEGRADED_MISSING_REVIEWED_MAPPING = "degraded_missing_reviewed_mapping"
     DEGRADED_MISSING_REVIEWED_RESOURCES = "degraded_missing_reviewed_resources"
 
 
@@ -60,13 +63,38 @@ class NaumannOperatingBounds(ContractModel):
 
 
 class NaumannAcquisitionConfig(ContractModel):
-    time_normalizer_hours: float = Field(gt=0, allow_inf_nan=False)
-    equipment_cost_normalizer: float = Field(gt=0, allow_inf_nan=False)
+    time_normalizer_hours: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    equipment_cost_normalizer: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     duplicate_penalty_weight: float = Field(ge=0, allow_inf_nan=False)
     similarity_length_scale: float = Field(gt=0, allow_inf_nan=False)
 
     def to_domain(self) -> AcquisitionConfig:
         return AcquisitionConfig(**self.model_dump())
+
+
+class NaumannSelectionAudit(ContractModel):
+    """Versioned evidence for selecting one direct row per operating condition."""
+
+    selection_version: str = Field(min_length=1)
+    observation_axis: Literal["equivalent_full_cycles", "time_h"]
+    target_axis_value: float = Field(gt=0, allow_inf_nan=False)
+    max_absolute_deviation: float = Field(ge=0, allow_inf_nan=False)
+    condition_ids: tuple[str, ...] = Field(min_length=2)
+    selected_axis_values: tuple[float, ...] = Field(min_length=2)
+    absolute_deviations: tuple[float, ...] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def selection_vectors_have_equal_length(self) -> NaumannSelectionAudit:
+        lengths = {
+            len(self.condition_ids),
+            len(self.selected_axis_values),
+            len(self.absolute_deviations),
+        }
+        if len(lengths) != 1:
+            raise ValueError("selection audit vectors must have equal length")
+        if len(self.condition_ids) != len(set(self.condition_ids)):
+            raise ValueError("selection audit condition_ids must be unique")
+        return self
 
 
 class NaumannPipelineRequest(ContractModel):
@@ -77,6 +105,7 @@ class NaumannPipelineRequest(ContractModel):
         min_length=1
     )
     mapping: NaumannGpBridgeMapping | None = None
+    selection_audit: NaumannSelectionAudit | None = None
     operating_bounds: NaumannOperatingBounds
     acquisition_config: NaumannAcquisitionConfig
     initial_observation_ids: tuple[str, ...] = ()
@@ -106,6 +135,59 @@ class NaumannPipelineRequest(ContractModel):
             raise ValueError("initial observation cohort IDs must be unique")
         return self
 
+    @model_validator(mode="after")
+    def reviewed_context_is_atomic_and_traceable(self) -> NaumannPipelineRequest:
+        has_time_normalizer = self.acquisition_config.time_normalizer_hours is not None
+        has_equipment_normalizer = (
+            self.acquisition_config.equipment_cost_normalizer is not None
+        )
+        if has_time_normalizer != has_equipment_normalizer:
+            raise ValueError("cost context requires both acquisition normalizers or neither")
+        if self.mapping is not None:
+            has_resources = self.mapping.resources is not None
+            has_normalizers = has_time_normalizer and has_equipment_normalizer
+            if has_resources != has_normalizers:
+                raise ValueError(
+                    "cost context requires reviewed resources and both normalizers together"
+                )
+
+        audit = self.selection_audit
+        if audit is None:
+            return self
+        if not all(isinstance(item, CycleMatrixObservation) for item in self.observations):
+            raise ValueError("selection audit applies only to cycle-matrix observations")
+        cycle_observations = tuple(
+            item for item in self.observations if isinstance(item, CycleMatrixObservation)
+        )
+        if tuple(item.condition_id for item in cycle_observations) != audit.condition_ids:
+            raise ValueError("selection audit condition order does not match observations")
+        if any(item.observation_axis != audit.observation_axis for item in cycle_observations):
+            raise ValueError("selection audit axis does not match observations")
+        for item, selected_axis, deviation in zip(
+            cycle_observations,
+            audit.selected_axis_values,
+            audit.absolute_deviations,
+            strict=True,
+        ):
+            if not math.isclose(
+                item.observation_value,
+                selected_axis,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            ):
+                raise ValueError("selection audit selected axis does not match observation")
+            expected_deviation = abs(item.observation_value - audit.target_axis_value)
+            if not math.isclose(
+                expected_deviation,
+                deviation,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            ):
+                raise ValueError("selection audit deviation does not match observation")
+            if deviation > audit.max_absolute_deviation:
+                raise ValueError("selection audit deviation exceeds reviewed tolerance")
+        return self
+
 
 class NaumannArtifact(ContractModel):
     relative_path: str = Field(min_length=1)
@@ -130,10 +212,17 @@ class NaumannPipelineResult(ContractModel):
 
     @model_validator(mode="after")
     def artifacts_match_status(self) -> NaumannPipelineResult:
-        if self.status is NaumannPipelineStatus.COMPLETED and self.artifacts is None:
+        if self.status in {
+            NaumannPipelineStatus.COMPLETED,
+            NaumannPipelineStatus.COMPLETED_WITHOUT_COSTS,
+        } and self.artifacts is None:
             raise ValueError("completed Naumann pipeline requires artifacts")
         if (
-            self.status is NaumannPipelineStatus.DEGRADED_MISSING_REVIEWED_RESOURCES
+            self.status
+            in {
+                NaumannPipelineStatus.DEGRADED_MISSING_REVIEWED_MAPPING,
+                NaumannPipelineStatus.DEGRADED_MISSING_REVIEWED_RESOURCES,
+            }
             and self.artifacts is not None
         ):
             raise ValueError("degraded Naumann pipeline must not claim replay artifacts")
@@ -185,10 +274,10 @@ class _DatasetObservation(ContractModel):
     dod: float = Field(allow_inf_nan=False)
     charge_c_rate: float = Field(allow_inf_nan=False)
     discharge_c_rate: float = Field(allow_inf_nan=False)
-    duration_hours: float = Field(gt=0, allow_inf_nan=False)
-    equipment_cost: float = Field(gt=0, allow_inf_nan=False)
-    resource_review_statement: str = Field(min_length=1)
-    resource_evidence_reference: str = Field(min_length=1)
+    duration_hours: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    equipment_cost: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    resource_review_statement: str | None = Field(default=None, min_length=1)
+    resource_evidence_reference: str | None = Field(default=None, min_length=1)
 
 
 def run_naumann_gp_pipeline(
@@ -223,10 +312,10 @@ def run_naumann_gp_pipeline(
     _prepare_output_dir(output_path)
 
     if validated.mapping is None:
-        warning = "REVIEWED_EXPERIMENT_RESOURCES_REQUIRED_FOR_REPLAY"
+        warning = "REVIEWED_TARGET_MAPPING_REQUIRED_FOR_REPLAY"
         manifest = {
             "pipeline_version": NAUMANN_PIPELINE_VERSION,
-            "status": NaumannPipelineStatus.DEGRADED_MISSING_REVIEWED_RESOURCES.value,
+            "status": NaumannPipelineStatus.DEGRADED_MISSING_REVIEWED_MAPPING.value,
             "run_id": run_id,
             "config_hash": config_hash,
             "configuration": config_payload,
@@ -238,7 +327,7 @@ def run_naumann_gp_pipeline(
         manifest_bytes = canonical_json_bytes(manifest)
         _write_bytes(output_path / _RUN_MANIFEST_JSON, manifest_bytes)
         return NaumannPipelineResult(
-            status=NaumannPipelineStatus.DEGRADED_MISSING_REVIEWED_RESOURCES,
+            status=NaumannPipelineStatus.DEGRADED_MISSING_REVIEWED_MAPPING,
             run_id=run_id,
             config_hash=config_hash,
             source_sha256s=source_sha256s,
@@ -255,12 +344,14 @@ def run_naumann_gp_pipeline(
         sorted(bridged, key=lambda item: item.experiment_observation.observation_id)
     )
     initial_ids = _resolve_initial_ids(validated, ordered)
+    has_reviewed_resources = validated.mapping.resources is not None
     replay = evaluate_finite_pool_replay(
         [item.experiment_observation for item in ordered],
         operating_bounds=validated.operating_bounds.to_domain(),
         acquisition_config=validated.acquisition_config.to_domain(),
         initial_observation_ids=initial_ids,
         query_budget=validated.query_budget,
+        include_cost_aware=has_reviewed_resources,
     )
     dataset_rows = tuple(
         _dataset_observation(
@@ -302,26 +393,37 @@ def run_naumann_gp_pipeline(
         dataset_csv=dataset_csv_artifact,
         replay_json=replay_artifact,
     )
+    warnings = (
+        []
+        if has_reviewed_resources
+        else ["COST_AWARE_EIVR_DISABLED_MISSING_REVIEWED_RESOURCES"]
+    )
+    status = (
+        NaumannPipelineStatus.COMPLETED
+        if has_reviewed_resources
+        else NaumannPipelineStatus.COMPLETED_WITHOUT_COSTS
+    )
     manifest = {
         "pipeline_version": NAUMANN_PIPELINE_VERSION,
-        "status": NaumannPipelineStatus.COMPLETED.value,
+        "status": status.value,
         "run_id": run_id,
         "config_hash": config_hash,
         "source_sha256s": list(source_sha256s),
         "source_observation_count": len(validated.observations),
         "gp_model_version": GP_MODEL_VERSION,
         "artifacts": artifacts.model_dump(mode="json"),
-        "warnings": [],
+        "warnings": warnings,
     }
     manifest_bytes = canonical_json_bytes(manifest)
     _write_bytes(output_path / _RUN_MANIFEST_JSON, manifest_bytes)
     return NaumannPipelineResult(
-        status=NaumannPipelineStatus.COMPLETED,
+        status=status,
         run_id=run_id,
         config_hash=config_hash,
         source_sha256s=source_sha256s,
         manifest_sha256=_sha256_bytes(manifest_bytes),
         artifacts=artifacts,
+        warnings=warnings,
     )
 
 
@@ -331,6 +433,11 @@ def _config_payload(request: NaumannPipelineRequest) -> dict[str, Any]:
         "pipeline_config_version": request.pipeline_config_version,
         "mapping": (
             request.mapping.model_dump(mode="json") if request.mapping is not None else None
+        ),
+        "selection_audit": (
+            request.selection_audit.model_dump(mode="json")
+            if request.selection_audit is not None
+            else None
         ),
         "operating_bounds": request.operating_bounds.model_dump(mode="json"),
         "acquisition_config": request.acquisition_config.model_dump(mode="json"),

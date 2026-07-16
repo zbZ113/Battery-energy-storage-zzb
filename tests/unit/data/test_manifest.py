@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 import quanxin_life.data.manifest as manifest_module
-from quanxin_life.data.manifest import RawFileManifest, verify_raw_file
+from quanxin_life.data.manifest import (
+    AuditedDatasetFile,
+    DatasetFileAuditManifest,
+    RawFileManifest,
+    verify_audited_dataset_files,
+    verify_raw_file,
+)
 
 
 def test_raw_file_manifest_verifies_content_hash(tmp_path: Path) -> None:
@@ -108,3 +114,47 @@ def test_raw_file_manifest_rejects_unsafe_artifact_before_hashing(tmp_path: Path
 
     with pytest.raises(ValueError, match="unsafe serialized artifact"):
         verify_raw_file(source, manifest)
+
+
+def test_dataset_file_audit_manifest_verifies_all_declared_files(tmp_path: Path) -> None:
+    first = tmp_path / "data" / "NAUMANN_CALENDAR" / "capacity.xlsx"
+    second = tmp_path / "data" / "NAUMANN_CYCLE" / "capacity.mat"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.write_bytes(b"calendar")
+    second.write_bytes(b"cycle")
+    files = (
+        AuditedDatasetFile(
+            dataset_id="NAUMANN_CALENDAR",
+            relative_path="data/NAUMANN_CALENDAR/capacity.xlsx",
+            size_bytes=first.stat().st_size,
+            sha256=hashlib.sha256(first.read_bytes()).hexdigest(),
+        ),
+        AuditedDatasetFile(
+            dataset_id="NAUMANN_CYCLE",
+            relative_path="data/NAUMANN_CYCLE/capacity.mat",
+            size_bytes=second.stat().st_size,
+            sha256=hashlib.sha256(second.read_bytes()).hexdigest(),
+        ),
+    )
+    manifest = DatasetFileAuditManifest(
+        manifest_version="naumann-audit-v1",
+        source_catalog="configs/data_sources.json",
+        file_count=2,
+        total_size_bytes=first.stat().st_size + second.stat().st_size,
+        files=files,
+    )
+
+    assert verify_audited_dataset_files(tmp_path, manifest) == tuple(
+        item.sha256 for item in files
+    )
+
+
+def test_dataset_file_audit_manifest_rejects_path_traversal() -> None:
+    with pytest.raises(ValueError, match="relative_path"):
+        AuditedDatasetFile(
+            dataset_id="NAUMANN_CYCLE",
+            relative_path="../outside.mat",
+            size_bytes=1,
+            sha256="a" * 64,
+        )

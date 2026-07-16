@@ -19,6 +19,7 @@ from quanxin_life.experiments.naumann_pipeline import (
     NaumannOperatingBounds,
     NaumannPipelineRequest,
     NaumannPipelineStatus,
+    NaumannSelectionAudit,
     run_naumann_gp_pipeline,
 )
 
@@ -124,6 +125,19 @@ def _request(mapping: NaumannGpBridgeMapping | None = None) -> NaumannPipelineRe
     )
 
 
+def _selection_audit() -> NaumannSelectionAudit:
+    observations = _observations()
+    return NaumannSelectionAudit(
+        selection_version="reviewed-selection-v1",
+        observation_axis="equivalent_full_cycles",
+        target_axis_value=100.0,
+        max_absolute_deviation=0.0,
+        condition_ids=tuple(item.condition_id for item in observations),
+        selected_axis_values=tuple(item.observation_value for item in observations),
+        absolute_deviations=(0.0, 0.0, 0.0, 0.0),
+    )
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -179,14 +193,108 @@ def test_pipeline_explicitly_degrades_when_reviewed_cost_metadata_is_missing(
 
     result = run_naumann_gp_pipeline(request, output_dir=tmp_path)
 
-    assert result.status is NaumannPipelineStatus.DEGRADED_MISSING_REVIEWED_RESOURCES
+    assert result.status is NaumannPipelineStatus.DEGRADED_MISSING_REVIEWED_MAPPING
     assert result.artifacts is None
-    assert result.warnings == ["REVIEWED_EXPERIMENT_RESOURCES_REQUIRED_FOR_REPLAY"]
+    assert result.warnings == ["REVIEWED_TARGET_MAPPING_REQUIRED_FOR_REPLAY"]
     manifest = json.loads((tmp_path / "run_manifest.json").read_text())
-    assert manifest["status"] == "degraded_missing_reviewed_resources"
+    assert manifest["status"] == "degraded_missing_reviewed_mapping"
     assert "equipment_cost" not in manifest
     assert not (tmp_path / "experiment_dataset.json").exists()
     assert not (tmp_path / "gp_replay.json").exists()
+
+
+def test_pipeline_runs_non_cost_strategies_without_inventing_resource_values(
+    tmp_path: Path,
+) -> None:
+    mapping = _mapping().model_copy(update={"resources": None})
+    request = NaumannPipelineRequest(
+        **_request().model_dump(
+            exclude={"mapping", "acquisition_config"},
+            mode="python",
+        ),
+        mapping=mapping,
+        acquisition_config=NaumannAcquisitionConfig(
+            time_normalizer_hours=None,
+            equipment_cost_normalizer=None,
+            duplicate_penalty_weight=0.1,
+            similarity_length_scale=0.5,
+        ),
+    )
+
+    result = run_naumann_gp_pipeline(request, output_dir=tmp_path)
+
+    assert result.status is NaumannPipelineStatus.COMPLETED_WITHOUT_COSTS
+    assert result.artifacts is not None
+    assert result.warnings == ["COST_AWARE_EIVR_DISABLED_MISSING_REVIEWED_RESOURCES"]
+    replay = json.loads((tmp_path / "gp_replay.json").read_text(encoding="utf-8"))
+    assert {item["strategy"] for item in replay["trajectories"]} == {
+        "random",
+        "uniform_grid",
+        "max_variance",
+    }
+    assert replay["unavailable_strategies"] == ["cost_aware_eivr"]
+    dataset = json.loads((tmp_path / "experiment_dataset.json").read_text(encoding="utf-8"))
+    assert all(item["duration_hours"] is None for item in dataset["observations"])
+    assert all(item["equipment_cost"] is None for item in dataset["observations"])
+    assert all(item["resource_review_statement"] is None for item in dataset["observations"])
+
+
+@pytest.mark.parametrize(
+    ("has_resources", "time_normalizer", "equipment_normalizer"),
+    [
+        (True, None, None),
+        (True, 24.0, None),
+        (True, None, 10.0),
+        (False, 24.0, 10.0),
+        (False, 24.0, None),
+        (False, None, 10.0),
+    ],
+)
+def test_pipeline_rejects_incomplete_or_conflicting_cost_context(
+    has_resources: bool,
+    time_normalizer: float | None,
+    equipment_normalizer: float | None,
+) -> None:
+    mapping = _mapping()
+    if not has_resources:
+        mapping = mapping.model_copy(update={"resources": None})
+
+    with pytest.raises(ValueError, match="cost context"):
+        NaumannPipelineRequest(
+            **_request().model_dump(
+                exclude={"mapping", "acquisition_config"},
+                mode="python",
+            ),
+            mapping=mapping,
+            acquisition_config=NaumannAcquisitionConfig(
+                time_normalizer_hours=time_normalizer,
+                equipment_cost_normalizer=equipment_normalizer,
+                duplicate_penalty_weight=0.1,
+                similarity_length_scale=0.5,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "audit_update",
+    [
+        {"condition_ids": ("condition-b", "condition-a", "condition-c", "condition-d")},
+        {"selected_axis_values": (101.0, 100.0, 100.0, 100.0)},
+        {"absolute_deviations": (1.0, 0.0, 0.0, 0.0)},
+        {"max_absolute_deviation": 1.0, "absolute_deviations": (0.5, 0.0, 0.0, 0.0)},
+        {"observation_axis": "time_h"},
+    ],
+)
+def test_pipeline_rejects_selection_audit_that_does_not_match_observations(
+    audit_update: dict[str, object],
+) -> None:
+    audit = _selection_audit().model_copy(update=audit_update)
+
+    with pytest.raises(ValueError, match="selection audit"):
+        NaumannPipelineRequest(
+            **_request().model_dump(exclude={"selection_audit"}, mode="python"),
+            selection_audit=audit,
+        )
 
 
 def test_pipeline_rejects_duplicate_operating_conditions_instead_of_aggregating(

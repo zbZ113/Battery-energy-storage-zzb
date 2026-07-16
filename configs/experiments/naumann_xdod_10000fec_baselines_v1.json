@@ -1,0 +1,50 @@
+{
+  "config_version": "naumann-xdod-10000fec-baselines-v1",
+  "source_catalog_path": "configs/data_sources.json",
+  "audit_manifest_path": "configs/data_manifests/naumann_public_files_v1.json",
+  "source_file_path": "data/NAUMANN_CYCLE/xDOD_1C1C_40°C_Capacity_CC_CV_FEC.mat",
+  "layout_path": "configs/data_layouts/naumann_cycle_xdod_capacity_fec_v1.json",
+  "selection": {
+    "selection_version": "naumann-xdod-nearest-10000fec-within-100-v1",
+    "target_axis_value": 10000.0,
+    "max_absolute_deviation": 100.0,
+    "condition_ids": [
+      "T40_SOC50_DOD100_C1_C1_CC",
+      "T40_SOC50_DOD80_C1_C1_CC",
+      "T40_SOC50_DOD40_C1_C1_CC",
+      "T40_SOC50_DOD20_C1_C1_CC",
+      "T40_SOC50_DOD10_C1_C1_CC",
+      "T40_SOC50_DOD5_C1_C1_CC"
+    ]
+  },
+  "mapping": {
+    "mapping_version": "naumann-relative-capacity-direct-no-cost-v1",
+    "resources": null,
+    "target_transform": {
+      "source_metric_name": "relative_capacity_ratio",
+      "target_name": "relative_capacity_ratio_at_approximately_10000_fec",
+      "mode": "direct_metric_value",
+      "reference_metric": null,
+      "rate_denominator_basis": null
+    },
+    "calendar_conditions": []
+  },
+  "operating_bounds": {
+    "temperature_c": [0.0, 60.0],
+    "mean_soc": [0.1, 0.9],
+    "dod": [0.05, 1.0],
+    "charge_c_rate": [0.1, 2.0],
+    "discharge_c_rate": [0.1, 2.0]
+  },
+  "acquisition_config": {
+    "time_normalizer_hours": null,
+    "equipment_cost_normalizer": null,
+    "duplicate_penalty_weight": 0.0,
+    "similarity_length_scale": 0.25
+  },
+  "initial_condition_ids": [
+    "T40_SOC50_DOD100_C1_C1_CC",
+    "T40_SOC50_DOD5_C1_C1_CC"
+  ],
+  "query_budget": 3
+}

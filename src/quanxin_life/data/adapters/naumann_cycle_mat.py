@@ -8,6 +8,8 @@ condition observations for GP and active-experiment workflows.
 
 from __future__ import annotations
 
+import json
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -42,7 +44,7 @@ class NaumannCycleMatrixLayout(ContractModel):
     y_axis_variable: str = Field(min_length=1)
     legend_variable: str = Field(min_length=1)
     observation_axis: Literal["equivalent_full_cycles", "time_h"]
-    metric_name: Literal["capacity_ah", "resistance_ohm"]
+    metric_name: Literal["capacity_ah", "relative_capacity_ratio", "resistance_ohm"]
     condition_columns: tuple[CycleConditionColumn, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -71,12 +73,127 @@ class CycleMatrixObservation(ContractModel):
     dod: float = Field(gt=0, le=1, allow_inf_nan=False)
     charge_c_rate: float = Field(gt=0, allow_inf_nan=False)
     discharge_c_rate: float = Field(gt=0, allow_inf_nan=False)
-    metric_name: Literal["capacity_ah", "resistance_ohm"]
+    metric_name: Literal["capacity_ah", "relative_capacity_ratio", "resistance_ohm"]
     metric_value: float = Field(ge=0, allow_inf_nan=False)
     source_file: str = Field(min_length=1)
     source_sha256: Sha256
     layout_version: str = Field(min_length=1)
     adapter_version: str = _ADAPTER_VERSION
+
+
+class ReviewedAxisSelection(ContractModel):
+    """Explicit fixed-axis cohort selection; it never interpolates or alters values."""
+
+    selection_version: str = Field(min_length=1)
+    target_axis_value: float = Field(gt=0, allow_inf_nan=False)
+    max_absolute_deviation: float = Field(ge=0, allow_inf_nan=False)
+    condition_ids: tuple[str, ...] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def condition_ids_are_unique(self) -> ReviewedAxisSelection:
+        if len(self.condition_ids) != len(set(self.condition_ids)):
+            raise ValueError("reviewed axis selection condition_ids must be unique")
+        return self
+
+
+class ReviewedAxisSelectionResult(ContractModel):
+    """Selected direct source rows plus transparent distance from the reviewed axis."""
+
+    selection_version: str = Field(min_length=1)
+    target_axis_value: float = Field(gt=0, allow_inf_nan=False)
+    observations: tuple[CycleMatrixObservation, ...] = Field(min_length=2)
+    absolute_deviations: tuple[float, ...] = Field(min_length=2)
+
+    @model_validator(mode="after")
+    def observations_match_deviations(self) -> ReviewedAxisSelectionResult:
+        if len(self.observations) != len(self.absolute_deviations):
+            raise ValueError("selected observations and deviations must have equal length")
+        return self
+
+
+def load_naumann_cycle_layout(path: Path) -> NaumannCycleMatrixLayout:
+    """Load a version-controlled, explicitly reviewed MATLAB layout JSON."""
+
+    path = Path(path)
+    if path.suffix.lower() != ".json":
+        raise ValueError("cycle layout must use a .json file")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"cycle layout does not exist: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError("cycle layout must contain valid JSON") from exc
+    return NaumannCycleMatrixLayout.model_validate(payload)
+
+
+def select_reviewed_axis_observations(
+    observations: tuple[CycleMatrixObservation, ...],
+    *,
+    selection: ReviewedAxisSelection,
+) -> ReviewedAxisSelectionResult:
+    """Select nearest measured rows under a versioned target and tolerance.
+
+    The returned metric values and axes are direct source measurements.  No
+    interpolation, extrapolation, averaging or missing-value fill is applied.
+    """
+
+    if not observations:
+        raise ValueError("reviewed axis selection requires source observations")
+    selection = ReviewedAxisSelection.model_validate(selection.model_dump(mode="json"))
+    validated = tuple(
+        CycleMatrixObservation.model_validate(item.model_dump(mode="json"))
+        for item in observations
+    )
+    source_contexts = {
+        (
+            item.dataset_id,
+            item.source_sha256,
+            item.source_file,
+            item.layout_version,
+            item.adapter_version,
+            item.observation_axis,
+            item.metric_name,
+        )
+        for item in validated
+    }
+    if len(source_contexts) != 1:
+        raise ValueError("reviewed axis selection cannot mix source or metric contexts")
+
+    by_condition: dict[str, list[CycleMatrixObservation]] = {}
+    for item in validated:
+        by_condition.setdefault(item.condition_id, []).append(item)
+
+    selected: list[CycleMatrixObservation] = []
+    deviations: list[float] = []
+    for condition_id in selection.condition_ids:
+        candidates = by_condition.get(condition_id)
+        if not candidates:
+            raise ValueError(f"reviewed condition_id is missing: {condition_id}")
+        ranked = sorted(
+            (
+                (abs(item.observation_value - selection.target_axis_value), item)
+                for item in candidates
+            ),
+            key=lambda pair: (pair[0], pair[1].observation_value),
+        )
+        if len(ranked) > 1 and math.isclose(
+            ranked[0][0], ranked[1][0], rel_tol=0.0, abs_tol=1e-12
+        ):
+            raise ValueError(f"reviewed axis selection is ambiguous for {condition_id}")
+        deviation, chosen = ranked[0]
+        if deviation > selection.max_absolute_deviation:
+            raise ValueError(
+                f"condition {condition_id} is outside reviewed axis tolerance"
+            )
+        selected.append(chosen)
+        deviations.append(float(deviation))
+
+    return ReviewedAxisSelectionResult(
+        selection_version=selection.selection_version,
+        target_axis_value=selection.target_axis_value,
+        observations=tuple(selected),
+        absolute_deviations=tuple(deviations),
+    )
 
 
 def _validated_layout(layout: NaumannCycleMatrixLayout) -> NaumannCycleMatrixLayout:

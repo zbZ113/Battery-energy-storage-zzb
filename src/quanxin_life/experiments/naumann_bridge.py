@@ -80,7 +80,7 @@ class ReviewedReferenceMetric(ContractModel):
 class MetricTargetTransform(ContractModel):
     """An explicit source-metric-to-GP-target transformation declaration."""
 
-    source_metric_name: Literal["capacity_ah", "resistance_ohm"]
+    source_metric_name: Literal["capacity_ah", "relative_capacity_ratio", "resistance_ohm"]
     target_name: str = Field(min_length=1)
     mode: TargetTransformMode
     reference_metric: ReviewedReferenceMetric | None = None
@@ -96,8 +96,13 @@ class MetricTargetTransform(ContractModel):
             TargetTransformMode.RELATIVE_RESISTANCE_GROWTH,
             TargetTransformMode.RELATIVE_RESISTANCE_GROWTH_RATE,
         }
-        if self.mode in capacity_modes and self.source_metric_name != "capacity_ah":
-            raise ValueError("capacity-loss transforms require source_metric_name=capacity_ah")
+        if self.mode in capacity_modes and self.source_metric_name not in {
+            "capacity_ah",
+            "relative_capacity_ratio",
+        }:
+            raise ValueError(
+                "capacity-loss transforms require a capacity-valued source metric"
+            )
         if self.mode in resistance_modes and self.source_metric_name != "resistance_ohm":
             raise ValueError(
                 "resistance-growth transforms require source_metric_name=resistance_ohm"
@@ -151,7 +156,7 @@ class NaumannGpBridgeMapping(ContractModel):
     """Reviewed configuration; it never guesses values from source text."""
 
     mapping_version: str = Field(min_length=1)
-    resources: ReviewedExperimentResources
+    resources: ReviewedExperimentResources | None = None
     target_transform: MetricTargetTransform
     calendar_conditions: tuple[CalendarCyclingConditionMapping, ...] = ()
 
@@ -178,8 +183,8 @@ class NaumannGpProvenance:
     mapping_version: str
     scientific_use_statement: str | None
     evidence_reference: str | None
-    resource_review_statement: str
-    resource_evidence_reference: str
+    resource_review_statement: str | None
+    resource_evidence_reference: str | None
     reference_metric: ReviewedReferenceMetric | None
 
 
@@ -237,13 +242,14 @@ def bridge_naumann_observations(
         )
         if not math.isfinite(observed_target):
             raise RuntimeError("reviewed metric transform produced a non-finite target")
+        resources = mapping.resources
         experiment_observation = ExperimentObservation(
             observation_id=observation_id,
             condition=condition,
             target_name=mapping.target_transform.target_name,
             observed_target=observed_target,
-            duration_hours=mapping.resources.duration_hours,
-            equipment_cost=mapping.resources.equipment_cost,
+            duration_hours=resources.duration_hours if resources is not None else None,
+            equipment_cost=resources.equipment_cost if resources is not None else None,
         )
         bridged.append(
             BridgedExperimentObservation(
@@ -260,8 +266,12 @@ def bridge_naumann_observations(
                     mapping_version=mapping.mapping_version,
                     scientific_use_statement=scientific_use_statement,
                     evidence_reference=evidence_reference,
-                    resource_review_statement=mapping.resources.review_statement,
-                    resource_evidence_reference=mapping.resources.evidence_reference,
+                    resource_review_statement=(
+                        resources.review_statement if resources is not None else None
+                    ),
+                    resource_evidence_reference=(
+                        resources.evidence_reference if resources is not None else None
+                    ),
                     reference_metric=mapping.target_transform.reference_metric,
                 ),
             )

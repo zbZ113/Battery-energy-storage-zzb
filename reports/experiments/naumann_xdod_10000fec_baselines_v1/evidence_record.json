@@ -1,0 +1,31 @@
+{
+  "evidence_record_version": "naumann-reviewed-replay-evidence-v1",
+  "run_manifest_sha256": "d99ccdf5cf37a89aecc8c69680b208f5f24596fef41df42e0451ae07add309c3",
+  "run_id": "4fd94e9a194b150279693a960c5fd4f0596e64a638a8e8e021fbc4983f90b69b",
+  "config_hash": "11af58dd2090eab1b9ea731ac8e70b86cc4264759bd119e124bc6c51f67f531b",
+  "source_sha256s": [
+    "2b3f640783d72dec17ec57d438d570e891057ecdf5690d444688dd1e1b2209da"
+  ],
+  "source_observation_count": 6,
+  "status": "completed_without_costs",
+  "warnings": [
+    "COST_AWARE_EIVR_DISABLED_MISSING_REVIEWED_RESOURCES"
+  ],
+  "artifacts": {
+    "dataset_csv": {
+      "relative_path": "experiment_dataset.csv",
+      "sha256": "6402358197f32513145721de61b20b28e2dea39a38796ac891199198c774f4df",
+      "size_bytes": 4370
+    },
+    "dataset_json": {
+      "relative_path": "experiment_dataset.json",
+      "sha256": "a3a750d71badaef39a13bac9e2b1101c799b3513c7c6714ac27d3f51ef93b601",
+      "size_bytes": 8398
+    },
+    "replay_json": {
+      "relative_path": "gp_replay.json",
+      "sha256": "45aa336ca499865b9eeb94f5f847322055e641d53673eaf1e79cfebf65141789",
+      "size_bytes": 4510
+    }
+  }
+}

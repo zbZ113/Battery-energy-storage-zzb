@@ -8,7 +8,10 @@ from scipy.io import savemat
 from quanxin_life.data.adapters.naumann_cycle_mat import (
     CycleConditionColumn,
     NaumannCycleMatrixLayout,
+    ReviewedAxisSelection,
+    load_naumann_cycle_layout,
     load_naumann_cycle_matrix,
+    select_reviewed_axis_observations,
 )
 from quanxin_life.data.manifest import RawFileManifest
 from quanxin_life.data.source_catalog import IngestionMode, SourceCatalogEntry
@@ -146,3 +149,64 @@ def test_rejects_catalog_mismatch_before_loading_matlab_payload(tmp_path: Path) 
             _source(source_uri="https://example.invalid/cycle"),
             layout=_layout(),
         )
+
+
+def test_loads_reviewed_relative_capacity_ratio_layout_from_json(tmp_path: Path) -> None:
+    path = tmp_path / "layout.json"
+    payload = _layout().model_copy(update={"metric_name": "relative_capacity_ratio"})
+    path.write_text(payload.model_dump_json(), encoding="utf-8")
+
+    loaded = load_naumann_cycle_layout(path)
+
+    assert loaded.metric_name == "relative_capacity_ratio"
+    assert loaded.layout_version == "naumann-cycle-fixture-v1"
+
+
+def test_cycle_layout_loader_rejects_non_json_file(tmp_path: Path) -> None:
+    path = tmp_path / "layout.yaml"
+    path.write_text("layout_version: unsafe", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"must use a \.json"):
+        load_naumann_cycle_layout(path)
+
+
+def test_selects_one_direct_observation_per_condition_near_reviewed_axis(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "capacity_by_condition.mat"
+    _write_cycle_matrix(path)
+    observations = load_naumann_cycle_matrix(
+        path, _manifest(path), _source(), layout=_layout()
+    )
+    selection = ReviewedAxisSelection(
+        selection_version="fixture-near-100-v1",
+        target_axis_value=90.0,
+        max_absolute_deviation=15.0,
+        condition_ids=("T25_SOC50", "T40_SOC75"),
+    )
+
+    result = select_reviewed_axis_observations(observations, selection=selection)
+
+    assert [item.condition_id for item in result.observations] == [
+        "T25_SOC50",
+        "T40_SOC75",
+    ]
+    assert [item.observation_value for item in result.observations] == [100.0, 100.0]
+    assert result.absolute_deviations == (10.0, 10.0)
+
+
+def test_reviewed_axis_selection_rejects_condition_outside_tolerance(tmp_path: Path) -> None:
+    path = tmp_path / "capacity_by_condition.mat"
+    _write_cycle_matrix(path)
+    observations = load_naumann_cycle_matrix(
+        path, _manifest(path), _source(), layout=_layout()
+    )
+    selection = ReviewedAxisSelection(
+        selection_version="fixture-too-strict-v1",
+        target_axis_value=90.0,
+        max_absolute_deviation=5.0,
+        condition_ids=("T25_SOC50", "T40_SOC75"),
+    )
+
+    with pytest.raises(ValueError, match="outside reviewed axis tolerance"):
+        select_reviewed_axis_observations(observations, selection=selection)

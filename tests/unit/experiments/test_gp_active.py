@@ -546,3 +546,51 @@ def test_leave_one_out_replay_reports_observed_comparison_quantities() -> None:
     assert all(math.isfinite(fold.actual_target) for fold in replay.folds)
     assert all(math.isfinite(fold.predicted_mean) for fold in replay.folds)
     assert all(math.isfinite(fold.predicted_std) for fold in replay.folds)
+
+
+def test_max_variance_can_rank_resource_unknown_historical_candidates() -> None:
+    observations = tuple(
+        replace(item, duration_hours=None, equipment_cost=None) for item in _observations()
+    )
+    recommender = GaussianProcessExperimentRecommender(
+        operating_bounds=_bounds(),
+        acquisition_config=_config(),
+    ).fit(observations[:2])
+    candidate = ExperimentCandidate(
+        candidate_id=observations[2].observation_id,
+        condition=observations[2].condition,
+        duration_hours=None,
+        equipment_cost=None,
+        safety_approved=True,
+        equipment_available=True,
+    )
+
+    result = recommender.rank_candidates(
+        (candidate,),
+        strategy=AcquisitionStrategy.MAX_VARIANCE,
+    )
+
+    assert [item.candidate_id for item in result.accepted] == [candidate.candidate_id]
+    assert result.accepted[0].normalized_cost is None
+
+
+def test_cost_aware_eivr_rejects_candidate_without_reviewed_resources() -> None:
+    recommender = GaussianProcessExperimentRecommender(
+        operating_bounds=_bounds(),
+        acquisition_config=_config(),
+    ).fit(_observations()[:2])
+    candidate = ExperimentCandidate(
+        candidate_id="missing-reviewed-resources",
+        condition=_observations()[2].condition,
+        duration_hours=None,
+        equipment_cost=None,
+        safety_approved=True,
+        equipment_available=True,
+    )
+
+    with pytest.raises(ValueError, match="reviewed duration_hours and equipment_cost"):
+        recommender.rank_candidates(
+            (candidate,),
+            reference_conditions=_reference_conditions(),
+            strategy=AcquisitionStrategy.COST_AWARE_EIVR,
+        )

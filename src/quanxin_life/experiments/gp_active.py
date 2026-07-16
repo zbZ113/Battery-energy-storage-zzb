@@ -151,8 +151,8 @@ class ExperimentObservation:
     condition: OperatingCondition
     target_name: str
     observed_target: float
-    duration_hours: float
-    equipment_cost: float
+    duration_hours: float | None
+    equipment_cost: float | None
 
     def __post_init__(self) -> None:
         if not self.observation_id.strip():
@@ -160,10 +160,13 @@ class ExperimentObservation:
         if not self.target_name.strip():
             raise ValueError("target_name must be non-empty")
         _require_finite_real(self.observed_target, name="observed_target")
-        if _require_finite_real(self.duration_hours, name="duration_hours") <= 0:
-            raise ValueError("duration_hours must be positive")
-        if _require_finite_real(self.equipment_cost, name="equipment_cost") <= 0:
-            raise ValueError("equipment_cost must be positive")
+        if (self.duration_hours is None) != (self.equipment_cost is None):
+            raise ValueError("duration_hours and equipment_cost must be supplied together")
+        if self.duration_hours is not None:
+            if _require_finite_real(self.duration_hours, name="duration_hours") <= 0:
+                raise ValueError("duration_hours must be positive")
+            if _require_finite_real(self.equipment_cost, name="equipment_cost") <= 0:
+                raise ValueError("equipment_cost must be positive")
 
 
 @dataclass(frozen=True)
@@ -172,18 +175,21 @@ class ExperimentCandidate:
 
     candidate_id: str
     condition: OperatingCondition
-    duration_hours: float
-    equipment_cost: float
+    duration_hours: float | None
+    equipment_cost: float | None
     safety_approved: bool | None = None
     equipment_available: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.candidate_id.strip():
             raise ValueError("candidate_id must be non-empty")
-        if _require_finite_real(self.duration_hours, name="duration_hours") <= 0:
-            raise ValueError("duration_hours must be positive")
-        if _require_finite_real(self.equipment_cost, name="equipment_cost") <= 0:
-            raise ValueError("equipment_cost must be positive")
+        if (self.duration_hours is None) != (self.equipment_cost is None):
+            raise ValueError("duration_hours and equipment_cost must be supplied together")
+        if self.duration_hours is not None:
+            if _require_finite_real(self.duration_hours, name="duration_hours") <= 0:
+                raise ValueError("duration_hours must be positive")
+            if _require_finite_real(self.equipment_cost, name="equipment_cost") <= 0:
+                raise ValueError("equipment_cost must be positive")
         if self.safety_approved is not None and not isinstance(self.safety_approved, bool):
             raise ValueError("safety_approved must be boolean or None")
         if self.equipment_available is not None and not isinstance(self.equipment_available, bool):
@@ -194,19 +200,23 @@ class ExperimentCandidate:
 class AcquisitionConfig:
     """Explicitly normalized cost-aware uncertainty-acquisition settings."""
 
-    time_normalizer_hours: float
-    equipment_cost_normalizer: float
+    time_normalizer_hours: float | None
+    equipment_cost_normalizer: float | None
     duplicate_penalty_weight: float
     similarity_length_scale: float
 
     def __post_init__(self) -> None:
-        for name in (
-            "time_normalizer_hours",
-            "equipment_cost_normalizer",
-            "similarity_length_scale",
-        ):
-            if _require_finite_real(getattr(self, name), name=name) <= 0:
+        for name in ("time_normalizer_hours", "equipment_cost_normalizer"):
+            value = getattr(self, name)
+            if value is not None and _require_finite_real(value, name=name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        if (
+            _require_finite_real(
+                self.similarity_length_scale, name="similarity_length_scale"
+            )
+            <= 0
+        ):
+            raise ValueError("similarity_length_scale must be positive")
         if _require_finite_real(
             self.duplicate_penalty_weight, name="duplicate_penalty_weight"
         ) < 0:
@@ -323,6 +333,7 @@ class FinitePoolReplay:
     initial_observation_ids: tuple[str, ...]
     reference_condition_count: int
     trajectories: tuple[ReplayTrajectory, ...]
+    unavailable_strategies: tuple[AcquisitionStrategy, ...] = ()
     winner: None = None
 
 
@@ -857,6 +868,15 @@ class GaussianProcessExperimentRecommender:
         )
 
     def _normalized_cost(self, candidate: ExperimentCandidate) -> float:
+        if candidate.duration_hours is None or candidate.equipment_cost is None:
+            raise ValueError(
+                "cost-aware EIVR requires reviewed duration_hours and equipment_cost"
+            )
+        if (
+            self.acquisition_config.time_normalizer_hours is None
+            or self.acquisition_config.equipment_cost_normalizer is None
+        ):
+            raise ValueError("cost-aware EIVR requires reviewed cost normalizers")
         normalized_cost = (
             candidate.duration_hours / self.acquisition_config.time_normalizer_hours
             + candidate.equipment_cost / self.acquisition_config.equipment_cost_normalizer
@@ -911,8 +931,9 @@ def evaluate_finite_pool_replay(
     acquisition_config: AcquisitionConfig,
     initial_observation_ids: Sequence[str],
     query_budget: int,
+    include_cost_aware: bool = True,
 ) -> FinitePoolReplay:
-    """Compare four deterministic strategies using only revealed pool labels.
+    """Compare the enabled deterministic strategies using only revealed pool labels.
 
     Every selected condition is predicted before its supplied, actual target is
     revealed.  The return type records trajectories and deliberately has no
@@ -941,12 +962,23 @@ def evaluate_finite_pool_replay(
 
     target_name = cohort[0].target_name
     reference_space = _unique_reference_conditions(cohort)
-    strategies = (
+    strategies: tuple[AcquisitionStrategy, ...] = (
         AcquisitionStrategy.RANDOM,
         AcquisitionStrategy.UNIFORM_GRID,
         AcquisitionStrategy.MAX_VARIANCE,
-        AcquisitionStrategy.COST_AWARE_EIVR,
     )
+    unavailable_strategies: tuple[AcquisitionStrategy, ...] = ()
+    if include_cost_aware:
+        if any(
+            observation.duration_hours is None or observation.equipment_cost is None
+            for observation in cohort
+        ):
+            raise ValueError(
+                "cost-aware replay requires reviewed duration_hours and equipment_cost"
+            )
+        strategies = (*strategies, AcquisitionStrategy.COST_AWARE_EIVR)
+    else:
+        unavailable_strategies = (AcquisitionStrategy.COST_AWARE_EIVR,)
     trajectories = tuple(
         _run_replay_strategy(
             strategy,
@@ -966,6 +998,7 @@ def evaluate_finite_pool_replay(
         initial_observation_ids=initial_ids,
         reference_condition_count=len(reference_space),
         trajectories=trajectories,
+        unavailable_strategies=unavailable_strategies,
     )
 
 

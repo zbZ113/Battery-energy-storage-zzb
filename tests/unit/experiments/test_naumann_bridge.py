@@ -83,16 +83,18 @@ def _reviewed_capacity_reference() -> ReviewedReferenceMetric:
     )
 
 
-def test_bridge_mapping_requires_explicit_reviewed_resource_metadata() -> None:
-    with pytest.raises(ValidationError, match="resources"):
-        NaumannGpBridgeMapping(
-            mapping_version="naumann-gp-map-v1",
-            target_transform=MetricTargetTransform(
-                source_metric_name="capacity_ah",
-                target_name="capacity_ah",
-                mode=TargetTransformMode.DIRECT_METRIC_VALUE,
-            ),
-        )
+def test_bridge_mapping_can_explicitly_omit_unavailable_resource_metadata() -> None:
+    mapping = NaumannGpBridgeMapping(
+        mapping_version="naumann-gp-map-v1",
+        resources=None,
+        target_transform=MetricTargetTransform(
+            source_metric_name="capacity_ah",
+            target_name="capacity_ah",
+            mode=TargetTransformMode.DIRECT_METRIC_VALUE,
+        ),
+    )
+
+    assert mapping.resources is None
 
 
 def test_cycle_observation_bridges_one_to_one_with_source_provenance() -> None:
@@ -112,6 +114,29 @@ def test_cycle_observation_bridges_one_to_one_with_source_provenance() -> None:
     assert result.provenance.layout_version == "cycle-layout-v1"
     assert result.provenance.source_condition_id == "cycle-condition-01"
     assert result.provenance.source_observation_id == result.experiment_observation.observation_id
+
+
+def test_bridge_preserves_relative_capacity_ratio_without_claiming_ah() -> None:
+    observation = _cycle_observation(metric_value=0.91).model_copy(
+        update={"metric_name": "relative_capacity_ratio"}
+    )
+    mapping = NaumannGpBridgeMapping(
+        mapping_version="naumann-relative-capacity-map-v1",
+        resources=None,
+        target_transform=MetricTargetTransform(
+            source_metric_name="relative_capacity_ratio",
+            target_name="relative_capacity_ratio",
+            mode=TargetTransformMode.DIRECT_METRIC_VALUE,
+        ),
+    )
+
+    result = bridge_naumann_observations((observation,), mapping=mapping)[0]
+
+    assert result.experiment_observation.observed_target == 0.91
+    assert result.experiment_observation.duration_hours is None
+    assert result.experiment_observation.equipment_cost is None
+    assert result.provenance.resource_review_statement is None
+    assert result.provenance.resource_evidence_reference is None
 
 
 def test_bridge_never_aggregates_multiple_source_points() -> None:
