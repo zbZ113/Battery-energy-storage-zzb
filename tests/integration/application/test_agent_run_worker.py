@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import Field
 from sqlalchemy import delete, select
 
@@ -362,6 +363,83 @@ def test_worker_can_advance_exactly_one_professional_agent_step_at_a_time(
     ]
     assert second.status is AgentRunStatus.COMPLETED
     assert second.completed_step_ids == ("features", "predict")
+
+
+def test_langgraph_runner_routes_each_role_but_keeps_worker_as_execution_boundary(
+    tmp_path: Path,
+) -> None:
+    from quanxin_life.application.agent_graph import AgentGraphRunner
+
+    run_service, member, session_factory, run_id, tools = _setup(tmp_path)
+    worker = _worker(run_service, session_factory, tools)
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+    runner = AgentGraphRunner(worker=worker, checkpointer=InMemorySaver())
+
+    completed = runner.execute(run_id=run_id, plan_hash=plan_hash)
+    repeated = runner.execute(run_id=run_id, plan_hash=plan_hash)
+
+    assert completed.status is AgentRunStatus.COMPLETED
+    assert repeated == completed
+    assert [name for name, _ in tools.calls] == [
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+        StandardToolName.PREDICT_CYCLE_LIFE.value,
+    ]
+
+
+def test_langgraph_runner_exits_for_approval_and_resumes_the_same_thread(
+    tmp_path: Path,
+) -> None:
+    from quanxin_life.application.agent_graph import AgentGraphRunner
+
+    run_service, member, session_factory, run_id, tools = _setup(tmp_path, approval=True)
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+    runner = AgentGraphRunner(
+        worker=_worker(run_service, session_factory, tools),
+        checkpointer=InMemorySaver(),
+    )
+
+    paused = runner.execute(run_id=run_id, plan_hash=plan_hash)
+
+    assert paused.status is AgentRunStatus.AWAITING_APPROVAL
+    assert tools.calls == []
+    with session_factory() as session:
+        from quanxin_life.persistence.models import ApprovalRequestRow
+
+        approval = session.scalar(
+            select(ApprovalRequestRow).where(ApprovalRequestRow.run_id == run_id)
+        )
+        assert approval is not None
+        approval_id = approval.id
+    run_service.approve_run(
+        member,
+        run_id,
+        approval_id=approval_id,
+        reason="approved graph resume",
+        now=NOW,
+    )
+
+    completed = runner.execute(run_id=run_id, plan_hash=plan_hash)
+
+    assert completed.status is AgentRunStatus.COMPLETED
+    assert len(tools.calls) == 2
+
+
+def test_langgraph_runner_stops_on_authoritative_failed_run(tmp_path: Path) -> None:
+    from quanxin_life.application.agent_graph import AgentGraphRunner
+
+    run_service, member, session_factory, run_id, tools = _setup(
+        tmp_path,
+        fail_feature_attempts=1,
+    )
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+
+    failed = AgentGraphRunner(
+        worker=_worker(run_service, session_factory, tools),
+        checkpointer=InMemorySaver(),
+    ).execute(run_id=run_id, plan_hash=plan_hash)
+
+    assert failed.status is AgentRunStatus.FAILED
+    assert len(tools.calls) == 1
 
 
 def test_worker_rejects_a_stale_queue_plan_hash_before_tool_execution(tmp_path: Path) -> None:

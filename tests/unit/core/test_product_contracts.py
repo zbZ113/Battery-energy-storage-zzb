@@ -146,6 +146,21 @@ def test_agent_plan_builds_and_verifies_a_canonical_hash() -> None:
         AgentPlan.model_validate(payload)
 
 
+def test_agent_plan_step_id_is_a_short_machine_identifier() -> None:
+    with pytest.raises(ValidationError, match="step_id"):
+        AgentPlanStep(
+            step_id="请把完整用户提示写进时间线",
+            role=AgentRole.DATA_QUALITY,
+            tool_name="validate_battery_data",
+        )
+    with pytest.raises(ValidationError, match="step_id"):
+        AgentPlanStep(
+            step_id="step-" + "x" * 100,
+            role=AgentRole.DATA_QUALITY,
+            tool_name="validate_battery_data",
+        )
+
+
 def test_agent_plan_rejects_forward_dependencies_and_more_than_twelve_steps() -> None:
     first = AgentPlanStep(
         step_id="first",

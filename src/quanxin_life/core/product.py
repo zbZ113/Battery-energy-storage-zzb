@@ -115,7 +115,11 @@ class AgentIntent(ContractModel):
 class AgentPlanStep(ContractModel):
     """One planner-produced request that still requires deterministic validation."""
 
-    step_id: str = Field(min_length=1)
+    step_id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z][A-Za-z0-9_-]*$",
+    )
     role: AgentRole
     tool_name: str = Field(min_length=1)
     depends_on: tuple[str, ...] = ()

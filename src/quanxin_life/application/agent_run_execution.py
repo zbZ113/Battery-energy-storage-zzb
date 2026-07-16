@@ -193,6 +193,18 @@ class AgentRunExecutionWorker:
             self._complete_run(run_id, plan_hash)
         return self._state(run_id)
 
+    def authoritative_snapshot(
+        self,
+        *,
+        run_id: str,
+        plan_hash: str,
+    ) -> tuple[AgentPlan, AgentRunState]:
+        """Load the business-database plan and state used to repair graph checkpoints."""
+
+        _validate_identity(run_id, plan_hash)
+        _, plan, _, _ = self._load_run(run_id, plan_hash)
+        return plan, self._state(run_id)
+
     def _load_run(
         self,
         run_id: str,

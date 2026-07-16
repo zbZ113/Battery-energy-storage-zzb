@@ -17,6 +17,7 @@ agents = [
   "langgraph>=1.2.9,<2",
   "langchain-core>=1.2.22,<2",
   "langgraph-checkpoint>=4.1.1,<5",
+  "langgraph-checkpoint-postgres>=3.1,<4",
   "langgraph-sdk>=0.3.15,<0.5",
 ]
 auth = ["argon2-cffi>=25.1,<26"]
