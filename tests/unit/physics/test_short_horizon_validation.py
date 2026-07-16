@@ -76,6 +76,7 @@ class _FakeParameterValues:
         values = {
             "Lower voltage cut-off [V]": 2.5,
             "Upper voltage cut-off [V]": 4.2,
+            "Nominal cell capacity [A.h]": 2.3,
         }
         return values[key]
 
@@ -101,6 +102,13 @@ class _FakeSolution:
             "SoC": (0.2, 0.4),
         }
         return SimpleNamespace(entries=values[key])
+
+
+class _FakeSolutionWithoutSoc(_FakeSolution):
+    def __getitem__(self, key: str) -> Any:
+        if key in {"SoC", "State of Charge", "State of Charge [-]"}:
+            raise KeyError(key)
+        return super().__getitem__(key)
 
 
 class _FakeSimulation:
@@ -188,3 +196,27 @@ def test_completed_result_records_exact_programme_and_voltage_cutoffs() -> None:
     assert result.configuration["experiment_steps"] == fake_pybamm.last_experiment.steps
     assert result.configuration["lower_voltage_cutoff_volts"] == "2.5"
     assert result.configuration["upper_voltage_cutoff_volts"] == "4.2"
+
+
+def test_missing_solver_soc_uses_audited_coulomb_counting_fallback() -> None:
+    class _SimulationWithoutSoc(_FakeSimulation):
+        def solve(self, *, initial_soc: float) -> _FakeSolutionWithoutSoc:
+            assert 0.0 <= initial_soc <= 1.0
+            return _FakeSolutionWithoutSoc()
+
+    class _PyBaMMWithoutSoc(_FakePyBaMM):
+        def Simulation(self, *args: object, **kwargs: object) -> _SimulationWithoutSoc:
+            return _SimulationWithoutSoc(*args, **kwargs)
+
+    result = validate_short_horizon(
+        _request(initial_soc=0.5, repeat_count=1),
+        pybamm_loader=lambda: _PyBaMMWithoutSoc(),
+    )
+
+    assert result.status is PhysicsValidationStatus.COMPLETED
+    assert result.configuration["soc_source"] == (
+        "coulomb_counting_from_current_and_nominal_capacity"
+    )
+    assert result.configuration["nominal_capacity_ah"] == "2.3"
+    assert result.samples[0].soc == pytest.approx(0.5)
+    assert result.samples[-1].soc == pytest.approx(0.5)

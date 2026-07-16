@@ -79,7 +79,8 @@ class PhysicsSample(_PhysicsModel):
     time_hours: float = Field(ge=0.0, allow_inf_nan=False)
     voltage_volts: float = Field(allow_inf_nan=False)
     current_amperes: float = Field(allow_inf_nan=False)
-    discharge_capacity_ah: float = Field(ge=0.0, allow_inf_nan=False)
+    # PyBaMM reports net discharged capacity; charging can make this value negative.
+    discharge_capacity_ah: float = Field(allow_inf_nan=False)
     soc: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
 
 
@@ -166,6 +167,11 @@ def validate_short_horizon(
             },
             check_already_exists=False,
         )
+        nominal_capacity_ah = float(
+            parameter_values["Nominal cell capacity [A.h]"]
+        )
+        if not math.isfinite(nominal_capacity_ah) or nominal_capacity_ah <= 0.0:
+            raise ValueError("PyBaMM nominal cell capacity must be finite and positive")
         model = pybamm_module.lithium_ion.SPMe()
         experiment = pybamm_module.Experiment(program.steps)
         simulation = pybamm_module.Simulation(
@@ -174,7 +180,11 @@ def validate_short_horizon(
             experiment=experiment,
         )
         solution = simulation.solve(initial_soc=request.initial_soc)
-        samples = _extract_samples(solution)
+        samples, soc_source = _extract_samples(
+            solution,
+            initial_soc=request.initial_soc,
+            nominal_capacity_ah=nominal_capacity_ah,
+        )
         termination_reason = _normalise_termination_reason(solution)
     except Exception as exc:  # External scientific dependency failures remain explicit.
         return _degraded_result(
@@ -195,7 +205,12 @@ def validate_short_horizon(
         termination_reason=termination_reason,
         boundary_risks=boundary_risks,
         pybamm_version=_pybamm_version(pybamm_module),
-        configuration=_configuration(request, program=program),
+        configuration=_configuration(
+            request,
+            program=program,
+            soc_source=soc_source,
+            nominal_capacity_ah=nominal_capacity_ah,
+        ),
     )
 
 
@@ -267,12 +282,30 @@ def _discharge_step(c_rate: float, duration_hours: float, lower_voltage: float) 
     )
 
 
-def _extract_samples(solution: Any) -> tuple[PhysicsSample, ...]:
+def _extract_samples(
+    solution: Any,
+    *,
+    initial_soc: float,
+    nominal_capacity_ah: float,
+) -> tuple[tuple[PhysicsSample, ...], str]:
     time_hours = _read_solution_series(solution, ("Time [h]",))
     voltage_volts = _read_solution_series(solution, ("Terminal voltage [V]", "Voltage [V]"))
     current_amperes = _read_solution_series(solution, ("Current [A]",))
     discharge_capacity_ah = _read_solution_series(solution, ("Discharge capacity [A.h]",))
-    soc = _read_solution_series(solution, ("SoC", "State of Charge", "State of Charge [-]"))
+    try:
+        soc = _read_solution_series(
+            solution,
+            ("SoC", "State of Charge", "State of Charge [-]"),
+        )
+        soc_source = "pybamm_solution_variable"
+    except KeyError:
+        soc = _derive_soc_by_coulomb_counting(
+            time_hours=time_hours,
+            current_amperes=current_amperes,
+            initial_soc=initial_soc,
+            nominal_capacity_ah=nominal_capacity_ah,
+        )
+        soc_source = "coulomb_counting_from_current_and_nominal_capacity"
 
     sample_count = len(time_hours)
     if sample_count == 0:
@@ -283,7 +316,7 @@ def _extract_samples(solution: Any) -> tuple[PhysicsSample, ...]:
     ):
         raise ValueError("PyBaMM output series must have matching lengths")
 
-    return tuple(
+    samples = tuple(
         PhysicsSample(
             time_hours=time_hours[index],
             voltage_volts=voltage_volts[index],
@@ -293,6 +326,43 @@ def _extract_samples(solution: Any) -> tuple[PhysicsSample, ...]:
         )
         for index in range(sample_count)
     )
+    return samples, soc_source
+
+
+def _derive_soc_by_coulomb_counting(
+    *,
+    time_hours: Sequence[float],
+    current_amperes: Sequence[float],
+    initial_soc: float,
+    nominal_capacity_ah: float,
+) -> tuple[float, ...]:
+    """Recover short-horizon SOC when the released model omits an SOC variable.
+
+    PyBaMM uses positive current for discharge. Trapezoidal integration therefore
+    subtracts discharged ampere-hours from the explicitly supplied initial SOC.
+    This is state reconstruction for the solved programme, not a lifetime estimate.
+    """
+
+    if len(time_hours) != len(current_amperes) or not time_hours:
+        raise ValueError("SOC reconstruction requires aligned time and current series")
+    if not math.isfinite(nominal_capacity_ah) or nominal_capacity_ah <= 0.0:
+        raise ValueError("SOC reconstruction requires positive nominal capacity")
+    reconstructed = [initial_soc]
+    tolerance = 1e-9
+    for index in range(1, len(time_hours)):
+        duration_hours = time_hours[index] - time_hours[index - 1]
+        if not math.isfinite(duration_hours) or duration_hours < 0.0:
+            raise ValueError("PyBaMM time series must be finite and nondecreasing")
+        mean_current = 0.5 * (
+            current_amperes[index - 1] + current_amperes[index]
+        )
+        next_soc = reconstructed[-1] - (
+            mean_current * duration_hours / nominal_capacity_ah
+        )
+        if not math.isfinite(next_soc) or not -tolerance <= next_soc <= 1.0 + tolerance:
+            raise ValueError("reconstructed SOC left the physical [0, 1] range")
+        reconstructed.append(min(max(next_soc, 0.0), 1.0))
+    return tuple(reconstructed)
 
 
 def _read_solution_series(solution: Any, variable_names: Sequence[str]) -> tuple[float, ...]:
@@ -353,6 +423,8 @@ def _configuration(
     *,
     program: _ExperimentProgram | None = None,
     program_state: str | None = None,
+    soc_source: str | None = None,
+    nominal_capacity_ah: float | None = None,
 ) -> dict[str, str | tuple[str, ...]]:
     configuration: dict[str, str | tuple[str, ...]] = {
         "temperature_unit": "celsius",
@@ -371,6 +443,10 @@ def _configuration(
                 "upper_voltage_cutoff_volts": f"{program.upper_voltage_cutoff_volts:.6g}",
             }
         )
+        if soc_source is not None:
+            configuration["soc_source"] = soc_source
+        if nominal_capacity_ah is not None:
+            configuration["nominal_capacity_ah"] = f"{nominal_capacity_ah:.12g}"
     else:
         configuration.update(
             {
