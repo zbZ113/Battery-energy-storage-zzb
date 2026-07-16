@@ -600,10 +600,14 @@ class FeishuEventReceipt(Base):
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    claim_token: Mapped[str | None] = mapped_column(String(64))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        UTCDateTime(), default=utc_now, nullable=False
     )
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    failed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 __all__ = ["Base", "User", "utc_now"]
