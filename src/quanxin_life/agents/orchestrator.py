@@ -42,6 +42,7 @@ ROLE_TOOL_ALLOWLIST: dict[AgentRole, frozenset[StandardToolName]] = {
     AgentRole.LIFETIME: frozenset(
         {
             StandardToolName.PREDICT_CYCLE_LIFE,
+            StandardToolName.CONVERT_SCENARIO_LIFETIME,
             StandardToolName.PREDICT_SOH_TRAJECTORY,
             StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
             StandardToolName.ADAPT_TO_TARGET_DOMAIN,

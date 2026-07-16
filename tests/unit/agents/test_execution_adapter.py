@@ -40,6 +40,10 @@ class _ContextResolver:
         self.context_calls.append((run_id, project_id, reference))
         if reference == "context.calibration_cohort_id":
             return "cohort-reviewed-v1"
+        if reference == "context.operation_policy_version":
+            return "one-efc-daily-v1"
+        if reference == "context.equivalent_cycles_per_day":
+            return 1.0
         raise KeyError(reference)
 
 
@@ -105,6 +109,18 @@ def test_compile_step_resolves_only_intent_context_and_prior_result_references()
             input_references={"calibration_cohort_id": "context.calibration_cohort_id"},
             failure_policy=AgentFailurePolicy.STOP,
         ),
+        AgentPlanStep(
+            step_id="scenario-years",
+            role=AgentRole.LIFETIME,
+            tool_name=StandardToolName.CONVERT_SCENARIO_LIFETIME.value,
+            depends_on=("predict",),
+            input_references={
+                "lifetime_result_id": "step.predict.result_id",
+                "operation_policy_version": "context.operation_policy_version",
+                "equivalent_cycles_per_day": "context.equivalent_cycles_per_day",
+            },
+            failure_policy=AgentFailurePolicy.STOP,
+        ),
     )
     plan = AgentPlan.build(
         plan_version="test-plan-v1",
@@ -140,15 +156,31 @@ def test_compile_step_resolves_only_intent_context_and_prior_result_references()
         context_resolver=resolver,
         completed_results={},
     )
+    prediction_result = _result(StandardToolName.PREDICT_CYCLE_LIFE)
+    scenario_step = compile_agent_step(
+        run_id=run_id,
+        intent=intent,
+        plan=plan,
+        step_id="scenario-years",
+        context_resolver=resolver,
+        completed_results={"predict": prediction_result},
+    )
 
     assert dataset_step.input_value == {"record_batch_id": "verified-record-batch-v1"}
     assert result_step.input_value == {"upstream_result_id": feature_result.result_id}
     assert context_step.input_value == {"calibration_cohort_id": "cohort-reviewed-v1"}
+    assert scenario_step.input_value == {
+        "lifetime_result_id": prediction_result.result_id,
+        "operation_policy_version": "one-efc-daily-v1",
+        "equivalent_cycles_per_day": 1.0,
+    }
     assert resolver.dataset_calls == [
         (run_id, intent.project_id, intent.dataset_ids[0]),
     ]
     assert resolver.context_calls == [
         (run_id, intent.project_id, "context.calibration_cohort_id"),
+        (run_id, intent.project_id, "context.operation_policy_version"),
+        (run_id, intent.project_id, "context.equivalent_cycles_per_day"),
     ]
 
 

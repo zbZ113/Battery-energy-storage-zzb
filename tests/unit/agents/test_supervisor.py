@@ -171,6 +171,67 @@ def test_supervisor_rejects_literal_numeric_tool_input_and_uses_fallback() -> No
     assert result.warnings == ("LLM_PLANNING_FALLBACK:AgentPlanPolicyError",)
 
 
+def test_supervisor_accepts_scenario_conversion_only_from_trusted_context() -> None:
+    step = {
+        "step_id": "scenario-years",
+        "role": "lifetime",
+        "tool_name": "convert_scenario_lifetime",
+        "input_references": {
+            "lifetime_result_id": "context.prediction_result_id",
+            "operation_policy_version": "context.operation_policy_version",
+            "equivalent_cycles_per_day": "context.equivalent_cycles_per_day",
+        },
+        "failure_policy": "STOP",
+    }
+    gateway = _FakeGateway(
+        [
+            _response(LlmTaskPurpose.INTENT, {"requested_outputs": ["scenario_years"]}),
+            _response(LlmTaskPurpose.PLAN, {"steps": [step]}),
+        ]
+    )
+
+    request = _planning_request().model_copy(
+        update={"requested_outputs": ("scenario_years",)}
+    )
+    result = SupervisorPlanner(gateway=gateway, clock=lambda: NOW).plan(
+        request, available_tools=_available_tools()
+    )
+
+    assert result.plan.planning_mode is AgentPlanningMode.LLM
+    assert result.plan.steps[0].tool_name == "convert_scenario_lifetime"
+    assert result.plan.steps[0].role is AgentRole.LIFETIME
+
+
+def test_supervisor_rejects_literal_scenario_policy_number() -> None:
+    step = {
+        "step_id": "scenario-years",
+        "role": "lifetime",
+        "tool_name": "convert_scenario_lifetime",
+        "input_references": {
+            "lifetime_result_id": "context.prediction_result_id",
+            "operation_policy_version": "context.operation_policy_version",
+            "equivalent_cycles_per_day": "1.0",
+        },
+        "failure_policy": "STOP",
+    }
+    gateway = _FakeGateway(
+        [
+            _response(LlmTaskPurpose.INTENT, {"requested_outputs": ["scenario_years"]}),
+            _response(LlmTaskPurpose.PLAN, {"steps": [step]}),
+        ]
+    )
+    request = _planning_request().model_copy(
+        update={"requested_outputs": ("scenario_years",)}
+    )
+
+    result = SupervisorPlanner(gateway=gateway, clock=lambda: NOW).plan(
+        request, available_tools=_available_tools()
+    )
+
+    assert result.plan.planning_mode is AgentPlanningMode.FIXED_FALLBACK
+    assert result.warnings == ("LLM_PLANNING_FALLBACK:AgentPlanPolicyError",)
+
+
 def test_supervisor_rejects_step_reference_not_declared_as_dependency() -> None:
     steps = [
         {

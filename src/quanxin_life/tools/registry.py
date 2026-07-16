@@ -26,6 +26,7 @@ class StandardToolName(StrEnum):
     EXTRACT_EARLY_CYCLE_FEATURES = "extract_early_cycle_features"
     INGEST_NEWLY_OBSERVED_SOH = "ingest_newly_observed_soh"
     PREDICT_CYCLE_LIFE = "predict_cycle_life"
+    CONVERT_SCENARIO_LIFETIME = "convert_scenario_lifetime"
     PREDICT_SOH_TRAJECTORY = "predict_soh_trajectory"
     CALIBRATE_PREDICTION_INTERVAL = "calibrate_prediction_interval"
     ADAPT_TO_TARGET_DOMAIN = "adapt_to_target_domain"

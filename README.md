@@ -157,7 +157,8 @@ MATR 按需求暂时只保留接口，不下载大体量原始数据。HUST 官�
 - 受治理 XGBoost/Variance 制品注册与安全加载边界。
 - `FileSystemVerifiedEarlyCycleBatchStore` 与 `JsonlAuditLedger` 提供重启可恢复、读取时复验的本地持久化。
 - Naumann-GP 主动试验、PyBaMM 短时核验和批次决策组件。
-- 十四个标准领域工具的显式装配、角色白名单、共享审计账本与 Markdown 报告。
+- 十五个标准领域工具的显式装配、角色白名单、共享审计账本与 Markdown 报告；
+  其中场景年份只能由已审计的循环寿命结果和明确运行策略换算，不能表述为长期实测寿命。
 - Canonical CSV 到寿命决策报告的确定性工作流代码与 FastAPI 传输层。
 - HTTP-only Streamlit 工作台及可选 MCP Host 工厂。
 - pytest、Ruff、mypy、compileall 与 GitHub Actions 门禁配置。

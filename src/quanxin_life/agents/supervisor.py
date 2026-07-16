@@ -40,6 +40,23 @@ PLANNABLE_INPUT_MODES: dict[StandardToolName, tuple[frozenset[str], ...]] = {
     ),
     StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES: (frozenset({"record_batch_id"}),),
     StandardToolName.PREDICT_CYCLE_LIFE: (frozenset({"upstream_result_id"}),),
+    StandardToolName.CONVERT_SCENARIO_LIFETIME: (
+        frozenset(
+            {
+                "lifetime_result_id",
+                "operation_policy_version",
+                "equivalent_cycles_per_day",
+            }
+        ),
+        frozenset(
+            {
+                "lifetime_result_id",
+                "operation_policy_version",
+                "equivalent_cycles_per_day",
+                "days_per_year",
+            }
+        ),
+    ),
     StandardToolName.CALIBRATE_PREDICTION_INTERVAL: (
         frozenset({"calibration_cohort_id"}),
         frozenset({"prediction_result_id", "calibration_result_id"}),
@@ -62,6 +79,10 @@ ALLOWED_CONTEXT_REFERENCES: dict[str, frozenset[str]] = {
     "provenance": frozenset({"context.provenance"}),
     "validated_at": frozenset({"context.validated_at"}),
     "upstream_result_id": frozenset({"context.early_feature_result_id"}),
+    "lifetime_result_id": frozenset({"context.prediction_result_id"}),
+    "operation_policy_version": frozenset({"context.operation_policy_version"}),
+    "equivalent_cycles_per_day": frozenset({"context.equivalent_cycles_per_day"}),
+    "days_per_year": frozenset({"context.days_per_year"}),
     "calibration_cohort_id": frozenset({"context.calibration_cohort_id"}),
     "prediction_result_id": frozenset({"context.prediction_result_id"}),
     "calibration_result_id": frozenset({"context.calibration_result_id"}),
@@ -74,6 +95,7 @@ ALLOWED_CONTEXT_REFERENCES: dict[str, frozenset[str]] = {
 EXPECTED_RESULT_SOURCE_TOOLS: dict[str, frozenset[StandardToolName]] = {
     "upstream_result_id": frozenset({StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES}),
     "prediction_result_id": frozenset({StandardToolName.PREDICT_CYCLE_LIFE}),
+    "lifetime_result_id": frozenset({StandardToolName.PREDICT_CYCLE_LIFE}),
     "calibration_result_id": frozenset(
         {StandardToolName.CALIBRATE_PREDICTION_INTERVAL}
     ),

@@ -63,6 +63,14 @@ from quanxin_life.tools.registry import (
     ToolSchema,
     UnknownToolError,
 )
+from quanxin_life.tools.scenario_lifetime import (
+    SCENARIO_CONVERSION_WARNING,
+    SCENARIO_LIFETIME_ARTIFACT_TYPE,
+    SCENARIO_LIFETIME_TOOL_VERSION,
+    ScenarioLifetimeToolInput,
+    execute_scenario_lifetime_tool,
+    register_scenario_lifetime_tool,
+)
 from quanxin_life.tools.split_audit import (
     SPLIT_AUDIT_MODEL_VERSION,
     SPLIT_AUDIT_TOOL_VERSION,
@@ -86,6 +94,9 @@ __all__ = [
     "EXPERIMENT_RECOMMENDATION_EVIDENCE_TYPE",
     "NEXT_EXPERIMENT_RECOMMENDATION_TOOL_VERSION",
     "PHYSICS_CHECK_TOOL_VERSION",
+    "SCENARIO_CONVERSION_WARNING",
+    "SCENARIO_LIFETIME_ARTIFACT_TYPE",
+    "SCENARIO_LIFETIME_TOOL_VERSION",
     "SPLIT_AUDIT_MODEL_VERSION",
     "SPLIT_AUDIT_TOOL_VERSION",
     "TARGET_DOMAIN_ADAPTATION_TOOL_VERSION",
@@ -105,6 +116,7 @@ __all__ = [
     "RecommendNextExperimentToolInput",
     "RegisteredTool",
     "RetrieveBatteryEvidenceToolInput",
+    "ScenarioLifetimeToolInput",
     "StandardToolName",
     "ToolAuthorizationError",
     "ToolContractError",
@@ -124,6 +136,7 @@ __all__ = [
     "execute_check_operating_condition_tool",
     "execute_recommend_next_experiment_tool",
     "execute_retrieve_battery_evidence_tool",
+    "execute_scenario_lifetime_tool",
     "execute_validate_battery_data_tool",
     "load_optional_mcp_sdk",
     "register_adapt_to_target_domain_tool",
@@ -132,6 +145,7 @@ __all__ = [
     "register_check_operating_condition_tool",
     "register_recommend_next_experiment_tool",
     "register_retrieve_battery_evidence_tool",
+    "register_scenario_lifetime_tool",
     "register_validate_battery_data_tool",
     "run_mcp_host",
 ]

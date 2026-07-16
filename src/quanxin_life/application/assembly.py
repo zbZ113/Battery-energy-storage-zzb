@@ -51,6 +51,7 @@ from quanxin_life.tools.physics_check import (
     register_check_operating_condition_tool,
 )
 from quanxin_life.tools.registry import ToolRegistry
+from quanxin_life.tools.scenario_lifetime import register_scenario_lifetime_tool
 from quanxin_life.tools.split_audit import register_audit_dataset_split_tool
 from quanxin_life.tools.target_domain_adaptation import (
     VerifiedAdaptationCohortResolver,
@@ -61,7 +62,7 @@ from quanxin_life.tools.trajectory_prediction import register_predict_soh_trajec
 
 @dataclass(frozen=True, slots=True)
 class CompetitionToolDependencies:
-    """All caller-owned dependencies needed by the fourteen competition tools."""
+    """All caller-owned dependencies needed by the competition tools."""
 
     audit_ledger: AuditLedger
     early_cycle_batch_resolver: VerifiedEarlyCycleBatchResolver
@@ -121,6 +122,10 @@ def create_competition_tool_registry(
         predictor=dependencies.cycle_life_predictor,
         audit_ledger=dependencies.audit_ledger,
         model_artifact_registry=dependencies.model_artifact_registry,
+    )
+    register_scenario_lifetime_tool(
+        registry,
+        audit_ledger=dependencies.audit_ledger,
     )
     register_predict_soh_trajectory_tool(
         registry,
