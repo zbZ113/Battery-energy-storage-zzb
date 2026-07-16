@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
 
+from quanxin_life.application.agent_runs import AgentRunRecord
+from quanxin_life.core import (
+    AgentDispatchStatus,
+    AgentFailurePolicy,
+    AgentIntent,
+    AgentPlan,
+    AgentPlanningMode,
+    AgentPlanStep,
+    AgentRole,
+    AgentRunStatus,
+)
 from workbench.client import (
     ApiClient,
     ApiHttpError,
@@ -13,6 +25,11 @@ from workbench.client import (
     HttpResponse,
     WorkbenchConfig,
 )
+
+RUN_ID = "22222222-2222-4222-8222-222222222222"
+OTHER_RUN_ID = "33333333-3333-4333-8333-333333333333"
+RESULT_ID = "44444444-4444-4444-8444-444444444444"
+APPROVAL_ID = "55555555-5555-4555-8555-555555555555"
 
 
 class AuthRecordingTransport:
@@ -52,6 +69,60 @@ class RecordingTransport:
         return self._responses.pop(0)
 
 
+def _agent_run_response(
+    *,
+    status: str = "RUNNING",
+    planning_mode: str = "FIXED_FALLBACK",
+    dispatch_status: str = "DISPATCHED",
+    run_id: str = RUN_ID,
+) -> dict[str, object]:
+    created_at = datetime(2026, 7, 16, tzinfo=UTC)
+    intent = AgentIntent(
+        intent_id="11111111-1111-4111-8111-111111111111",
+        project_id="project-1",
+        goal="分析电芯寿命风险",
+        dataset_ids=("dataset-1",),
+        requested_outputs=("cycle_life",),
+        created_at=created_at,
+    )
+    mode = AgentPlanningMode(planning_mode)
+    plan = AgentPlan.build(
+        plan_version="v1",
+        intent_id=intent.intent_id,
+        steps=(
+            AgentPlanStep(
+                step_id="validate",
+                role=AgentRole.DATA_QUALITY,
+                tool_name="validate_battery_data",
+                input_references={},
+                requires_approval=False,
+                failure_policy=AgentFailurePolicy.STOP,
+            ),
+        ),
+        planning_mode=mode,
+        created_at=created_at,
+    )
+    record = AgentRunRecord(
+        run_id=run_id,
+        project_id="project-1",
+        created_by_user_id="user-1",
+        status=AgentRunStatus(status),
+        planning_mode=mode,
+        intent=intent,
+        plan=plan,
+        dispatch_status=AgentDispatchStatus(dispatch_status),
+        dispatch_task_id="task-1",
+        created_at=created_at,
+        updated_at=datetime(2026, 7, 16, 0, 0, 1, tzinfo=UTC),
+        completed_at=None,
+    )
+    return record.model_dump(mode="json")
+
+
+def test_agent_run_fixture_matches_the_real_backend_contract() -> None:
+    AgentRunRecord.model_validate(_agent_run_response())
+
+
 def test_health_and_tool_discovery_use_only_http_api() -> None:
     transport = RecordingTransport(
         [
@@ -88,6 +159,184 @@ def test_health_and_tool_discovery_use_only_http_api() -> None:
     assert transport.calls == [
         ("GET", "http://127.0.0.1:8000/health", None),
         ("GET", "http://127.0.0.1:8000/v1/tools", None),
+    ]
+
+
+def test_agent_run_creation_sends_origin_and_idempotency_key() -> None:
+    transport = RecordingTransport([HttpResponse(202, _agent_run_response())])
+    client = ApiClient(
+        "https://api.example.test",
+        trusted_origin="https://app.example.test",
+        transport=transport,
+    )
+
+    run = client.create_agent_run(
+        project_id=" project-1 ",
+        user_goal=" 分析电芯寿命风险 ",
+        dataset_ids=(" dataset-1 ",),
+        requested_outputs=(" cycle_life ",),
+        idempotency_key=" workbench-run-1 ",
+    )
+
+    assert run.run_id == RUN_ID
+    assert run.status == "RUNNING"
+    assert run.intent["goal"] == "分析电芯寿命风险"
+    assert run.plan["steps"][0]["tool_name"] == "validate_battery_data"
+    assert transport.calls == [
+        (
+            "POST",
+            "https://api.example.test/v1/agent/runs",
+            {
+                "project_id": "project-1",
+                "user_goal": "分析电芯寿命风险",
+                "dataset_ids": ["dataset-1"],
+                "requested_outputs": ["cycle_life"],
+            },
+            {
+                "Origin": "https://app.example.test",
+                "Idempotency-Key": "workbench-run-1",
+            },
+        )
+    ]
+
+
+def test_agent_run_read_and_actions_use_run_scoped_endpoints() -> None:
+    transport = RecordingTransport(
+        [
+            HttpResponse(200, _agent_run_response()),
+            HttpResponse(200, _agent_run_response(status="AWAITING_APPROVAL")),
+            HttpResponse(200, _agent_run_response(status="CANCELLED")),
+            HttpResponse(200, _agent_run_response(status="CANCELLED")),
+        ]
+    )
+    client = ApiClient(
+        "http://localhost:8000",
+        trusted_origin="http://localhost:8501",
+        transport=transport,
+    )
+
+    assert client.get_agent_run(RUN_ID).run_id == RUN_ID
+    assert client.approve_agent_run(
+        RUN_ID, approval_id=APPROVAL_ID, reason="证据已核对"
+    ).status == "AWAITING_APPROVAL"
+    assert client.reject_agent_run(
+        RUN_ID, approval_id=APPROVAL_ID, reason=None
+    ).status == "CANCELLED"
+    assert client.cancel_agent_run(RUN_ID).status == "CANCELLED"
+
+    assert transport.calls == [
+        ("GET", f"http://localhost:8000/v1/agent/runs/{RUN_ID}", None),
+        (
+            "POST",
+            f"http://localhost:8000/v1/agent/runs/{RUN_ID}/approve",
+            {"approval_id": APPROVAL_ID, "reason": "证据已核对"},
+            {"Origin": "http://localhost:8501"},
+        ),
+        (
+            "POST",
+            f"http://localhost:8000/v1/agent/runs/{RUN_ID}/reject",
+            {"approval_id": APPROVAL_ID, "reason": None},
+            {"Origin": "http://localhost:8501"},
+        ),
+        (
+            "POST",
+            f"http://localhost:8000/v1/agent/runs/{RUN_ID}/cancel",
+            None,
+            {"Origin": "http://localhost:8501"},
+        ),
+    ]
+
+
+def test_agent_result_is_only_read_through_its_run_scope() -> None:
+    signed_payload = {
+        "result_id": RESULT_ID,
+        "tool_name": "predict_cycle_life",
+        "values": {"server_signed": True},
+    }
+    transport = RecordingTransport([HttpResponse(200, signed_payload)])
+    client = ApiClient(
+        "http://localhost:8000",
+        trusted_origin="http://localhost:8501",
+        transport=transport,
+    )
+
+    result = client.get_agent_run_result(RUN_ID, RESULT_ID)
+
+    assert result == signed_payload
+    assert transport.calls == [
+        (
+            "GET",
+            f"http://localhost:8000/v1/agent/runs/{RUN_ID}/results/{RESULT_ID}",
+            None,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("status", "done"),
+        ("planning_mode", "DETERMINISTIC_FALLBACK"),
+        ("dispatch_status", "sent"),
+    ],
+)
+def test_agent_run_rejects_unknown_server_enums(
+    field: str,
+    invalid_value: str,
+) -> None:
+    response = _agent_run_response()
+    response[field] = invalid_value
+    client = ApiClient(
+        "http://localhost:8000",
+        trusted_origin="http://localhost:8501",
+        transport=RecordingTransport([HttpResponse(200, response)]),
+    )
+
+    with pytest.raises(ApiResponseError, match=field):
+        client.get_agent_run(RUN_ID)
+
+
+def test_agent_run_actions_reject_a_response_for_another_run() -> None:
+    transport = RecordingTransport(
+        [HttpResponse(200, _agent_run_response(run_id=OTHER_RUN_ID)) for _ in range(4)]
+    )
+    client = ApiClient(
+        "http://localhost:8000",
+        trusted_origin="http://localhost:8501",
+        transport=transport,
+    )
+
+    with pytest.raises(ApiResponseError, match="run_id does not match"):
+        client.get_agent_run(RUN_ID)
+    with pytest.raises(ApiResponseError, match="run_id does not match"):
+        client.approve_agent_run(RUN_ID, approval_id=APPROVAL_ID, reason=None)
+    with pytest.raises(ApiResponseError, match="run_id does not match"):
+        client.reject_agent_run(RUN_ID, approval_id=APPROVAL_ID, reason=None)
+    with pytest.raises(ApiResponseError, match="run_id does not match"):
+        client.cancel_agent_run(RUN_ID)
+
+
+def test_trusted_origin_cannot_be_overridden_by_additional_headers() -> None:
+    transport = RecordingTransport([HttpResponse(204, None)])
+    client = ApiClient(
+        "https://api.example.test",
+        trusted_origin="https://app.example.test",
+        transport=transport,
+    )
+
+    client._request(
+        "POST",
+        "/test-only",
+        headers={"Origin": "https://attacker.example.test", "X-Test": "kept"},
+    )
+
+    assert transport.calls == [
+        (
+            "POST",
+            "https://api.example.test/test-only",
+            None,
+            {"Origin": "https://app.example.test", "X-Test": "kept"},
+        )
     ]
 
 

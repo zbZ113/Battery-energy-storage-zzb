@@ -6,7 +6,13 @@ from typing import Any
 
 import pytest
 
-from workbench.client import AuthPrincipal, AuthSession, WorkbenchConfig
+from workbench.client import (
+    AgentRunSnapshot,
+    AuthPrincipal,
+    AuthSession,
+    WorkbenchConfig,
+    WorkbenchError,
+)
 from workbench.presenters import build_lifetime_section
 from workbench.streamlit_app import (
     NAVIGATION_PAGES,
@@ -24,6 +30,9 @@ CONFIG = WorkbenchConfig.from_mapping(
         "QUANXIN_TRUSTED_ORIGIN": "http://localhost:8501",
     }
 )
+RUN_ID = "22222222-2222-4222-8222-222222222222"
+RESULT_ID = "44444444-4444-4444-8444-444444444444"
+APPROVAL_ID = "55555555-5555-4555-8555-555555555555"
 
 
 class RerunRequested(RuntimeError):
@@ -34,6 +43,12 @@ class RerunRequested(RuntimeError):
 class FakeClient:
     principal: AuthPrincipal | None = None
     logout_calls: int = 0
+    created_runs: list[dict[str, object]] | None = None
+    refreshed_runs: list[str] | None = None
+    approval_actions: list[tuple[str, str, str, str | None]] | None = None
+    cancelled_runs: list[str] | None = None
+    scoped_result_reads: list[tuple[str, str]] | None = None
+    create_failures_remaining: int = 0
 
     def login(self, *, username: str, password: str) -> AuthSession:
         assert username == "member@example.test"
@@ -63,14 +78,102 @@ class FakeClient:
     def close(self) -> None:
         return None
 
+    def create_agent_run(self, **kwargs: object) -> AgentRunSnapshot:
+        if self.created_runs is None:
+            self.created_runs = []
+        self.created_runs.append(dict(kwargs))
+        if self.create_failures_remaining > 0:
+            self.create_failures_remaining -= 1
+            raise WorkbenchError("temporary create failure")
+        return _agent_run_snapshot()
+
+    def get_agent_run(self, run_id: str) -> AgentRunSnapshot:
+        assert run_id == RUN_ID
+        if self.refreshed_runs is None:
+            self.refreshed_runs = []
+        self.refreshed_runs.append(run_id)
+        return _agent_run_snapshot(status="AWAITING_APPROVAL")
+
+    def approve_agent_run(
+        self, run_id: str, *, approval_id: str, reason: str | None
+    ) -> AgentRunSnapshot:
+        assert run_id == RUN_ID
+        assert approval_id == APPROVAL_ID
+        self._record_approval("approve", run_id, approval_id, reason)
+        return _agent_run_snapshot(status="RUNNING")
+
+    def reject_agent_run(
+        self, run_id: str, *, approval_id: str, reason: str | None
+    ) -> AgentRunSnapshot:
+        assert run_id == RUN_ID
+        assert approval_id == APPROVAL_ID
+        self._record_approval("reject", run_id, approval_id, reason)
+        return _agent_run_snapshot(status="CANCELLED")
+
+    def _record_approval(
+        self, action: str, run_id: str, approval_id: str, reason: str | None
+    ) -> None:
+        if self.approval_actions is None:
+            self.approval_actions = []
+        self.approval_actions.append((action, run_id, approval_id, reason))
+
+    def cancel_agent_run(self, run_id: str) -> AgentRunSnapshot:
+        assert run_id == RUN_ID
+        if self.cancelled_runs is None:
+            self.cancelled_runs = []
+        self.cancelled_runs.append(run_id)
+        return _agent_run_snapshot(status="CANCELLED")
+
+    def get_agent_run_result(self, run_id: str, result_id: str) -> dict[str, object]:
+        assert run_id == RUN_ID
+        assert result_id == RESULT_ID
+        if self.scoped_result_reads is None:
+            self.scoped_result_reads = []
+        self.scoped_result_reads.append((run_id, result_id))
+        return {
+            "result_id": result_id,
+            "tool_name": "predict_cycle_life",
+            "values": {"server_signed": True},
+        }
+
+    def get_tool_result(self, result_id: str) -> dict[str, object]:
+        raise AssertionError(f"global result endpoint must not be used: {result_id}")
+
+
+def _agent_run_snapshot(*, status: str = "RUNNING") -> AgentRunSnapshot:
+    return AgentRunSnapshot(
+        run_id=RUN_ID,
+        project_id="project-1",
+        created_by_user_id="user-1",
+        status=status,
+        planning_mode="FIXED_FALLBACK",
+        intent={"goal": "分析电芯寿命风险"},
+        plan={"steps": [{"step_id": "validate", "tool_name": "validate_battery_data"}]},
+        dispatch_status="DISPATCHED",
+        dispatch_task_id="task-1",
+        created_at="2026-07-16T00:00:00Z",
+        updated_at="2026-07-16T00:00:01Z",
+        completed_at=None,
+    )
+
 
 class FakeStreamlit:
-    def __init__(self, *, inputs: dict[str, str] | None = None, buttons: set[str] | None = None):
+    def __init__(
+        self,
+        *,
+        inputs: dict[str, str] | None = None,
+        text_areas: dict[str, str] | None = None,
+        buttons: set[str] | None = None,
+        selected_page: str | None = None,
+    ):
         self.session_state: dict[str, object] = {}
         self.inputs = inputs or {}
+        self.text_areas = text_areas or {}
         self.buttons = buttons or set()
+        self.selected_page = selected_page
         self.text_input_labels: list[str] = []
         self.headers: list[str] = []
+        self.json_payloads: list[object] = []
         self.sidebar = self
 
     def set_page_config(self, **_: object) -> None:
@@ -95,11 +198,26 @@ class FakeStreamlit:
         self.text_input_labels.append(label)
         return self.inputs.get(label, "")
 
+    def text_area(self, label: str, **_: object) -> str:
+        return self.text_areas.get(label, "")
+
     def button(self, label: str, **_: object) -> bool:
         return label in self.buttons
 
     def success(self, _: str) -> None:
         return None
+
+    def info(self, _: str) -> None:
+        return None
+
+    def json(self, value: object) -> None:
+        self.json_payloads.append(value)
+
+    def dataframe(self, *_: object, **__: object) -> None:
+        return None
+
+    def selectbox(self, _: str, values: list[str]) -> str:
+        return values[0]
 
     def error(self, _: str) -> None:
         return None
@@ -108,7 +226,7 @@ class FakeStreamlit:
         raise RerunRequested
 
     def radio(self, _: str, values: tuple[str, ...]) -> str:
-        return values[0]
+        return self.selected_page or values[0]
 
 
 def test_missing_streamlit_reports_optional_dependency(
@@ -129,10 +247,168 @@ def test_missing_streamlit_reports_optional_dependency(
 def test_workbench_exposes_clear_navigation_sections() -> None:
     assert NAVIGATION_PAGES == (
         "服务与数据",
+        "Agent 协同",
         "工作流执行",
         "结果展示",
         "审计报告",
     )
+
+
+def test_agent_page_creates_run_and_keeps_run_id_in_browser_session() -> None:
+    st = FakeStreamlit(
+        inputs={"项目 ID": "project-1"},
+        text_areas={
+            "自然语言目标": "分析电芯寿命风险",
+            "数据集 IDs (逗号或换行分隔)": "dataset-1, dataset-2",
+            "需要的输出 (逗号或换行分隔)": "cycle_life\nreport",
+        },
+        buttons={"创建 Agent 任务"},
+        selected_page="Agent 协同",
+    )
+    client = FakeClient()
+    st.session_state["workbench_auth_principal"] = AuthPrincipal(
+        user_id="user-1",
+        username="member@example.test",
+        role="MEMBER",
+        must_change_password=False,
+    )
+
+    render_workbench(st, config=CONFIG, client_factory=lambda _: client)
+
+    assert client.created_runs is not None
+    assert client.created_runs[0]["project_id"] == "project-1"
+    assert client.created_runs[0]["dataset_ids"] == ("dataset-1", "dataset-2")
+    assert client.created_runs[0]["requested_outputs"] == ("cycle_life", "report")
+    assert isinstance(client.created_runs[0]["idempotency_key"], str)
+    assert st.session_state["workbench_agent_run_id"] == RUN_ID
+    assert "workbench_agent_idempotency_key" not in st.session_state
+    assert st.json_payloads[-1]["run_id"] == RUN_ID
+
+
+def test_agent_page_refreshes_controls_and_reads_results_only_with_run_scope() -> None:
+    st = FakeStreamlit(
+        inputs={
+            "审批 ID (来自任务事件)": APPROVAL_ID,
+            "审批说明 (可选)": "证据已核对",
+            "已完成 Result ID (来自任务事件)": RESULT_ID,
+        },
+        buttons={"刷新任务状态", "批准", "读取运行结果"},
+        selected_page="Agent 协同",
+    )
+    client = FakeClient()
+    st.session_state["workbench_auth_principal"] = AuthPrincipal(
+        user_id="user-1",
+        username="member@example.test",
+        role="MEMBER",
+        must_change_password=False,
+    )
+    st.session_state["workbench_agent_run_id"] = RUN_ID
+
+    render_workbench(st, config=CONFIG, client_factory=lambda _: client)
+
+    assert client.refreshed_runs == [RUN_ID]
+    assert client.approval_actions == [
+        ("approve", RUN_ID, APPROVAL_ID, "证据已核对")
+    ]
+    assert client.scoped_result_reads == [(RUN_ID, RESULT_ID)]
+    assert st.session_state["workbench_agent_result_cache"] == {
+        "run_id": RUN_ID,
+        "results": {
+            RESULT_ID: {
+                "result_id": RESULT_ID,
+                "tool_name": "predict_cycle_life",
+                "values": {"server_signed": True},
+            }
+        },
+    }
+    assert st.json_payloads[-1]["result_id"] == RESULT_ID
+
+
+def test_result_page_displays_only_results_previously_read_through_run_scope() -> None:
+    st = FakeStreamlit(selected_page="结果展示")
+    client = FakeClient()
+    st.session_state["workbench_auth_principal"] = AuthPrincipal(
+        user_id="user-1",
+        username="member@example.test",
+        role="MEMBER",
+        must_change_password=False,
+    )
+    st.session_state["workbench_agent_run_id"] = RUN_ID
+    st.session_state["workbench_agent_result_cache"] = {
+        "run_id": RUN_ID,
+        "results": {
+            RESULT_ID: {
+                "result_id": RESULT_ID,
+                "tool_name": "predict_cycle_life",
+                "values": {"server_signed": True},
+            }
+        },
+    }
+
+    render_workbench(st, config=CONFIG, client_factory=lambda _: client)
+
+    assert client.scoped_result_reads is None
+    assert st.json_payloads[-1]["result_id"] == RESULT_ID
+
+
+def test_result_cache_is_not_displayed_after_agent_run_scope_changes() -> None:
+    st = FakeStreamlit(selected_page="结果展示")
+    client = FakeClient()
+    st.session_state["workbench_auth_principal"] = AuthPrincipal(
+        user_id="user-1",
+        username="member@example.test",
+        role="MEMBER",
+        must_change_password=False,
+    )
+    st.session_state["workbench_agent_run_id"] = (
+        "33333333-3333-4333-8333-333333333333"
+    )
+    st.session_state["workbench_agent_result_cache"] = {
+        "run_id": RUN_ID,
+        "results": {
+            RESULT_ID: {
+                "result_id": RESULT_ID,
+                "tool_name": "predict_cycle_life",
+                "values": {"server_signed": True},
+            }
+        },
+    }
+
+    render_workbench(st, config=CONFIG, client_factory=lambda _: client)
+
+    assert st.json_payloads == []
+
+
+def test_agent_create_idempotency_key_is_bound_to_normalized_request() -> None:
+    st = FakeStreamlit(
+        inputs={"项目 ID": " project-1 "},
+        text_areas={
+            "自然语言目标": " 分析电芯寿命风险 ",
+            "数据集 IDs (逗号或换行分隔)": "dataset-1",
+            "需要的输出 (逗号或换行分隔)": "cycle_life",
+        },
+        buttons={"创建 Agent 任务"},
+        selected_page="Agent 协同",
+    )
+    client = FakeClient(create_failures_remaining=2)
+    st.session_state["workbench_auth_principal"] = AuthPrincipal(
+        user_id="user-1",
+        username="member@example.test",
+        role="MEMBER",
+        must_change_password=False,
+    )
+
+    render_workbench(st, config=CONFIG, client_factory=lambda _: client)
+    render_workbench(st, config=CONFIG, client_factory=lambda _: client)
+    assert client.created_runs is not None
+    first_key = client.created_runs[0]["idempotency_key"]
+    assert client.created_runs[1]["idempotency_key"] == first_key
+
+    st.inputs["项目 ID"] = "project-2"
+    render_workbench(st, config=CONFIG, client_factory=lambda _: client)
+
+    assert client.created_runs[2]["idempotency_key"] != first_key
+    assert "workbench_agent_idempotency_key" not in st.session_state
 
 
 def test_section_rows_preserve_backend_values_and_mark_missing_values() -> None:

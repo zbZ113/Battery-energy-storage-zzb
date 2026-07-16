@@ -10,10 +10,35 @@ import os
 from base64 import b64encode
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol, TypeAlias, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
+
+AgentRunStatusValue: TypeAlias = Literal[
+    "PLANNING",
+    "RUNNING",
+    "AWAITING_APPROVAL",
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "FALLBACK",
+]
+AgentPlanningModeValue: TypeAlias = Literal["LLM", "FIXED_FALLBACK"]
+AgentDispatchStatusValue: TypeAlias = Literal["PENDING", "DISPATCHED"]
+_AGENT_RUN_STATUSES = frozenset(
+    {
+        "PLANNING",
+        "RUNNING",
+        "AWAITING_APPROVAL",
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED",
+        "FALLBACK",
+    }
+)
+_AGENT_PLANNING_MODES = frozenset({"LLM", "FIXED_FALLBACK"})
+_AGENT_DISPATCH_STATUSES = frozenset({"PENDING", "DISPATCHED"})
 
 
 class WorkbenchError(RuntimeError):
@@ -168,6 +193,43 @@ class HealthStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentRunSnapshot:
+    """Transport-only view of one server-owned Agent run.
+
+    Nested intent and plan objects are preserved exactly as issued by FastAPI.
+    The workbench does not derive step state, results, or engineering values.
+    """
+
+    run_id: str
+    project_id: str
+    created_by_user_id: str
+    status: AgentRunStatusValue
+    planning_mode: AgentPlanningModeValue
+    intent: dict[str, object]
+    plan: dict[str, object]
+    dispatch_status: AgentDispatchStatusValue
+    dispatch_task_id: str | None
+    created_at: str
+    updated_at: str
+    completed_at: str | None
+
+    def display_payload(self) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "project_id": self.project_id,
+            "status": self.status,
+            "planning_mode": self.planning_mode,
+            "dispatch_status": self.dispatch_status,
+            "dispatch_task_id": self.dispatch_task_id,
+            "intent": dict(self.intent),
+            "plan": dict(self.plan),
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "completed_at": self.completed_at,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class LifetimeWorkflowResult:
     """Identifier-only terminal result returned by the workflow endpoint."""
 
@@ -288,6 +350,125 @@ class ApiClient:
             tools.append(dict(mapping))
         return tuple(tools)
 
+    def create_agent_run(
+        self,
+        *,
+        project_id: str,
+        user_goal: str,
+        dataset_ids: tuple[str, ...],
+        requested_outputs: tuple[str, ...],
+        idempotency_key: str,
+    ) -> AgentRunSnapshot:
+        normalized_outputs = _normalize_identifier_sequence(
+            requested_outputs,
+            "requested_outputs",
+            require_nonempty=True,
+        )
+        payload: dict[str, object] = {
+            "project_id": _normalize_identifier(project_id, "project_id"),
+            "user_goal": _normalize_identifier(user_goal, "user_goal"),
+            "dataset_ids": list(
+                _normalize_identifier_sequence(dataset_ids, "dataset_ids")
+            ),
+            "requested_outputs": list(normalized_outputs),
+        }
+        key = _normalize_idempotency_key(idempotency_key)
+        body = self._request(
+            "POST",
+            "/v1/agent/runs",
+            payload,
+            headers={"Idempotency-Key": key},
+        )
+        return _parse_agent_run(body, "Agent run creation response")
+
+    def get_agent_run(self, run_id: str) -> AgentRunSnapshot:
+        normalized_run_id = _normalize_identifier(run_id, "run_id")
+        body = self._request(
+            "GET", f"/v1/agent/runs/{quote(normalized_run_id, safe='')}"
+        )
+        return _parse_matching_agent_run(body, normalized_run_id, "Agent run response")
+
+    def cancel_agent_run(self, run_id: str) -> AgentRunSnapshot:
+        normalized_run_id = _normalize_identifier(run_id, "run_id")
+        body = self._request(
+            "POST",
+            f"/v1/agent/runs/{quote(normalized_run_id, safe='')}/cancel",
+        )
+        return _parse_matching_agent_run(
+            body, normalized_run_id, "Agent run cancellation response"
+        )
+
+    def approve_agent_run(
+        self,
+        run_id: str,
+        *,
+        approval_id: str,
+        reason: str | None,
+    ) -> AgentRunSnapshot:
+        return self._agent_approval_action(
+            run_id,
+            action="approve",
+            approval_id=approval_id,
+            reason=reason,
+        )
+
+    def reject_agent_run(
+        self,
+        run_id: str,
+        *,
+        approval_id: str,
+        reason: str | None,
+    ) -> AgentRunSnapshot:
+        return self._agent_approval_action(
+            run_id,
+            action="reject",
+            approval_id=approval_id,
+            reason=reason,
+        )
+
+    def _agent_approval_action(
+        self,
+        run_id: str,
+        *,
+        action: Literal["approve", "reject"],
+        approval_id: str,
+        reason: str | None,
+    ) -> AgentRunSnapshot:
+        normalized_run_id = _normalize_identifier(run_id, "run_id")
+        normalized_reason = reason.strip() if isinstance(reason, str) else None
+        if normalized_reason == "":
+            normalized_reason = None
+        body = self._request(
+            "POST",
+            f"/v1/agent/runs/{quote(normalized_run_id, safe='')}/{action}",
+            {
+                "approval_id": _normalize_identifier(approval_id, "approval_id"),
+                "reason": normalized_reason,
+            },
+        )
+        return _parse_matching_agent_run(
+            body, normalized_run_id, f"Agent run {action} response"
+        )
+
+    def get_agent_run_result(self, run_id: str, result_id: str) -> dict[str, object]:
+        """Read a ToolResult only through its authorized Agent run scope."""
+
+        normalized_result_id = _normalize_identifier(result_id, "result_id")
+        body = self._request(
+            "GET",
+            (
+                f"/v1/agent/runs/{_encoded_id(run_id, 'run_id')}"
+                f"/results/{quote(normalized_result_id, safe='')}"
+            ),
+        )
+        response = _require_mapping(body, "Agent run result response")
+        returned_id = _require_nonblank_string(
+            response, "result_id", "Agent run result response"
+        )
+        if returned_id != normalized_result_id:
+            raise ApiResponseError("Agent run result_id does not match the request")
+        return dict(response)
+
     def run_lifetime_workflow(
         self,
         *,
@@ -378,12 +559,17 @@ class ApiClient:
         method: str,
         path: str,
         json_body: Mapping[str, object] | None = None,
+        *,
+        headers: Mapping[str, str] | None = None,
     ) -> object:
+        request_headers = dict(headers or {})
+        if method.upper() == "POST":
+            request_headers = {**request_headers, "Origin": self._trusted_origin}
         response = self._transport.request(
             method,
             f"{self._base_url}{path}",
             json_body,
-            {"Origin": self._trusted_origin} if method.upper() == "POST" else None,
+            request_headers or None,
         )
         if not 200 <= response.status_code < 300:
             raise ApiHttpError(response.status_code, _error_detail(response.body))
@@ -433,6 +619,33 @@ def _normalize_identifier(value: str, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
         raise ValueError(f"{field_name} must not be blank")
+    return normalized
+
+
+def _encoded_id(value: str, field_name: str) -> str:
+    return quote(_normalize_identifier(value, field_name), safe="")
+
+
+def _normalize_identifier_sequence(
+    values: tuple[str, ...],
+    field_name: str,
+    *,
+    require_nonempty: bool = False,
+) -> tuple[str, ...]:
+    normalized = tuple(_normalize_identifier(value, field_name) for value in values)
+    if require_nonempty and not normalized:
+        raise ValueError(f"{field_name} must not be empty")
+    if len(normalized) != len(set(normalized)):
+        raise ValueError(f"{field_name} must contain unique identifiers")
+    return normalized
+
+
+def _normalize_idempotency_key(value: str) -> str:
+    normalized = value.strip()
+    if not 8 <= len(normalized) <= 200:
+        raise ValueError("idempotency_key must contain between 8 and 200 characters")
+    if "\r" in normalized or "\n" in normalized:
+        raise ValueError("idempotency_key must not contain line breaks")
     return normalized
 
 
@@ -493,6 +706,86 @@ def _parse_auth_session(value: object, description: str) -> AuthSession:
         must_change_password=principal.must_change_password,
         expires_at=_require_nonblank_string(payload, "expires_at", description),
     )
+
+
+def _parse_agent_run(value: object, description: str) -> AgentRunSnapshot:
+    payload = _require_mapping(value, description)
+    intent = _require_mapping(payload.get("intent"), f"{description} intent")
+    plan = _require_mapping(payload.get("plan"), f"{description} plan")
+    return AgentRunSnapshot(
+        run_id=_require_nonblank_string(payload, "run_id", description),
+        project_id=_require_nonblank_string(payload, "project_id", description),
+        created_by_user_id=_require_nonblank_string(
+            payload, "created_by_user_id", description
+        ),
+        status=cast(
+            AgentRunStatusValue,
+            _require_enum_string(
+                payload, "status", description, allowed=_AGENT_RUN_STATUSES
+            ),
+        ),
+        planning_mode=cast(
+            AgentPlanningModeValue,
+            _require_enum_string(
+                payload,
+                "planning_mode",
+                description,
+                allowed=_AGENT_PLANNING_MODES,
+            ),
+        ),
+        intent=dict(intent),
+        plan=dict(plan),
+        dispatch_status=cast(
+            AgentDispatchStatusValue,
+            _require_enum_string(
+                payload,
+                "dispatch_status",
+                description,
+                allowed=_AGENT_DISPATCH_STATUSES,
+            ),
+        ),
+        dispatch_task_id=_optional_transport_string(
+            payload, "dispatch_task_id", description
+        ),
+        created_at=_require_nonblank_string(payload, "created_at", description),
+        updated_at=_require_nonblank_string(payload, "updated_at", description),
+        completed_at=_optional_transport_string(payload, "completed_at", description),
+    )
+
+
+def _parse_matching_agent_run(
+    value: object,
+    expected_run_id: str,
+    description: str,
+) -> AgentRunSnapshot:
+    run = _parse_agent_run(value, description)
+    if run.run_id != expected_run_id:
+        raise ApiResponseError(f"{description} run_id does not match the request")
+    return run
+
+
+def _require_enum_string(
+    value: Mapping[str, object],
+    field_name: str,
+    description: str,
+    *,
+    allowed: frozenset[str],
+) -> str:
+    item = _require_nonblank_string(value, field_name, description)
+    if item not in allowed:
+        raise ApiResponseError(f"{description} has unsupported {field_name}")
+    return item
+
+
+def _optional_transport_string(
+    value: Mapping[str, object], field_name: str, description: str
+) -> str | None:
+    item = value.get(field_name)
+    if item is None:
+        return None
+    if not isinstance(item, str) or not item.strip():
+        raise ApiResponseError(f"{description} {field_name} must be null or non-blank")
+    return item
 
 
 def _error_detail(value: object) -> str:
