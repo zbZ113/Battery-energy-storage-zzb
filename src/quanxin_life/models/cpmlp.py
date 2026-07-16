@@ -1,10 +1,11 @@
 """Masked, cell-level CPMLP EOL80 baseline.
 
 This module independently implements the two-stage MLP idea used for
-cycle-capacity curves.  It deliberately has no deserialization or persistence
-path: only in-memory tensors built from :class:`CurveTensor` instances are
-accepted.  Missing curves remain ``NaN`` at the conversion boundary and are
-only replaced after their explicit mask has been applied inside the network.
+cycle-capacity curves. Runtime prediction only accepts validated
+:class:`CurveTensor` instances. Persistence is provided separately by the
+governed safetensors adapter, never by pickle-compatible loaders. Missing
+curves remain ``NaN`` at the conversion boundary and are only replaced after
+their explicit mask has been applied inside the network.
 """
 
 from __future__ import annotations

@@ -47,5 +47,19 @@ python scripts/build_a100_training_manifest.py `
 
 - HUST 候选清单尚未获人工批准，不能创建正式训练包；
 - HUST 字段仍未映射成 Canonical Parquet；
-- CPMLP 与 Hybrid 还没有 safetensors 安全制品通道；
+- CPMLP 与 Hybrid 已有 safetensors + 严格架构/特征 JSON 往返通道，但尚未用真实 HUST 训练制品验证；
 - 现在的预检和清单工具不能证明模型性能，也不代表海辰真实工业数据验证。
+
+## 深度模型输出格式
+
+CPMLP 与 Hybrid 的正式推理制品只能包含：
+
+```text
+<artifact_id>/
+├── model.safetensors
+├── architecture.json
+├── feature_config.json
+└── manifest.json
+```
+
+加载器会重新检查四个文件的目录边界、SHA-256、大小、架构白名单、特征上下文、权重键、形状、float32 类型和有限值。目录里多出任何未登记文件也会拒绝加载。优化器状态不进入正式推理制品。

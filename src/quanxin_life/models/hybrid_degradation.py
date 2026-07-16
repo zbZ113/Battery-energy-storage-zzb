@@ -7,8 +7,9 @@ this is stronger than relying only on a monotonicity penalty.
 
 This module deliberately predicts a finite SOH trajectory only.  EOL80 and
 RUL are derived from its first threshold crossing and are never trained as an
-independent output head.  The implementation is in-memory only and never
-loads serialised model artefacts.
+independent output head. Governed persistence is handled by the separate
+strict safetensors adapter; this module never loads pickle-compatible
+artefacts.
 """
 
 from __future__ import annotations
