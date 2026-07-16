@@ -339,6 +339,31 @@ def test_worker_executes_each_step_once_and_resumes_duplicate_delivery_without_r
     ]
 
 
+def test_worker_can_advance_exactly_one_professional_agent_step_at_a_time(
+    tmp_path: Path,
+) -> None:
+    run_service, member, session_factory, run_id, tools = _setup(tmp_path)
+    worker = _worker(run_service, session_factory, tools)
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+
+    first = worker.advance_once(run_id=run_id, plan_hash=plan_hash)
+
+    assert first.status is AgentRunStatus.RUNNING
+    assert first.completed_step_ids == ("features",)
+    assert [name for name, _ in tools.calls] == [
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+    ]
+
+    second = worker.advance_once(run_id=run_id, plan_hash=plan_hash)
+
+    assert [name for name, _ in tools.calls] == [
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+        StandardToolName.PREDICT_CYCLE_LIFE.value,
+    ]
+    assert second.status is AgentRunStatus.COMPLETED
+    assert second.completed_step_ids == ("features", "predict")
+
+
 def test_worker_rejects_a_stale_queue_plan_hash_before_tool_execution(tmp_path: Path) -> None:
     from quanxin_life.application.agent_run_execution import AgentRunExecutionError
 

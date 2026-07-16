@@ -89,98 +89,109 @@ class AgentRunExecutionWorker:
         self._lease_ttl = lease_ttl
 
     def execute(self, *, run_id: str, plan_hash: str) -> AgentRunState:
-        """Execute or safely resume one identity-only queue message."""
+        """Execute or safely resume one queue message until it pauses or finishes."""
 
         _validate_identity(run_id, plan_hash)
         while True:
-            intent, plan, step_rows, status = self._load_run(run_id, plan_hash)
-            if status in _TERMINAL_STATUSES or status is AgentRunStatus.AWAITING_APPROVAL:
-                return self._state(run_id)
+            state = self.advance_once(run_id=run_id, plan_hash=plan_hash)
+            if state.status is not AgentRunStatus.RUNNING:
+                return state
 
-            completed_results = self._restore_completed_results(
+    def advance_once(self, *, run_id: str, plan_hash: str) -> AgentRunState:
+        """Advance at most one professional Agent tool attempt and checkpoint it."""
+
+        _validate_identity(run_id, plan_hash)
+        intent, plan, step_rows, status = self._load_run(run_id, plan_hash)
+        if status in _TERMINAL_STATUSES or status is AgentRunStatus.AWAITING_APPROVAL:
+            return self._state(run_id)
+
+        completed_results = self._restore_completed_results(
+            run_id,
+            intent,
+            plan,
+            step_rows,
+        )
+        next_row = next(
+            (
+                row
+                for row in step_rows
+                if row.status != AgentStepStatus.COMPLETED.value
+            ),
+            None,
+        )
+        if next_row is None:
+            self._complete_run(run_id, plan_hash)
+            return self._state(run_id)
+        if next_row.status == AgentStepStatus.RUNNING.value and _lease_is_active(
+            next_row.lease_expires_at,
+            self._now(),
+        ):
+            raise AgentRunExecutionBusyError("Agent step has an active execution lease")
+        if next_row.status == AgentStepStatus.FAILED.value:
+            self._fail_run(
                 run_id,
-                intent,
-                plan,
-                step_rows,
-            )
-            next_row = next(
-                (
-                    row
-                    for row in step_rows
-                    if row.status != AgentStepStatus.COMPLETED.value
-                ),
+                next_row.id,
                 None,
+                "PERSISTED_STEP_FAILED",
             )
-            if next_row is None:
-                self._complete_run(run_id, plan_hash)
-                return self._state(run_id)
-            if next_row.status == AgentStepStatus.RUNNING.value and _lease_is_active(
-                next_row.lease_expires_at,
-                self._now(),
-            ):
-                raise AgentRunExecutionBusyError(
-                    "Agent step has an active execution lease"
-                )
-            if next_row.status == AgentStepStatus.FAILED.value:
-                self._fail_run(
-                    run_id,
-                    next_row.id,
-                    None,
-                    "PERSISTED_STEP_FAILED",
-                )
-                return self._state(run_id)
+            return self._state(run_id)
 
-            if next_row.requires_human_approval and not self._is_step_approved(
-                run_id, next_row.step_id, plan_hash
-            ):
-                self._ensure_approval(run_id, next_row)
-                return self._state(run_id)
+        if next_row.requires_human_approval and not self._is_step_approved(
+            run_id, next_row.step_id, plan_hash
+        ):
+            self._ensure_approval(run_id, next_row)
+            return self._state(run_id)
 
-            claim_token = self._claim_step(run_id, plan_hash, next_row.id)
-            if claim_token is None:
-                return self._state(run_id)
+        claim_token = self._claim_step(run_id, plan_hash, next_row.id)
+        if claim_token is None:
+            return self._state(run_id)
 
-            try:
-                compiled = compile_agent_step(
-                    run_id=run_id,
-                    intent=intent,
-                    plan=plan,
-                    step_id=next_row.step_id,
-                    context_resolver=self._context_resolver,
-                    completed_results=completed_results,
-                )
-                outcome = run_constrained_workflow(
-                    service=self._tool_service,
-                    request_id=run_id,
-                    steps=(compiled,),
-                    approved_step_ids=(compiled.step_id,),
-                )
-            except (AgentExecutionReferenceError, AuditLedgerError, TypeError, ValueError) as exc:
-                self._fail_run(
-                    run_id,
-                    next_row.id,
-                    claim_token,
-                    type(exc).__name__,
-                )
-                return self._state(run_id)
-
-            if outcome.status is not WorkflowStatus.COMPLETED or len(outcome.tool_results) != 1:
-                should_retry = self._handle_step_failure(
-                    run_id,
-                    next_row.id,
-                    claim_token,
-                    outcome.failure_code or "CONSTRAINED_STEP_FAILED",
-                )
-                if should_retry:
-                    continue
-                return self._state(run_id)
-            self._persist_step_result(
+        try:
+            compiled = compile_agent_step(
                 run_id=run_id,
-                plan_hash=plan_hash,
-                step_row_id=next_row.id,
-                claim_token=claim_token,
-                result=outcome.tool_results[0],
+                intent=intent,
+                plan=plan,
+                step_id=next_row.step_id,
+                context_resolver=self._context_resolver,
+                completed_results=completed_results,
             )
+            outcome = run_constrained_workflow(
+                service=self._tool_service,
+                request_id=run_id,
+                steps=(compiled,),
+                approved_step_ids=(compiled.step_id,),
+            )
+        except (AgentExecutionReferenceError, AuditLedgerError, TypeError, ValueError) as exc:
+            self._fail_run(
+                run_id,
+                next_row.id,
+                claim_token,
+                type(exc).__name__,
+            )
+            return self._state(run_id)
+
+        if outcome.status is not WorkflowStatus.COMPLETED or len(outcome.tool_results) != 1:
+            self._handle_step_failure(
+                run_id,
+                next_row.id,
+                claim_token,
+                outcome.failure_code or "CONSTRAINED_STEP_FAILED",
+            )
+            return self._state(run_id)
+        self._persist_step_result(
+            run_id=run_id,
+            plan_hash=plan_hash,
+            step_row_id=next_row.id,
+            claim_token=claim_token,
+            result=outcome.tool_results[0],
+        )
+        _, _, refreshed_steps, _ = self._load_run(run_id, plan_hash)
+        if all(
+            step.status == AgentStepStatus.COMPLETED.value
+            for step in refreshed_steps
+        ):
+            self._complete_run(run_id, plan_hash)
+        return self._state(run_id)
 
     def _load_run(
         self,
