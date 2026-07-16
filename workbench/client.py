@@ -6,14 +6,14 @@ domain model, loads a model artifact, or calculates an engineering value.
 
 from __future__ import annotations
 
-import json
+import os
 from base64 import b64encode
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol, cast
-from urllib.error import HTTPError, URLError
+from typing import Literal, Protocol, cast
 from urllib.parse import quote, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+
+import httpx
 
 
 class WorkbenchError(RuntimeError):
@@ -46,46 +46,116 @@ class HttpResponse:
 
 
 class HttpTransport(Protocol):
-    """Small injectable boundary used by unit tests and the urllib adapter."""
+    """Small injectable boundary used by unit tests and the httpx adapter."""
 
     def request(
         self,
         method: str,
         url: str,
         json_body: Mapping[str, object] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> HttpResponse: ...
 
 
-class UrlLibTransport:
-    """Standard-library JSON transport; no domain or Streamlit dependency."""
+class HttpxTransport:
+    """Persistent httpx transport that retains the opaque session cookie."""
 
-    def __init__(self, *, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 30.0,
+        client: httpx.Client | None = None,
+    ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
-        self._timeout_seconds = timeout_seconds
+        self._client = client or httpx.Client(timeout=timeout_seconds)
+        self._owns_client = client is None
 
     def request(
         self,
         method: str,
         url: str,
         json_body: Mapping[str, object] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> HttpResponse:
-        data = None
-        headers = {"Accept": "application/json"}
-        if json_body is not None:
-            data = json.dumps(dict(json_body), ensure_ascii=False).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        request = Request(url, data=data, headers=headers, method=method)
         try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:
-                payload = response.read()
-                status_code = response.status
-        except HTTPError as exc:
-            payload = exc.read()
-            return HttpResponse(exc.code, _decode_json_or_text(payload))
-        except URLError as exc:
-            raise ApiConnectionError(f"FastAPI service is unreachable: {exc.reason}") from exc
-        return HttpResponse(status_code, _decode_json(payload))
+            response = self._client.request(
+                method,
+                url,
+                json=dict(json_body) if json_body is not None else None,
+                headers={"Accept": "application/json", **dict(headers or {})},
+            )
+        except httpx.HTTPError as exc:
+            raise ApiConnectionError("FastAPI service is unreachable") from exc
+        if not response.content:
+            body: object = None
+        else:
+            try:
+                body = cast(object, response.json())
+            except ValueError:
+                body = response.text
+        return HttpResponse(response.status_code, body)
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+
+@dataclass(frozen=True, slots=True)
+class WorkbenchConfig:
+    """Fail-closed runtime configuration for the Streamlit HTTP client."""
+
+    environment: Literal["development", "production"]
+    api_base_url: str
+    trusted_origin: str
+
+    @classmethod
+    def from_environment(cls) -> WorkbenchConfig:
+        return cls.from_mapping(os.environ)
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, str]) -> WorkbenchConfig:
+        environment_value = _required_setting(values, "QUANXIN_ENVIRONMENT")
+        if environment_value not in {"development", "production"}:
+            raise ValueError("QUANXIN_ENVIRONMENT must be development or production")
+        environment = cast(Literal["development", "production"], environment_value)
+        api_base_url = _normalize_base_url(
+            _required_setting(values, "QUANXIN_API_BASE_URL")
+        )
+        trusted_origin = _normalize_origin(
+            _required_setting(values, "QUANXIN_TRUSTED_ORIGIN")
+        )
+        if environment == "production":
+            if urlsplit(api_base_url).scheme != "https":
+                raise ValueError("production API base URL must use HTTPS")
+            if urlsplit(trusted_origin).scheme != "https":
+                raise ValueError("production trusted origin must use HTTPS")
+        else:
+            for description, value in (
+                ("development API base URL", api_base_url),
+                ("development trusted origin", trusted_origin),
+            ):
+                parsed = urlsplit(value)
+                if parsed.scheme != "http" or not _is_loopback_hostname(parsed.hostname):
+                    raise ValueError(f"{description} must use HTTP on localhost")
+        return cls(
+            environment=environment,
+            api_base_url=api_base_url,
+            trusted_origin=trusted_origin,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AuthPrincipal:
+    user_id: str
+    username: str
+    role: str
+    must_change_password: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AuthSession(AuthPrincipal):
+    expires_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,10 +213,62 @@ class ApiClient:
         self,
         base_url: str,
         *,
+        trusted_origin: str,
         transport: HttpTransport | None = None,
+        http_client: httpx.Client | None = None,
     ) -> None:
+        if transport is not None and http_client is not None:
+            raise ValueError("transport and http_client are mutually exclusive")
         self._base_url = _normalize_base_url(base_url)
-        self._transport = transport or UrlLibTransport()
+        self._trusted_origin = _normalize_origin(trusted_origin)
+        self._transport = transport or HttpxTransport(client=http_client)
+
+    @classmethod
+    def from_config(cls, config: WorkbenchConfig) -> ApiClient:
+        return cls(
+            config.api_base_url,
+            trusted_origin=config.trusted_origin,
+        )
+
+    def login(self, *, username: str, password: str) -> AuthSession:
+        body = self._request(
+            "POST",
+            "/v1/auth/login",
+            {
+                "username": _normalize_identifier(username, "username"),
+                "password": _require_nonblank_secret(password, "password"),
+            },
+        )
+        return _parse_auth_session(body, "login response")
+
+    def me(self) -> AuthPrincipal:
+        return _parse_auth_principal(self._request("GET", "/v1/auth/me"), "me response")
+
+    def change_password(
+        self,
+        *,
+        current_password: str,
+        new_password: str,
+    ) -> AuthSession:
+        body = self._request(
+            "POST",
+            "/v1/auth/change-password",
+            {
+                "current_password": _require_nonblank_secret(
+                    current_password, "current_password"
+                ),
+                "new_password": _require_nonblank_secret(new_password, "new_password"),
+            },
+        )
+        return _parse_auth_session(body, "change-password response")
+
+    def logout(self) -> None:
+        self._request("POST", "/v1/auth/logout")
+
+    def close(self) -> None:
+        close = getattr(self._transport, "close", None)
+        if callable(close):
+            close()
 
     def health(self) -> HealthStatus:
         body = self._request("GET", "/health")
@@ -261,6 +383,7 @@ class ApiClient:
             method,
             f"{self._base_url}{path}",
             json_body,
+            {"Origin": self._trusted_origin} if method.upper() == "POST" else None,
         )
         if not 200 <= response.status_code < 300:
             raise ApiHttpError(response.status_code, _error_detail(response.body))
@@ -272,9 +395,38 @@ def _normalize_base_url(value: str) -> str:
     parsed = urlsplit(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("base_url must be an absolute HTTP(S) URL")
+    if parsed.username or parsed.password:
+        raise ValueError("base_url must not contain credentials")
     if parsed.query or parsed.fragment:
         raise ValueError("base_url must not include a query string or fragment")
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def _normalize_origin(value: str) -> str:
+    normalized = value.strip().rstrip("/")
+    parsed = urlsplit(normalized)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+    ):
+        raise ValueError("trusted origin must be an HTTP(S) scheme and authority only")
+    return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+
+
+def _required_setting(values: Mapping[str, str], name: str) -> str:
+    value = values.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} is required")
+    return value.strip()
+
+
+def _is_loopback_hostname(hostname: str | None) -> bool:
+    return hostname in {"localhost", "127.0.0.1", "::1"}
 
 
 def _normalize_identifier(value: str, field_name: str) -> str:
@@ -282,6 +434,12 @@ def _normalize_identifier(value: str, field_name: str) -> str:
     if not normalized:
         raise ValueError(f"{field_name} must not be blank")
     return normalized
+
+
+def _require_nonblank_secret(value: str, field_name: str) -> str:
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be blank")
+    return value
 
 
 def _require_mapping(value: object, description: str) -> Mapping[str, object]:
@@ -308,6 +466,35 @@ def _optional_string(value: Mapping[str, object], field_name: str) -> str | None
     return item
 
 
+def _require_bool(value: Mapping[str, object], field_name: str, description: str) -> bool:
+    item = value.get(field_name)
+    if not isinstance(item, bool):
+        raise ApiResponseError(f"{description} requires boolean {field_name}")
+    return item
+
+
+def _parse_auth_principal(value: object, description: str) -> AuthPrincipal:
+    payload = _require_mapping(value, description)
+    return AuthPrincipal(
+        user_id=_require_nonblank_string(payload, "user_id", description),
+        username=_require_nonblank_string(payload, "username", description),
+        role=_require_nonblank_string(payload, "role", description),
+        must_change_password=_require_bool(payload, "must_change_password", description),
+    )
+
+
+def _parse_auth_session(value: object, description: str) -> AuthSession:
+    payload = _require_mapping(value, description)
+    principal = _parse_auth_principal(payload, description)
+    return AuthSession(
+        user_id=principal.user_id,
+        username=principal.username,
+        role=principal.role,
+        must_change_password=principal.must_change_password,
+        expires_at=_require_nonblank_string(payload, "expires_at", description),
+    )
+
+
 def _error_detail(value: object) -> str:
     if isinstance(value, dict):
         detail = value.get("detail")
@@ -316,17 +503,3 @@ def _error_detail(value: object) -> str:
     if isinstance(value, str) and value.strip():
         return value
     return "the API returned an unspecified error"
-
-
-def _decode_json(payload: bytes) -> object:
-    try:
-        return cast(object, json.loads(payload.decode("utf-8")))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ApiResponseError("the API returned invalid UTF-8 JSON") from exc
-
-
-def _decode_json_or_text(payload: bytes) -> object:
-    try:
-        return _decode_json(payload)
-    except ApiResponseError:
-        return payload.decode("utf-8", errors="replace")

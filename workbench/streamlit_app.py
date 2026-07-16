@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import importlib
 import json
-from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Callable, Mapping, MutableMapping
+from typing import Any, cast
 
-from workbench.client import ApiClient, WorkbenchError
+from workbench.client import ApiClient, AuthPrincipal, WorkbenchConfig, WorkbenchError
 from workbench.presenters import (
     EvidenceSection,
     build_audit_section,
@@ -18,6 +18,8 @@ from workbench.presenters import (
 
 NAVIGATION_PAGES = ("服务与数据", "工作流执行", "结果展示", "审计报告")
 _WORKFLOW_SESSION_KEY = "signed_lifetime_workflow"
+_CLIENT_SESSION_KEY = "workbench_api_client"
+_PRINCIPAL_SESSION_KEY = "workbench_auth_principal"
 
 
 class StreamlitDependencyUnavailable(RuntimeError):
@@ -48,19 +50,51 @@ def section_rows(section: EvidenceSection) -> list[dict[str, object]]:
     ]
 
 
+def get_session_client(
+    session_state: MutableMapping[str, object],
+    config: WorkbenchConfig,
+    client_factory: Callable[[WorkbenchConfig], ApiClient] = ApiClient.from_config,
+) -> ApiClient:
+    """Return one cookie-owning client for exactly one Streamlit browser session."""
+    existing = session_state.get(_CLIENT_SESSION_KEY)
+    if existing is not None:
+        return cast(ApiClient, existing)
+    client = client_factory(config)
+    session_state[_CLIENT_SESSION_KEY] = client
+    return client
+
+
 def render_workbench(
     st: Any,
     *,
-    client_factory: Callable[[str], ApiClient] = ApiClient,
+    config: WorkbenchConfig | None = None,
+    client_factory: Callable[[WorkbenchConfig], ApiClient] = ApiClient.from_config,
 ) -> None:
     """Render server-issued identifiers and evidence without numeric logic."""
     st.set_page_config(page_title="泉芯智寿科研工作台", layout="wide")
     st.title("泉芯智寿科研工作台")
     st.caption("薄客户端: 所有工程数值、决策与审计报告均由 FastAPI 服务签发。")
 
-    base_url = st.sidebar.text_input("FastAPI 地址", value="http://127.0.0.1:8000")
+    try:
+        runtime_config = config or WorkbenchConfig.from_environment()
+    except ValueError as exc:
+        st.error(f"工作台配置无效: {exc}")
+        return
+    client = get_session_client(st.session_state, runtime_config, client_factory)
+    principal = st.session_state.get(_PRINCIPAL_SESSION_KEY)
+    if not isinstance(principal, AuthPrincipal):
+        _render_login(st, client)
+        return
+    if principal.must_change_password:
+        _render_password_change(st, client)
+        return
+
+    if st.sidebar.button("退出登录"):
+        _show_action(st, client.logout)
+        _clear_auth_session(st.session_state)
+        st.rerun()
+        return
     page = st.sidebar.radio("导航", NAVIGATION_PAGES)
-    client = client_factory(base_url)
 
     if page == "服务与数据":
         _render_service_and_data(st, client)
@@ -70,6 +104,62 @@ def render_workbench(
         _render_signed_results(st, client)
     else:
         _render_audit(st, client)
+
+
+def _render_login(st: Any, client: ApiClient) -> None:
+    st.header("登录")
+    username = st.text_input("用户名")
+    password = st.text_input("密码", type="password")
+    if not st.button("登录", type="primary"):
+        return
+
+    def submit() -> None:
+        session = client.login(username=username, password=password)
+        st.session_state[_PRINCIPAL_SESSION_KEY] = AuthPrincipal(
+            user_id=session.user_id,
+            username=session.username,
+            role=session.role,
+            must_change_password=session.must_change_password,
+        )
+        st.rerun()
+
+    _show_action(st, submit)
+
+
+def _render_password_change(st: Any, client: ApiClient) -> None:
+    st.header("首次登录: 请修改临时密码")
+    current_password = st.text_input("当前密码", type="password")
+    new_password = st.text_input("新密码", type="password")
+    confirmation = st.text_input("确认新密码", type="password")
+    if not st.button("修改密码", type="primary"):
+        return
+    if new_password != confirmation:
+        st.error("两次输入的新密码不一致")
+        return
+
+    def submit() -> None:
+        session = client.change_password(
+            current_password=current_password,
+            new_password=new_password,
+        )
+        st.session_state[_PRINCIPAL_SESSION_KEY] = AuthPrincipal(
+            user_id=session.user_id,
+            username=session.username,
+            role=session.role,
+            must_change_password=session.must_change_password,
+        )
+        st.rerun()
+
+    _show_action(st, submit)
+
+
+def _clear_auth_session(session_state: MutableMapping[str, object]) -> None:
+    session_state.pop(_PRINCIPAL_SESSION_KEY, None)
+    session_state.pop(_WORKFLOW_SESSION_KEY, None)
+    client = session_state.pop(_CLIENT_SESSION_KEY, None)
+    close = getattr(client, "close", None)
+    if callable(close):
+        close()
 
 
 def _render_service_and_data(st: Any, client: ApiClient) -> None:

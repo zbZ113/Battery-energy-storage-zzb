@@ -64,7 +64,7 @@ persistence = [
   "pgvector>=0.3,<1",
 ]
 physics = ["pybamm>=24.11,<26"]
-streamlit = ["plotly>=5.24,<7", "streamlit>=1.40,<2"]
+streamlit = ["httpx>=0.27,<1", "plotly>=5.24,<7", "streamlit>=1.40,<2"]
 tooling = ["dvc>=3.58,<4"]
 
 [tool.setuptools.packages.find]
