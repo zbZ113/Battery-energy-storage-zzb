@@ -57,6 +57,7 @@ def test_idempotency_and_evidence_constraints_are_declared() -> None:
     )
     assert ("run_id",) in _unique_column_sets("agent_run_dispatches")
     assert ("run_id", "step_id") in _unique_column_sets("agent_steps")
+    assert ("agent_step_id",) in _unique_column_sets("tool_results")
     assert ("run_id", "step_id") in _unique_column_sets("approval_requests")
     assert ("approval_request_id",) in _unique_column_sets("approval_actions")
     assert ("event_id",) in _unique_column_sets("feishu_event_receipts")

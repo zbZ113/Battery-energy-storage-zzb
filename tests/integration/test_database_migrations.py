@@ -90,6 +90,10 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
             tuple(constraint["column_names"])
             for constraint in upgraded_inspector.get_unique_constraints("agent_run_dispatches")
         }
+        assert ("agent_step_id",) in {
+            tuple(constraint["column_names"])
+            for constraint in upgraded_inspector.get_unique_constraints("tool_results")
+        }
 
         # The declared metadata must also round-trip through the lightweight
         # SQLite migration target without producing type drift.
@@ -104,6 +108,10 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
         }
         assert "depends_on_json" not in {
             column["name"] for column in revision_one_inspector.get_columns("agent_steps")
+        }
+        assert ("agent_step_id",) not in {
+            tuple(constraint["column_names"])
+            for constraint in revision_one_inspector.get_unique_constraints("tool_results")
         }
 
         command.downgrade(config, "base")

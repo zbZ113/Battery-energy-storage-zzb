@@ -312,6 +312,7 @@ class AgentEvent(Base):
 class ToolResultRecord(Base):
     __tablename__ = "tool_results"
     __table_args__ = (
+        UniqueConstraint("agent_step_id", name="uq_tool_result_agent_step_id"),
         Index("ix_tool_results_run_created", "run_id", "created_at"),
         Index("ix_tool_results_step_id", "agent_step_id"),
     )
