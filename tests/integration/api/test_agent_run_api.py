@@ -33,6 +33,7 @@ from quanxin_life.core import (
     AgentPlanningMode,
     AgentPlanStep,
     AgentRole,
+    AgentStepStatus,
     ApprovalKind,
     UserRole,
     UserStatus,
@@ -40,7 +41,12 @@ from quanxin_life.core import (
 from quanxin_life.core.product import AgentIntent
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
 from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
-from quanxin_life.persistence.models import ProvenanceRecordRow, ToolResultRecord, User
+from quanxin_life.persistence.models import (
+    AgentStep,
+    ProvenanceRecordRow,
+    ToolResultRecord,
+    User,
+)
 from quanxin_life.tools import StandardToolName
 
 ORIGIN = "https://app.example.test"
@@ -365,12 +371,14 @@ def test_visible_run_result_is_readable_only_through_its_authorized_run_scope(
     run_id = created.json()["run_id"]
     result_id = str(uuid4())
     with session_factory.begin() as session:
+        step = session.query(AgentStep).filter_by(run_id=run_id).one()
+        step.status = AgentStepStatus.COMPLETED.value
         session.add(
             ToolResultRecord(
                 id=result_id,
                 run_id=run_id,
-                agent_step_id=None,
-                tool_name=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                agent_step_id=step.id,
+                tool_name=step.tool_name,
                 tool_version="result-api-test-v1",
                 model_version="safe-model-v1",
                 data_version="safe-data-v1",
@@ -402,3 +410,44 @@ def test_visible_run_result_is_readable_only_through_its_authorized_run_scope(
 
     wrong_run = client.get(f"/v1/agent/runs/{uuid4()}/results/{result_id}")
     assert wrong_run.status_code == 404
+
+
+def test_unbound_result_is_not_exposed_as_a_completed_agent_step_result(
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
+) -> None:
+    client, _, _, session_factory = agent_client
+    project_id, dataset_id = _create_scope(client)
+    created = client.post(
+        "/v1/agent/runs",
+        headers={"Origin": ORIGIN, "Idempotency-Key": "result-unbound-0001"},
+        json={
+            "project_id": project_id,
+            "user_goal": "reject an unbound result",
+            "dataset_ids": [dataset_id],
+            "requested_outputs": ["cycle_life"],
+        },
+    )
+    assert created.status_code == 202, created.text
+    run_id = created.json()["run_id"]
+    result_id = str(uuid4())
+    with session_factory.begin() as session:
+        session.add(
+            ToolResultRecord(
+                id=result_id,
+                run_id=run_id,
+                agent_step_id=None,
+                tool_name=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                tool_version="unbound-result-v1",
+                model_version=None,
+                data_version="safe-data-v1",
+                feature_version=None,
+                input_hash="3" * 64,
+                values_json={"status": "computed"},
+                uncertainty_json=None,
+                warnings_json=[],
+                created_at=NOW,
+            )
+        )
+
+    response = client.get(f"/v1/agent/runs/{run_id}/results/{result_id}")
+    assert response.status_code == 404

@@ -311,9 +311,14 @@ class AgentRunService:
         with session_scope(self._session_factory) as session:
             run = self._visible_run(session, principal, run_id)
             row = session.scalar(
-                select(ToolResultRecord).where(
+                select(ToolResultRecord)
+                .join(AgentStep, ToolResultRecord.agent_step_id == AgentStep.id)
+                .where(
                     ToolResultRecord.id == normalized_result_id,
                     ToolResultRecord.run_id == run.id,
+                    AgentStep.run_id == run.id,
+                    AgentStep.status == AgentStepStatus.COMPLETED.value,
+                    ToolResultRecord.tool_name == AgentStep.tool_name,
                 )
             )
             if row is None:
