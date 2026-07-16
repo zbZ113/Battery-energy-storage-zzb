@@ -505,11 +505,24 @@ class ReportExport(Base):
 
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
-    __table_args__ = (UniqueConstraint("source_sha256", name="uq_knowledge_source_sha256"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "source_sha256",
+            name="uq_knowledge_project_source_sha256",
+        ),
+        UniqueConstraint(
+            "created_by_user_id",
+            "idempotency_key_hash",
+            name="uq_knowledge_uploader_idempotency_key",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
     created_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     source_uri: Mapped[str] = mapped_column(Text, nullable=False)
     source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)

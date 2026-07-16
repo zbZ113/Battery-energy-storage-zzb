@@ -26,6 +26,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
     project_adapter = object()
     dataset_adapter = object()
     agent_run_adapter = object()
+    knowledge_adapter = object()
 
     monkeypatch.setattr(
         http_application,
@@ -48,6 +49,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
         project_adapter,
         dataset_adapter,
         agent_run_adapter,
+        knowledge_adapter,
     ):
         calls["api"] = received_service
         calls["runner"] = lifetime_workflow_runner
@@ -56,6 +58,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
         calls["project_adapter"] = project_adapter
         calls["dataset_adapter"] = dataset_adapter
         calls["agent_run_adapter"] = agent_run_adapter
+        calls["knowledge_adapter"] = knowledge_adapter
         return "fastapi-app"
 
     monkeypatch.setattr(http_application, "create_fastapi_app", api_factory)
@@ -67,6 +70,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
         project_adapter=project_adapter,  # type: ignore[arg-type]
         dataset_adapter=dataset_adapter,  # type: ignore[arg-type]
         agent_run_adapter=agent_run_adapter,  # type: ignore[arg-type]
+        knowledge_adapter=knowledge_adapter,  # type: ignore[arg-type]
     )
     request = LifetimeDecisionWorkflowRequest(
         record_batch_id="batch-id",
@@ -80,6 +84,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
     assert calls["project_adapter"] is project_adapter
     assert calls["dataset_adapter"] is dataset_adapter
     assert calls["agent_run_adapter"] is agent_run_adapter
+    assert calls["knowledge_adapter"] is knowledge_adapter
     assert calls["runner"](service, request) == "workflow-result"
     assert calls["workflow"] == (service, request, store)
     assert calls["registrar"](b"payload", "registration") == "batch-id"
@@ -97,6 +102,7 @@ def test_competition_http_factory_rejects_an_explicitly_missing_auth_adapter() -
             project_adapter=object(),  # type: ignore[arg-type]
             dataset_adapter=object(),  # type: ignore[arg-type]
             agent_run_adapter=object(),  # type: ignore[arg-type]
+            knowledge_adapter=object(),  # type: ignore[arg-type]
         )
 
 
@@ -111,6 +117,7 @@ def test_competition_http_factory_rejects_an_explicitly_missing_project_adapter(
             project_adapter=None,  # type: ignore[arg-type]
             dataset_adapter=object(),  # type: ignore[arg-type]
             agent_run_adapter=object(),  # type: ignore[arg-type]
+            knowledge_adapter=object(),  # type: ignore[arg-type]
         )
 
 
@@ -125,6 +132,7 @@ def test_competition_http_factory_rejects_an_explicitly_missing_dataset_adapter(
             project_adapter=object(),  # type: ignore[arg-type]
             dataset_adapter=None,  # type: ignore[arg-type]
             agent_run_adapter=object(),  # type: ignore[arg-type]
+            knowledge_adapter=object(),  # type: ignore[arg-type]
         )
 
 
@@ -139,4 +147,20 @@ def test_competition_http_factory_rejects_an_explicitly_missing_agent_run_adapte
             project_adapter=object(),  # type: ignore[arg-type]
             dataset_adapter=object(),  # type: ignore[arg-type]
             agent_run_adapter=None,  # type: ignore[arg-type]
+            knowledge_adapter=object(),  # type: ignore[arg-type]
+        )
+
+
+def test_competition_http_factory_rejects_an_explicitly_missing_knowledge_adapter() -> None:
+    from quanxin_life.application.http_application import create_competition_fastapi_app
+
+    with pytest.raises(ValueError, match="knowledge_adapter"):
+        create_competition_fastapi_app(
+            object(),  # type: ignore[arg-type]
+            batch_store=object(),  # type: ignore[arg-type]
+            auth_adapter=object(),  # type: ignore[arg-type]
+            project_adapter=object(),  # type: ignore[arg-type]
+            dataset_adapter=object(),  # type: ignore[arg-type]
+            agent_run_adapter=object(),  # type: ignore[arg-type]
+            knowledge_adapter=None,  # type: ignore[arg-type]
         )

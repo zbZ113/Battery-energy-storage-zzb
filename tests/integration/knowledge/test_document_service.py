@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -44,6 +46,28 @@ class _MemoryObjectStore:
         assert len(payload) == stored.size_bytes
         assert hashlib.sha256(payload).hexdigest() == stored.sha256
         return payload
+
+
+class _BarrierObjectStore(_MemoryObjectStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.barrier = threading.Barrier(2)
+
+    def put_bytes(
+        self,
+        *,
+        namespace: str,
+        payload: bytes,
+        expected_sha256: str,
+        content_type: str,
+    ) -> StoredObjectRef:
+        self.barrier.wait(timeout=5)
+        return super().put_bytes(
+            namespace=namespace,
+            payload=payload,
+            expected_sha256=expected_sha256,
+            content_type=content_type,
+        )
 
 
 def _principal(user_id: str, role: UserRole) -> AuthPrincipal:
@@ -118,6 +142,7 @@ def test_member_upload_admin_review_and_markdown_page_aware_index(tmp_path) -> N
         document_version="v1",
         payload=payload,
         content_type="text/markdown; charset=utf-8",
+        idempotency_key="knowledge-upload-approved-0001",
         now=NOW,
     )
 
@@ -156,6 +181,7 @@ def test_uploader_cannot_self_approve_even_when_the_uploader_is_admin(tmp_path) 
         document_version="v1",
         payload=b"reviewed text",
         content_type="text/plain; charset=utf-8",
+        idempotency_key="knowledge-upload-admin-0001",
         now=NOW,
     )
 
@@ -174,6 +200,7 @@ def test_visible_documents_can_be_listed_and_pending_document_rejected(tmp_path)
         document_version="v1",
         payload=b"unsupported claim",
         content_type="text/plain",
+        idempotency_key="knowledge-upload-rejected-0001",
         now=NOW,
     )
 
@@ -198,8 +225,104 @@ def test_member_cannot_reject_a_document(tmp_path) -> None:  # type: ignore[no-u
         document_version="v1",
         payload=b"pending source",
         content_type="text/plain",
+        idempotency_key="knowledge-upload-pending-0001",
         now=NOW,
     )
 
     with pytest.raises(PermissionError, match="administrator"):
         service.reject_document(member, document.document_id, now=NOW)
+
+
+def test_upload_idempotency_returns_original_and_rejects_key_reuse(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from quanxin_life.knowledge.documents import KnowledgeDocumentConflictError
+
+    service, _, _, member, _, project_id = _service_context(tmp_path)
+    arguments = {
+        "project_id": project_id,
+        "title": "Idempotent source",
+        "source_uri": "https://example.test/idempotent.txt",
+        "license_name": "CC-BY-4.0",
+        "document_version": "v1",
+        "payload": b"stable content",
+        "content_type": "text/plain",
+        "idempotency_key": "knowledge-upload-stable-0001",
+        "now": NOW,
+    }
+
+    created = service.upload_document(member, **arguments)
+    repeated = service.upload_document(member, **arguments)
+
+    assert repeated == created
+    with pytest.raises(KnowledgeDocumentConflictError, match="idempotency"):
+        service.upload_document(
+            member,
+            **{**arguments, "title": "Different request"},
+        )
+
+
+def test_same_public_source_can_be_registered_in_two_visible_projects(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    service, sessions, _, member, _, first_project_id = _service_context(tmp_path)
+    second_project_id = str(uuid4())
+    with sessions.begin() as session:
+        session.add(
+            Project(
+                id=second_project_id,
+                owner_user_id=member.user_id,
+                name="second knowledge project",
+                status=ProjectStatus.ACTIVE.value,
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        )
+    shared = {
+        "title": "Shared public paper",
+        "source_uri": "https://example.test/shared-paper.txt",
+        "license_name": "CC-BY-4.0",
+        "document_version": "v1",
+        "payload": b"same immutable public source",
+        "content_type": "text/plain",
+        "now": NOW,
+    }
+
+    first = service.upload_document(
+        member,
+        project_id=first_project_id,
+        idempotency_key="knowledge-shared-first-0001",
+        **shared,
+    )
+    second = service.upload_document(
+        member,
+        project_id=second_project_id,
+        idempotency_key="knowledge-shared-second-0001",
+        **shared,
+    )
+
+    assert first.document_id != second.document_id
+    assert first.source_sha256 == second.source_sha256
+
+
+def test_concurrent_identical_uploads_resolve_to_one_document(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from quanxin_life.knowledge.documents import KnowledgeDocumentService
+
+    _, sessions, _, member, _, project_id = _service_context(tmp_path)
+    service = KnowledgeDocumentService(sessions, object_store=_BarrierObjectStore())
+    arguments = {
+        "project_id": project_id,
+        "title": "Concurrent source",
+        "source_uri": "https://example.test/concurrent.txt",
+        "license_name": "CC-BY-4.0",
+        "document_version": "v1",
+        "payload": b"concurrent immutable content",
+        "content_type": "text/plain",
+        "idempotency_key": "knowledge-concurrent-0001",
+        "now": NOW,
+    }
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(service.upload_document, member, **arguments)
+            for _ in range(2)
+        ]
+        records = [future.result(timeout=10) for future in futures]
+
+    assert records[0].document_id == records[1].document_id

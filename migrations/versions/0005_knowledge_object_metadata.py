@@ -18,6 +18,19 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     """Add metadata required for verified MinIO reads and page-aware chunks."""
 
+    connection = op.get_bind()
+    document_count = connection.execute(
+        sa.text("SELECT COUNT(*) FROM knowledge_documents")
+    ).scalar_one()
+    chunk_count = connection.execute(
+        sa.text("SELECT COUNT(*) FROM knowledge_chunks")
+    ).scalar_one()
+    if document_count or chunk_count:
+        raise RuntimeError(
+            "0005 requires empty knowledge tables; export and re-ingest legacy "
+            "documents with verified uploader and object metadata"
+        )
+
     with op.batch_alter_table("knowledge_documents") as batch_op:
         batch_op.add_column(
             sa.Column("created_by_user_id", sa.String(length=64), nullable=True)
@@ -38,15 +51,6 @@ def upgrade() -> None:
                 server_default="application/octet-stream",
             )
         )
-    op.execute(
-        sa.text(
-            "UPDATE knowledge_documents "
-            "SET created_by_user_id = ("
-            "SELECT projects.owner_user_id FROM projects "
-            "WHERE projects.id = knowledge_documents.project_id"
-            ") WHERE created_by_user_id IS NULL"
-        )
-    )
     with op.batch_alter_table("knowledge_documents") as batch_op:
         batch_op.alter_column("created_by_user_id", nullable=False)
         batch_op.alter_column("object_size_bytes", server_default=None)

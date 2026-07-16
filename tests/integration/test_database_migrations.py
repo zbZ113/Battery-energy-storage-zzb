@@ -1,8 +1,9 @@
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_TABLES = {
@@ -100,9 +101,21 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
             tuple(constraint["column_names"])
             for constraint in upgraded_inspector.get_unique_constraints("tool_results")
         }
-        assert {"created_by_user_id", "object_size_bytes", "object_content_type"} <= {
+        assert {
+            "created_by_user_id",
+            "object_size_bytes",
+            "object_content_type",
+            "idempotency_key_hash",
+            "request_hash",
+        } <= {
             column["name"]
             for column in upgraded_inspector.get_columns("knowledge_documents")
+        }
+        assert ("created_by_user_id", "idempotency_key_hash") in {
+            tuple(constraint["column_names"])
+            for constraint in upgraded_inspector.get_unique_constraints(
+                "knowledge_documents"
+            )
         }
         assert {"text_size_bytes", "text_content_type", "section_label"} <= {
             column["name"]
@@ -130,6 +143,10 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
             column["name"]
             for column in revision_one_inspector.get_columns("knowledge_documents")
         }
+        assert "idempotency_key_hash" not in {
+            column["name"]
+            for column in revision_one_inspector.get_columns("knowledge_documents")
+        }
         assert ("agent_step_id",) not in {
             tuple(constraint["column_names"])
             for constraint in revision_one_inspector.get_unique_constraints("tool_results")
@@ -139,5 +156,53 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
 
         downgraded_tables = set(inspect(engine).get_table_names())
         assert EXPECTED_TABLES.isdisjoint(downgraded_tables)
+    finally:
+        engine.dispose()
+
+
+def test_knowledge_metadata_migration_rejects_unverified_legacy_rows(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "legacy-knowledge.sqlite3"
+    database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
+    config = _config(database_url)
+    command.upgrade(config, "0004")
+    engine = create_engine(database_url)
+    timestamp = "2026-07-16 00:00:00+00:00"
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(id, username, credential_hash, must_change_credential, role, "
+                    "status, created_at, updated_at) VALUES "
+                    "('legacy-user', 'legacy@example.test', 'legacy-hash', 0, "
+                    "'ADMIN', 'ACTIVE', :now, :now)"
+                ),
+                {"now": timestamp},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO projects "
+                    "(id, owner_user_id, name, status, created_at, updated_at) VALUES "
+                    "('legacy-project', 'legacy-user', 'legacy', 'ACTIVE', :now, :now)"
+                ),
+                {"now": timestamp},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge_documents "
+                    "(id, project_id, title, source_uri, source_sha256, license_name, "
+                    "document_version, review_status, reviewer_user_id, reviewed_at, "
+                    "object_uri, created_at) VALUES "
+                    "('legacy-document', 'legacy-project', 'legacy', "
+                    "'https://example.test/legacy', :digest, 'unknown', 'v1', "
+                    "'PENDING', NULL, NULL, 'minio://legacy/object', :now)"
+                ),
+                {"digest": "a" * 64, "now": timestamp},
+            )
+
+        with pytest.raises(RuntimeError, match="requires empty knowledge tables"):
+            command.upgrade(config, "head")
     finally:
         engine.dispose()

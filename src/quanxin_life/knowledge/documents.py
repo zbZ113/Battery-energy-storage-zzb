@@ -10,10 +10,11 @@ from uuid import uuid4
 
 from pydantic import Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from quanxin_life.application.projects import ProjectService
 from quanxin_life.auth import AuthPrincipal
-from quanxin_life.core import KnowledgeReviewStatus, UserRole
+from quanxin_life.core import KnowledgeReviewStatus, UserRole, sha256_canonical
 from quanxin_life.core.schemas import ContractModel
 from quanxin_life.infrastructure.object_store import StoredObjectRef
 from quanxin_life.knowledge.parsers import parse_knowledge_document
@@ -22,6 +23,18 @@ from quanxin_life.persistence.models import KnowledgeChunk, KnowledgeDocument, P
 
 MAX_KNOWLEDGE_DOCUMENT_BYTES = 25 * 1024 * 1024
 _ALLOWED_MEDIA_TYPES = frozenset({"application/pdf", "text/markdown", "text/plain"})
+
+
+class KnowledgeDocumentConflictError(RuntimeError):
+    """Raised when an upload key or immutable source conflicts."""
+
+
+class KnowledgeDocumentIntegrityError(RuntimeError):
+    """Raised when a persisted immutable source fails verification."""
+
+
+class KnowledgeSourceConflictError(KnowledgeDocumentConflictError):
+    """Raised when the same immutable source is already in one project."""
 
 
 class KnowledgeObjectStore(Protocol):
@@ -90,11 +103,13 @@ class KnowledgeDocumentService:
         document_version: str,
         payload: bytes,
         content_type: str,
+        idempotency_key: str,
         now: datetime,
     ) -> KnowledgeDocumentRecord:
         if principal.role not in {UserRole.ADMIN, UserRole.MEMBER}:
             raise PermissionError("role is not allowed to upload knowledge documents")
         timestamp = _utc(now)
+        normalized_project_id = _bounded_text(project_id, "project_id", 64)
         normalized_title = _bounded_text(title, "title", 500)
         normalized_source = _source_uri(source_uri)
         normalized_license = _bounded_text(license_name, "license_name", 200)
@@ -102,26 +117,61 @@ class KnowledgeDocumentService:
             raise ValueError("knowledge document license must be reviewed before upload")
         normalized_version = _bounded_text(document_version, "document_version", 100)
         normalized_content_type = _content_type(content_type)
+        normalized_idempotency_key = _bounded_text(
+            idempotency_key,
+            "Idempotency-Key",
+            200,
+        )
+        if len(normalized_idempotency_key) < 8:
+            raise ValueError("Idempotency-Key must contain between 8 and 200 characters")
         if not isinstance(payload, bytes) or not payload:
             raise ValueError("knowledge document payload must be nonempty bytes")
         if len(payload) > MAX_KNOWLEDGE_DOCUMENT_BYTES:
             raise ValueError("knowledge document exceeds the 25 MB limit")
-        with session_scope(self._session_factory) as session:
+        digest = hashlib.sha256(payload).hexdigest()
+        key_hash = hashlib.sha256(normalized_idempotency_key.encode()).hexdigest()
+        request_hash = sha256_canonical(
+            {
+                "project_id": normalized_project_id,
+                "title": normalized_title,
+                "source_uri": normalized_source,
+                "license_name": normalized_license,
+                "document_version": normalized_version,
+                "source_sha256": digest,
+                "content_type": normalized_content_type,
+            }
+        )
+        session = self._session_factory()
+        try:
             project = session.scalar(
                 ProjectService.visible_projects_statement(principal).where(
-                    Project.id == project_id
+                    Project.id == normalized_project_id
                 )
             )
             if project is None:
                 raise LookupError("project was not found")
-            digest = hashlib.sha256(payload).hexdigest()
+            idempotent = session.scalar(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.created_by_user_id == principal.user_id,
+                    KnowledgeDocument.idempotency_key_hash == key_hash,
+                )
+            )
+            if idempotent is not None:
+                if idempotent.request_hash != request_hash:
+                    raise KnowledgeDocumentConflictError(
+                        "idempotency key was already used for a different request"
+                    )
+                return _document_record(idempotent)
             existing = session.scalar(
                 select(KnowledgeDocument).where(
-                    KnowledgeDocument.source_sha256 == digest
+                    KnowledgeDocument.project_id == project.id,
+                    KnowledgeDocument.source_sha256 == digest,
                 )
             )
             if existing is not None:
-                raise ValueError("knowledge document content is already registered")
+                raise KnowledgeSourceConflictError(
+                    "knowledge document content is already registered"
+                )
             stored = self._object_store.put_bytes(
                 namespace="knowledge/documents",
                 payload=payload,
@@ -132,6 +182,8 @@ class KnowledgeDocumentService:
                 id=str(uuid4()),
                 project_id=project.id,
                 created_by_user_id=principal.user_id,
+                idempotency_key_hash=key_hash,
+                request_hash=request_hash,
                 title=normalized_title,
                 source_uri=normalized_source,
                 source_sha256=digest,
@@ -147,7 +199,63 @@ class KnowledgeDocumentService:
             )
             session.add(row)
             session.flush()
-            return _document_record(row)
+            result = _document_record(row)
+            session.commit()
+            return result
+        except IntegrityError as exc:
+            session.rollback()
+            return self._resolve_concurrent_upload(
+                principal,
+                project_id=normalized_project_id,
+                key_hash=key_hash,
+                request_hash=request_hash,
+                source_sha256=digest,
+                cause=exc,
+            )
+        except BaseException:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def _resolve_concurrent_upload(
+        self,
+        principal: AuthPrincipal,
+        *,
+        project_id: str,
+        key_hash: str,
+        request_hash: str,
+        source_sha256: str,
+        cause: IntegrityError,
+    ) -> KnowledgeDocumentRecord:
+        """Resolve the winner after a unique-constraint race without hiding DB faults."""
+
+        with session_scope(self._session_factory) as session:
+            idempotent = session.scalar(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.created_by_user_id == principal.user_id,
+                    KnowledgeDocument.idempotency_key_hash == key_hash,
+                )
+            )
+            if idempotent is not None:
+                if idempotent.request_hash == request_hash:
+                    return _document_record(idempotent)
+                raise KnowledgeDocumentConflictError(
+                    "idempotency key was concurrently used for a different request"
+                ) from cause
+            duplicate_source = session.scalar(
+                select(KnowledgeDocument).where(
+                    KnowledgeDocument.project_id == project_id,
+                    KnowledgeDocument.source_sha256 == source_sha256,
+                )
+            )
+            if duplicate_source is not None:
+                raise KnowledgeSourceConflictError(
+                    "knowledge document content is already registered in this project"
+                ) from cause
+        raise KnowledgeDocumentConflictError(
+            "knowledge upload conflicted with another database write"
+        ) from cause
 
     def list_documents(
         self,
@@ -270,7 +378,12 @@ class KnowledgeDocumentService:
                 size_bytes=row.object_size_bytes,
                 content_type=row.object_content_type,
             )
-            payload = self._object_store.get_bytes(source_ref)
+            try:
+                payload = self._object_store.get_bytes(source_ref)
+            except (TypeError, ValueError) as exc:
+                raise KnowledgeDocumentIntegrityError(
+                    "knowledge source failed immutable object verification"
+                ) from exc
             parsed = parse_knowledge_document(
                 payload,
                 content_type=row.object_content_type,
@@ -367,7 +480,10 @@ def _content_type(value: str) -> str:
 __all__ = [
     "MAX_KNOWLEDGE_DOCUMENT_BYTES",
     "KnowledgeChunkRecord",
+    "KnowledgeDocumentConflictError",
+    "KnowledgeDocumentIntegrityError",
     "KnowledgeDocumentRecord",
     "KnowledgeDocumentService",
     "KnowledgeObjectStore",
+    "KnowledgeSourceConflictError",
 ]

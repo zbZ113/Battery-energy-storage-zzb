@@ -8,6 +8,7 @@ from quanxin_life.api.agent_runs import AgentRunHttpAdapter
 from quanxin_life.api.app import create_fastapi_app
 from quanxin_life.api.auth import AuthHttpAdapter
 from quanxin_life.api.datasets import DatasetHttpAdapter
+from quanxin_life.api.knowledge import KnowledgeHttpAdapter
 from quanxin_life.api.projects import ProjectHttpAdapter
 from quanxin_life.api.service import ToolInvocationService
 from quanxin_life.application.assembly import (
@@ -33,6 +34,7 @@ def create_competition_fastapi_app(
     project_adapter: ProjectHttpAdapter,
     dataset_adapter: DatasetHttpAdapter,
     agent_run_adapter: AgentRunHttpAdapter,
+    knowledge_adapter: KnowledgeHttpAdapter,
 ) -> Any:
     """Wire authenticated HTTP, tools, uploads and workflow to one trusted state."""
 
@@ -44,6 +46,8 @@ def create_competition_fastapi_app(
         raise ValueError("dataset_adapter is required for the competition HTTP application")
     if agent_run_adapter is None:
         raise ValueError("agent_run_adapter is required for the competition HTTP application")
+    if knowledge_adapter is None:
+        raise ValueError("knowledge_adapter is required for the competition HTTP application")
 
     service = create_competition_tool_invocation_service(dependencies)
 
@@ -76,4 +80,5 @@ def create_competition_fastapi_app(
         project_adapter=project_adapter,
         dataset_adapter=dataset_adapter,
         agent_run_adapter=agent_run_adapter,
+        knowledge_adapter=knowledge_adapter,
     )

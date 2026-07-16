@@ -86,6 +86,12 @@ def _context(tmp_path):  # type: ignore[no-untyped-def]
                     id=document_id,
                     project_id=project_id,
                     created_by_user_id=user_id,
+                    idempotency_key_hash=hashlib.sha256(
+                        f"knowledge-key-{suffix}".encode()
+                    ).hexdigest(),
+                    request_hash=hashlib.sha256(
+                        f"knowledge-request-{suffix}".encode()
+                    ).hexdigest(),
                     title=f"{suffix} LFP source",
                     source_uri=f"https://example.test/{suffix}.pdf",
                     source_sha256=hashlib.sha256(f"source-{suffix}".encode()).hexdigest(),

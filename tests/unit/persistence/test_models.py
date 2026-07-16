@@ -61,6 +61,9 @@ def test_idempotency_and_evidence_constraints_are_declared() -> None:
     assert ("run_id", "step_id") in _unique_column_sets("approval_requests")
     assert ("approval_request_id",) in _unique_column_sets("approval_actions")
     assert ("event_id",) in _unique_column_sets("feishu_event_receipts")
+    assert ("created_by_user_id", "idempotency_key_hash") in _unique_column_sets(
+        "knowledge_documents"
+    )
 
 
 def test_agent_run_control_plane_columns_are_strictly_declared() -> None:
