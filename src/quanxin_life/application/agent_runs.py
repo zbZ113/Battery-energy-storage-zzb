@@ -32,6 +32,9 @@ from quanxin_life.core import (
     ApprovalStatus,
     DatasetStatus,
     ProjectStatus,
+    ProvenanceRecord,
+    SourceKind,
+    ToolResult,
     UserRole,
     sha256_canonical,
 )
@@ -47,6 +50,8 @@ from quanxin_life.persistence.models import (
     ApprovalRequestRow,
     Dataset,
     Project,
+    ProvenanceRecordRow,
+    ToolResultRecord,
 )
 from quanxin_life.tools import StandardToolName
 
@@ -123,6 +128,13 @@ class AgentRunRecord(ContractModel):
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("Agent run timestamps must include a timezone")
+    return value.astimezone(UTC)
+
+
+def _database_utc(value: datetime) -> datetime:
+    """Interpret timezone-naive SQLite values as UTC; production stores aware UTC."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
 
 
@@ -285,6 +297,61 @@ class AgentRunService:
                 .order_by(AgentEvent.sequence)
             ).all()
             return tuple(_event_record(event) for event in events)
+
+    def get_result(
+        self,
+        principal: AuthPrincipal,
+        run_id: str,
+        result_id: str,
+    ) -> ToolResult:
+        """Read one persisted result only through a project-visible Agent run."""
+        normalized_result_id = result_id.strip() if isinstance(result_id, str) else ""
+        if not normalized_result_id:
+            raise AgentRunNotFoundError("Agent result was not found")
+        with session_scope(self._session_factory) as session:
+            run = self._visible_run(session, principal, run_id)
+            row = session.scalar(
+                select(ToolResultRecord).where(
+                    ToolResultRecord.id == normalized_result_id,
+                    ToolResultRecord.run_id == run.id,
+                )
+            )
+            if row is None:
+                raise AgentRunNotFoundError("Agent result was not found")
+            provenance_rows = tuple(
+                session.scalars(
+                    select(ProvenanceRecordRow)
+                    .where(ProvenanceRecordRow.tool_result_id == row.id)
+                    .order_by(ProvenanceRecordRow.source_id, ProvenanceRecordRow.id)
+                ).all()
+            )
+            try:
+                return ToolResult(
+                    result_id=row.id,
+                    tool_name=row.tool_name,
+                    tool_version=row.tool_version,
+                    model_version=row.model_version,
+                    data_version=row.data_version,
+                    feature_version=row.feature_version,
+                    input_hash=row.input_hash,
+                    values=row.values_json,
+                    uncertainty=row.uncertainty_json,
+                    warnings=row.warnings_json,
+                    provenance=[
+                        ProvenanceRecord(
+                            source_id=item.source_id,
+                            source_kind=SourceKind(item.source_kind),
+                            uri=item.uri,
+                            sha256=item.sha256,
+                            description=item.description,
+                            created_at=_database_utc(item.created_at),
+                        )
+                        for item in provenance_rows
+                    ],
+                    created_at=_database_utc(row.created_at),
+                )
+            except ValueError as exc:
+                raise AgentRunStateError("Agent result has invalid persisted state") from exc
 
     def dispatch_pending(
         self,

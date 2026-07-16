@@ -119,6 +119,19 @@ def create_agent_run_http_adapter(
         except AgentRunStateError as exc:
             raise HTTPException(status_code=500, detail="invalid_agent_run_state") from exc
 
+    @router.get("/{run_id}/results/{result_id}")
+    def get_run_result(
+        run_id: str,
+        result_id: str,
+        principal: AuthPrincipal = ready_principal,
+    ) -> Any:
+        try:
+            return service.get_result(principal, run_id, result_id)
+        except AgentRunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="agent_result_not_found") from exc
+        except AgentRunStateError as exc:
+            raise HTTPException(status_code=500, detail="invalid_agent_result_state") from exc
+
     @router.post(
         "/{run_id}/cancel",
         response_model=AgentRunRecord,

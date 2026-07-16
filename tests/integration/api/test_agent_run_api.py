@@ -39,8 +39,8 @@ from quanxin_life.core import (
 )
 from quanxin_life.core.product import AgentIntent
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
-from quanxin_life.persistence.database import DatabaseConfig
-from quanxin_life.persistence.models import User
+from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
+from quanxin_life.persistence.models import ProvenanceRecordRow, ToolResultRecord, User
 from quanxin_life.tools import StandardToolName
 
 ORIGIN = "https://app.example.test"
@@ -102,7 +102,7 @@ class RecordingQueue:
 @pytest.fixture
 def agent_client(
     tmp_path: Path,
-) -> tuple[TestClient, RecordingQueue, AgentRunService]:
+) -> tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory]:
     engine = create_engine_from_config(
         DatabaseConfig(url=f"sqlite+pysqlite:///{tmp_path / 'agent-api.sqlite3'}")
     )
@@ -160,7 +160,7 @@ def agent_client(
         json={"username": USERNAME, "password": PASSWORD},
     )
     assert login.status_code == 200
-    return client, queue, agent_service
+    return client, queue, agent_service, session_factory
 
 
 def _create_scope(client: TestClient) -> tuple[str, str]:
@@ -190,9 +190,9 @@ def _create_scope(client: TestClient) -> tuple[str, str]:
 
 
 def test_agent_run_create_requires_idempotency_and_dispatches_only_once(
-    agent_client: tuple[TestClient, RecordingQueue, AgentRunService],
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
 ) -> None:
-    client, queue, _ = agent_client
+    client, queue, _, _ = agent_client
     project_id, dataset_id = _create_scope(client)
     payload = {
         "project_id": project_id,
@@ -220,9 +220,9 @@ def test_agent_run_create_requires_idempotency_and_dispatches_only_once(
 
 
 def test_agent_run_write_requires_origin_and_idempotency_conflicts_return_409(
-    agent_client: tuple[TestClient, RecordingQueue, AgentRunService],
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
 ) -> None:
-    client, _, _ = agent_client
+    client, _, _, _ = agent_client
     project_id, dataset_id = _create_scope(client)
     headers = {"Origin": ORIGIN, "Idempotency-Key": "conflict-key-0001"}
     payload = {
@@ -246,9 +246,9 @@ def test_agent_run_write_requires_origin_and_idempotency_conflicts_return_409(
 
 
 def test_cancelled_run_exposes_a_replayable_terminal_sse_timeline(
-    agent_client: tuple[TestClient, RecordingQueue, AgentRunService],
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
 ) -> None:
-    client, _, _ = agent_client
+    client, _, _, _ = agent_client
     project_id, dataset_id = _create_scope(client)
     created = client.post(
         "/v1/agent/runs",
@@ -284,9 +284,9 @@ def test_cancelled_run_exposes_a_replayable_terminal_sse_timeline(
 
 
 def test_approval_and_rejection_routes_resume_or_stop_the_run(
-    agent_client: tuple[TestClient, RecordingQueue, AgentRunService],
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
 ) -> None:
-    client, queue, service = agent_client
+    client, queue, service, _ = agent_client
     project_id, dataset_id = _create_scope(client)
 
     def create_run(key: str) -> dict[str, object]:
@@ -344,3 +344,61 @@ def test_approval_and_rejection_routes_resume_or_stop_the_run(
     )
     assert rejected.status_code == 200, rejected.text
     assert rejected.json()["status"] == "CANCELLED"
+
+
+def test_visible_run_result_is_readable_only_through_its_authorized_run_scope(
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
+) -> None:
+    client, _, _, session_factory = agent_client
+    project_id, dataset_id = _create_scope(client)
+    created = client.post(
+        "/v1/agent/runs",
+        headers={"Origin": ORIGIN, "Idempotency-Key": "result-read-0001"},
+        json={
+            "project_id": project_id,
+            "user_goal": "read a traceable result",
+            "dataset_ids": [dataset_id],
+            "requested_outputs": ["cycle_life"],
+        },
+    )
+    assert created.status_code == 202, created.text
+    run_id = created.json()["run_id"]
+    result_id = str(uuid4())
+    with session_factory.begin() as session:
+        session.add(
+            ToolResultRecord(
+                id=result_id,
+                run_id=run_id,
+                agent_step_id=None,
+                tool_name=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                tool_version="result-api-test-v1",
+                model_version="safe-model-v1",
+                data_version="safe-data-v1",
+                feature_version="safe-feature-v1",
+                input_hash="1" * 64,
+                values_json={"status": "computed"},
+                uncertainty_json=None,
+                warnings_json=[],
+                created_at=NOW,
+            )
+        )
+        session.add(
+            ProvenanceRecordRow(
+                id=str(uuid4()),
+                tool_result_id=result_id,
+                source_id="safe-source-v1",
+                source_kind="OBSERVED",
+                uri="memory://agent-result-test",
+                sha256="2" * 64,
+                description="Synthetic API authorization fixture",
+                created_at=NOW,
+            )
+        )
+
+    readable = client.get(f"/v1/agent/runs/{run_id}/results/{result_id}")
+    assert readable.status_code == 200, readable.text
+    assert readable.json()["result_id"] == result_id
+    assert readable.json()["values"] == {"status": "computed"}
+
+    wrong_run = client.get(f"/v1/agent/runs/{uuid4()}/results/{result_id}")
+    assert wrong_run.status_code == 404
