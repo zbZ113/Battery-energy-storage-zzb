@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import uuid4
 
+import pytest
+
 from quanxin_life.core import AgentRunState, AgentRunStatus
 
 
@@ -46,6 +48,36 @@ class _Worker:
         )
 
 
+class _RetrySignal(RuntimeError):
+    pass
+
+
+class _RetryingBoundTask:
+    def __init__(self) -> None:
+        self.request = _Request(id="delivery-busy")
+        self.calls: list[tuple[type[BaseException], int, int]] = []
+
+    def retry(
+        self,
+        *,
+        exc: BaseException,
+        countdown: int,
+        max_retries: int,
+    ) -> BaseException:
+        self.calls.append((type(exc), countdown, max_retries))
+        return _RetrySignal("retry requested")
+
+
+class _BusyWorker:
+    def execute(self, *, run_id: str, plan_hash: str) -> AgentRunState:
+        del run_id, plan_hash
+        from quanxin_life.application.agent_run_execution import (
+            AgentRunExecutionBusyError,
+        )
+
+        raise AgentRunExecutionBusyError("active lease")
+
+
 def test_register_agent_run_task_uses_versioned_name_and_identity_only_payload() -> None:
     from quanxin_life.infrastructure.celery_queue import AGENT_RUN_TASK
     from quanxin_life.tasks.agent_runs import register_agent_run_task
@@ -69,3 +101,17 @@ def test_register_agent_run_task_uses_versioned_name_and_identity_only_payload()
     assert result == {"run_id": run_id, "status": AgentRunStatus.COMPLETED.value}
     assert "result_ids" not in result
     assert app.registered is task
+
+
+def test_agent_run_task_retries_when_another_worker_owns_the_step_lease() -> None:
+    from quanxin_life.application.agent_run_execution import AgentRunExecutionBusyError
+    from quanxin_life.tasks.agent_runs import register_agent_run_task
+
+    app = _FakeCeleryApp()
+    task = register_agent_run_task(app=app, worker=_BusyWorker())
+    bound = _RetryingBoundTask()
+
+    with pytest.raises(_RetrySignal, match="retry requested"):
+        task(bound, run_id=str(uuid4()), plan_hash="a" * 64)
+
+    assert bound.calls == [(AgentRunExecutionBusyError, 5, 20)]

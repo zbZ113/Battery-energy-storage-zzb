@@ -23,12 +23,21 @@ NOW = datetime(2026, 7, 16, 12, 0, tzinfo=UTC)
 
 class _ContextResolver:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str]] = []
+        self.dataset_calls: list[tuple[str, str, str]] = []
+        self.context_calls: list[tuple[str, str, str]] = []
 
-    def resolve(self, *, run_id: str, project_id: str, reference: str) -> object:
-        self.calls.append((run_id, project_id, reference))
-        if reference.startswith("intent.dataset_ids["):
-            return "verified-record-batch-v1"
+    def resolve_dataset_artifact(
+        self,
+        *,
+        run_id: str,
+        project_id: str,
+        dataset_id: str,
+    ) -> object:
+        self.dataset_calls.append((run_id, project_id, dataset_id))
+        return "verified-record-batch-v1"
+
+    def resolve_context(self, *, run_id: str, project_id: str, reference: str) -> object:
+        self.context_calls.append((run_id, project_id, reference))
         if reference == "context.calibration_cohort_id":
             return "cohort-reviewed-v1"
         raise KeyError(reference)
@@ -135,8 +144,10 @@ def test_compile_step_resolves_only_intent_context_and_prior_result_references()
     assert dataset_step.input_value == {"record_batch_id": "verified-record-batch-v1"}
     assert result_step.input_value == {"upstream_result_id": feature_result.result_id}
     assert context_step.input_value == {"calibration_cohort_id": "cohort-reviewed-v1"}
-    assert resolver.calls == [
-        (run_id, intent.project_id, "intent.dataset_ids[0]"),
+    assert resolver.dataset_calls == [
+        (run_id, intent.project_id, intent.dataset_ids[0]),
+    ]
+    assert resolver.context_calls == [
         (run_id, intent.project_id, "context.calibration_cohort_id"),
     ]
 

@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from quanxin_life.agents.supervisor import (
     SupervisorPlanningRequest,
@@ -38,7 +38,9 @@ from quanxin_life.core.schemas import ContractModel
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
 from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
 from quanxin_life.persistence.models import (
+    AgentRun,
     AgentStep,
+    ProvenanceRecordRow,
     SessionRecord,
     ToolResultRecord,
     User,
@@ -57,10 +59,18 @@ class _PredictionInput(ContractModel):
 
 
 class _DatasetArtifactResolver:
-    def resolve(self, *, run_id: str, project_id: str, reference: str) -> object:
+    def resolve_dataset_artifact(
+        self,
+        *,
+        run_id: str,
+        project_id: str,
+        dataset_id: str,
+    ) -> object:
+        del run_id, project_id, dataset_id
+        return "verified-worker-record-batch-v1"
+
+    def resolve_context(self, *, run_id: str, project_id: str, reference: str) -> object:
         del run_id, project_id
-        if reference.startswith("intent.dataset_ids["):
-            return "verified-worker-record-batch-v1"
         raise KeyError(reference)
 
 
@@ -256,6 +266,8 @@ def _worker(
     run_service: AgentRunService,
     session_factory: SessionFactory,
     tools: _CountingTools,
+    *,
+    now: datetime = NOW,
 ):
     from quanxin_life.application.agent_run_execution import AgentRunExecutionWorker
 
@@ -264,7 +276,7 @@ def _worker(
         run_service=run_service,
         tool_service=tools.service(),
         context_resolver=_DatasetArtifactResolver(),
-        clock=lambda: NOW,
+        clock=lambda: now,
     )
 
 
@@ -362,3 +374,107 @@ def test_worker_pauses_for_approval_then_resumes_the_same_plan(tmp_path: Path) -
     assert run_service.get_approval(member, run_id, approval_id).status is (
         ApprovalStatus.APPROVED
     )
+
+
+def test_worker_refuses_to_steal_an_active_step_lease(tmp_path: Path) -> None:
+    from quanxin_life.application.agent_run_execution import AgentRunExecutionBusyError
+
+    run_service, member, session_factory, run_id, tools = _setup(tmp_path)
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+    with session_factory.begin() as session:
+        step = session.scalar(
+            select(AgentStep).where(AgentStep.run_id == run_id, AgentStep.ordinal == 1)
+        )
+        assert step is not None
+        step.status = "RUNNING"
+        step.attempts = 1
+        step.claim_token = "a" * 64
+        step.lease_expires_at = NOW + timedelta(minutes=5)
+
+    with pytest.raises(AgentRunExecutionBusyError, match="lease"):
+        _worker(run_service, session_factory, tools).execute(
+            run_id=run_id,
+            plan_hash=plan_hash,
+        )
+
+    assert tools.calls == []
+
+
+def test_worker_reclaims_an_expired_step_lease_and_clears_the_claim(tmp_path: Path) -> None:
+    run_service, member, session_factory, run_id, tools = _setup(tmp_path)
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+    with session_factory.begin() as session:
+        step = session.scalar(
+            select(AgentStep).where(AgentStep.run_id == run_id, AgentStep.ordinal == 1)
+        )
+        assert step is not None
+        step.status = "RUNNING"
+        step.attempts = 1
+        step.claim_token = "b" * 64
+        step.lease_expires_at = NOW - timedelta(seconds=1)
+
+    completed = _worker(run_service, session_factory, tools).execute(
+        run_id=run_id,
+        plan_hash=plan_hash,
+    )
+
+    assert completed.status is AgentRunStatus.COMPLETED
+    with session_factory() as session:
+        first = session.scalar(
+            select(AgentStep).where(AgentStep.run_id == run_id, AgentStep.ordinal == 1)
+        )
+        assert first is not None
+        assert first.attempts == 2
+        assert first.claim_token is None
+        assert first.lease_expires_at is None
+
+
+def test_worker_rejects_a_persisted_result_whose_input_hash_was_tampered(
+    tmp_path: Path,
+) -> None:
+    from quanxin_life.application.agent_run_execution import AgentRunExecutionError
+
+    run_service, member, session_factory, run_id, tools = _setup(tmp_path)
+    first_worker = _worker(run_service, session_factory, tools)
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+    assert first_worker.execute(run_id=run_id, plan_hash=plan_hash).status is (
+        AgentRunStatus.COMPLETED
+    )
+
+    with session_factory.begin() as session:
+        steps = tuple(
+            session.scalars(
+                select(AgentStep).where(AgentStep.run_id == run_id).order_by(AgentStep.ordinal)
+            )
+        )
+        results = tuple(
+            session.scalars(
+                select(ToolResultRecord)
+                .where(ToolResultRecord.run_id == run_id)
+                .order_by(ToolResultRecord.created_at)
+            )
+        )
+        assert len(steps) == len(results) == 2
+        results[0].input_hash = "0" * 64
+        session.execute(
+            delete(ProvenanceRecordRow).where(
+                ProvenanceRecordRow.tool_result_id == results[1].id
+            )
+        )
+        session.delete(results[1])
+        steps[1].status = "PENDING"
+        steps[1].started_at = None
+        steps[1].completed_at = None
+        run = session.scalar(select(AgentRun).where(AgentRun.id == run_id))
+        assert run is not None
+        run.status = AgentRunStatus.RUNNING.value
+        run.completed_at = None
+
+    fresh_tools = _CountingTools()
+    with pytest.raises(AgentRunExecutionError, match="input hash"):
+        _worker(run_service, session_factory, fresh_tools).execute(
+            run_id=run_id,
+            plan_hash=plan_hash,
+        )
+
+    assert fresh_tools.calls == []

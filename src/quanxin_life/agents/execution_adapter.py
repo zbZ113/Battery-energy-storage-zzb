@@ -28,7 +28,15 @@ class AgentExecutionReferenceError(ValueError):
 class AgentExecutionContextResolver(Protocol):
     """Resolve an allowlisted server-owned context reference for one run."""
 
-    def resolve(self, *, run_id: str, project_id: str, reference: str) -> object: ...
+    def resolve_dataset_artifact(
+        self,
+        *,
+        run_id: str,
+        project_id: str,
+        dataset_id: str,
+    ) -> object: ...
+
+    def resolve_context(self, *, run_id: str, project_id: str, reference: str) -> object: ...
 
 
 def compile_agent_step(
@@ -53,16 +61,16 @@ def compile_agent_step(
         if dataset_match is not None:
             index = int(dataset_match.group("index"))
             try:
-                validated_intent.dataset_ids[index]
+                dataset_id = validated_intent.dataset_ids[index]
             except IndexError as exc:  # pragma: no cover - planner policy is revalidated above
                 raise AgentExecutionReferenceError(
                     "Agent step references a missing authorized dataset"
                 ) from exc
             try:
-                resolved[input_name] = context_resolver.resolve(
+                resolved[input_name] = context_resolver.resolve_dataset_artifact(
                     run_id=run_id,
                     project_id=validated_intent.project_id,
-                    reference=reference,
+                    dataset_id=dataset_id,
                 )
             except (LookupError, ValueError) as exc:
                 raise AgentExecutionReferenceError(
@@ -89,7 +97,7 @@ def compile_agent_step(
             continue
 
         try:
-            resolved[input_name] = context_resolver.resolve(
+            resolved[input_name] = context_resolver.resolve_context(
                 run_id=run_id,
                 project_id=validated_intent.project_id,
                 reference=reference,

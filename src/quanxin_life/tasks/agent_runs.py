@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
+from quanxin_life.application.agent_run_execution import AgentRunExecutionBusyError
 from quanxin_life.core import AgentRunState
 from quanxin_life.infrastructure.celery_queue import AGENT_RUN_TASK
 
@@ -22,6 +23,14 @@ class CeleryTaskApplication(Protocol):
 
 class BoundCeleryTask(Protocol):
     """Only the non-sensitive delivery identity is available from Celery."""
+
+    def retry(
+        self,
+        *,
+        exc: BaseException,
+        countdown: int,
+        max_retries: int,
+    ) -> BaseException: ...
 
 
 def register_agent_run_task(
@@ -44,8 +53,10 @@ def register_agent_run_task(
         run_id: str,
         plan_hash: str,
     ) -> TaskResult:
-        del bound_task
-        state = worker.execute(run_id=run_id, plan_hash=plan_hash)
+        try:
+            state = worker.execute(run_id=run_id, plan_hash=plan_hash)
+        except AgentRunExecutionBusyError as exc:
+            raise bound_task.retry(exc=exc, countdown=5, max_retries=20) from exc
         return {"run_id": state.run_id, "status": state.status.value}
 
     return execute_agent_run

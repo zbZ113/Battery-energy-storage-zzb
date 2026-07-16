@@ -74,6 +74,12 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
         assert {"depends_on_json", "failure_policy"} <= {
             column["name"] for column in upgraded_inspector.get_columns("agent_steps")
         }
+        assert {
+            "attempts",
+            "claim_token",
+            "lease_expires_at",
+            "last_error_code",
+        } <= {column["name"] for column in upgraded_inspector.get_columns("agent_steps")}
         assert ("created_by_user_id", "idempotency_key_hash") in {
             tuple(constraint["column_names"])
             for constraint in upgraded_inspector.get_unique_constraints("agent_runs")
@@ -107,6 +113,9 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
             column["name"] for column in revision_one_inspector.get_columns("agent_runs")
         }
         assert "depends_on_json" not in {
+            column["name"] for column in revision_one_inspector.get_columns("agent_steps")
+        }
+        assert "claim_token" not in {
             column["name"] for column in revision_one_inspector.get_columns("agent_steps")
         }
         assert ("agent_step_id",) not in {

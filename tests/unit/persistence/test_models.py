@@ -86,6 +86,12 @@ def test_agent_run_control_plane_columns_are_strictly_declared() -> None:
     assert agent_steps.c.depends_on_json.nullable is False
     assert isinstance(agent_steps.c.failure_policy.type, String)
     assert agent_steps.c.failure_policy.nullable is False
+    assert agent_steps.c.attempts.nullable is False
+    assert isinstance(agent_steps.c.claim_token.type, String)
+    assert agent_steps.c.claim_token.type.length == 64
+    assert agent_steps.c.claim_token.nullable is True
+    assert agent_steps.c.lease_expires_at.nullable is True
+    assert agent_steps.c.last_error_code.nullable is True
 
 
 def test_agent_run_dispatch_is_a_durable_one_row_per_run_outbox() -> None:

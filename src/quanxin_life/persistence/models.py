@@ -286,6 +286,10 @@ class AgentStep(Base):
     depends_on_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     failure_policy: Mapped[str] = mapped_column(String(32), nullable=False)
     requires_human_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    claim_token: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
