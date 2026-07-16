@@ -76,6 +76,7 @@ def create_fastapi_app(
     dataset_adapter: Any | None = None,
     agent_run_adapter: Any | None = None,
     knowledge_adapter: Any | None = None,
+    feishu_adapter: Any | None = None,
 ) -> Any:
     """Create the HTTP adapter without duplicating domain-tool execution logic."""
     try:
@@ -126,6 +127,10 @@ def create_fastapi_app(
         if auth_adapter is None:
             raise ValueError("knowledge_adapter requires auth_adapter")
         app.include_router(knowledge_adapter.router)
+    if feishu_adapter is not None:
+        # Feishu callbacks authenticate their exact body bytes and deliberately
+        # do not pass through browser session or CSRF dependencies.
+        app.include_router(feishu_adapter.router)
     ready_route_options = (
         {"dependencies": ready_user_dependencies} if ready_user_dependencies else {}
     )
