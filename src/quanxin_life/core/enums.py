@@ -59,6 +59,17 @@ class AgentRunStatus(StrEnum):
     FALLBACK = "FALLBACK"
 
 
+class AgentStepStatus(StrEnum):
+    """Persisted lifecycle states for one bounded Agent plan step."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
 class AgentDispatchStatus(StrEnum):
     """Durable outbox state for an Agent run."""
 
@@ -72,6 +83,9 @@ class AgentEventType(StrEnum):
     RUN_CREATED = "RUN_CREATED"
     RUN_DISPATCHED = "RUN_DISPATCHED"
     DISPATCH_FAILED = "DISPATCH_FAILED"
+    STEP_STARTED = "STEP_STARTED"
+    STEP_COMPLETED = "STEP_COMPLETED"
+    STEP_FAILED = "STEP_FAILED"
     RUN_CANCELLED = "RUN_CANCELLED"
     APPROVAL_REQUESTED = "APPROVAL_REQUESTED"
     APPROVAL_APPROVED = "APPROVAL_APPROVED"

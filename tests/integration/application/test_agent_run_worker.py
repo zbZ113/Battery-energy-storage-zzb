@@ -26,6 +26,7 @@ from quanxin_life.core import (
     AgentPlanStep,
     AgentRole,
     AgentRunStatus,
+    AgentStepStatus,
     ApprovalStatus,
     ProvenanceRecord,
     SourceKind,
@@ -75,8 +76,14 @@ class _DatasetArtifactResolver:
 
 
 class _Planner:
-    def __init__(self, *, approval: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        approval: bool = False,
+        failure_policy: AgentFailurePolicy = AgentFailurePolicy.STOP,
+    ) -> None:
         self.approval = approval
+        self.failure_policy = failure_policy
 
     def plan(
         self,
@@ -100,7 +107,7 @@ class _Planner:
                 tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
                 input_references={"record_batch_id": "intent.dataset_ids[0]"},
                 requires_approval=self.approval,
-                failure_policy=AgentFailurePolicy.STOP,
+                failure_policy=self.failure_policy,
             ),
             AgentPlanStep(
                 step_id="predict",
@@ -122,8 +129,9 @@ class _Planner:
 
 
 class _CountingTools:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_feature_attempts: int = 0) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.fail_feature_attempts = fail_feature_attempts
 
     def service(self) -> ToolInvocationService:
         registry = ToolRegistry()
@@ -148,6 +156,9 @@ class _CountingTools:
     def _features(self, value: _FeaturesInput) -> ToolResult:
         payload = value.model_dump(mode="json")
         self.calls.append((StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value, payload))
+        if self.fail_feature_attempts > 0:
+            self.fail_feature_attempts -= 1
+            raise RuntimeError("test-only transient tool failure")
         return _tool_result(StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES, payload)
 
     def _prediction(self, value: _PredictionInput) -> ToolResult:
@@ -194,6 +205,8 @@ def _setup(
     tmp_path: Path,
     *,
     approval: bool = False,
+    failure_policy: AgentFailurePolicy = AgentFailurePolicy.STOP,
+    fail_feature_attempts: int = 0,
 ) -> tuple[
     AgentRunService,
     AuthPrincipal,
@@ -242,7 +255,10 @@ def _setup(
         now=NOW,
     )
     dataset = dataset_service.freeze_dataset(member, dataset.dataset_id, now=NOW)
-    run_service = AgentRunService(session_factory, planner=_Planner(approval=approval))
+    run_service = AgentRunService(
+        session_factory,
+        planner=_Planner(approval=approval, failure_policy=failure_policy),
+    )
     run = run_service.create_run(
         member,
         request=SupervisorPlanningRequest(
@@ -258,7 +274,7 @@ def _setup(
         ),
         now=NOW,
     )
-    tools = _CountingTools()
+    tools = _CountingTools(fail_feature_attempts=fail_feature_attempts)
     return run_service, member, session_factory, run.run_id, tools
 
 
@@ -308,9 +324,19 @@ def test_worker_executes_each_step_once_and_resumes_duplicate_delivery_without_r
                 select(ToolResultRecord).where(ToolResultRecord.run_id == run_id)
             )
         )
-    assert [step.status for step in steps] == ["COMPLETED", "COMPLETED"]
+    assert [step.status for step in steps] == [
+        AgentStepStatus.COMPLETED.value,
+        AgentStepStatus.COMPLETED.value,
+    ]
     assert len(results) == 2
-    assert run_service.list_events(member, run_id)[-1].event_type == "RUN_COMPLETED"
+    assert [event.event_type.value for event in run_service.list_events(member, run_id)] == [
+        "RUN_CREATED",
+        "STEP_STARTED",
+        "STEP_COMPLETED",
+        "STEP_STARTED",
+        "STEP_COMPLETED",
+        "RUN_COMPLETED",
+    ]
 
 
 def test_worker_rejects_a_stale_queue_plan_hash_before_tool_execution(tmp_path: Path) -> None:
@@ -478,3 +504,53 @@ def test_worker_rejects_a_persisted_result_whose_input_hash_was_tampered(
         )
 
     assert fresh_tools.calls == []
+
+
+def test_worker_applies_retry_once_exactly_once_before_continuing(tmp_path: Path) -> None:
+    run_service, member, session_factory, run_id, tools = _setup(
+        tmp_path,
+        failure_policy=AgentFailurePolicy.RETRY_ONCE,
+        fail_feature_attempts=1,
+    )
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+
+    completed = _worker(run_service, session_factory, tools).execute(
+        run_id=run_id,
+        plan_hash=plan_hash,
+    )
+
+    assert completed.status is AgentRunStatus.COMPLETED
+    assert [name for name, _ in tools.calls].count(
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value
+    ) == 2
+    with session_factory() as session:
+        first = session.scalar(
+            select(AgentStep).where(AgentStep.run_id == run_id, AgentStep.ordinal == 1)
+        )
+        assert first is not None
+        assert first.attempts == 2
+
+
+def test_worker_marks_replan_policy_unavailable_without_fake_replanning(
+    tmp_path: Path,
+) -> None:
+    run_service, member, session_factory, run_id, tools = _setup(
+        tmp_path,
+        failure_policy=AgentFailurePolicy.REPLAN,
+        fail_feature_attempts=1,
+    )
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+
+    failed = _worker(run_service, session_factory, tools).execute(
+        run_id=run_id,
+        plan_hash=plan_hash,
+    )
+
+    assert failed.status is AgentRunStatus.FAILED
+    with session_factory() as session:
+        first = session.scalar(
+            select(AgentStep).where(AgentStep.run_id == run_id, AgentStep.ordinal == 1)
+        )
+        assert first is not None
+        assert first.last_error_code is not None
+        assert first.last_error_code.startswith("REPLAN_UNAVAILABLE:")

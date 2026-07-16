@@ -26,6 +26,7 @@ from quanxin_life.core import (
     AgentPlan,
     AgentPlanningMode,
     AgentRunStatus,
+    AgentStepStatus,
     ApprovalKind,
     ApprovalRequest,
     ApprovalStatus,
@@ -216,7 +217,7 @@ class AgentRunService:
                             ordinal=ordinal,
                             role=step.role.value,
                             tool_name=step.tool_name,
-                            status="PENDING",
+                            status=AgentStepStatus.PENDING.value,
                             input_refs_json=step.input_references,
                             depends_on_json=list(step.depends_on),
                             failure_policy=step.failure_policy.value,
@@ -417,6 +418,7 @@ class AgentRunService:
             session.add(row)
             run.status = AgentRunStatus.AWAITING_APPROVAL.value
             run.updated_at = timestamp
+            step.status = AgentStepStatus.AWAITING_APPROVAL.value
             self._append_next_event(
                 session,
                 run_id=run.id,
@@ -550,6 +552,15 @@ class AgentRunService:
                 )
                 if target is ApprovalStatus.APPROVED:
                     run.status = AgentRunStatus.RUNNING.value
+                    step = session.scalar(
+                        select(AgentStep).where(
+                            AgentStep.run_id == run.id,
+                            AgentStep.step_id == row.step_id,
+                        )
+                    )
+                    if step is None:
+                        raise AgentRunStateError("approval request Agent step was not found")
+                    step.status = AgentStepStatus.PENDING.value
                     dispatch.status = AgentDispatchStatus.PENDING.value
                     dispatch.task_id = None
                     dispatch.updated_at = timestamp
@@ -557,6 +568,16 @@ class AgentRunService:
                 else:
                     run.status = AgentRunStatus.CANCELLED.value
                     run.completed_at = timestamp
+                    step = session.scalar(
+                        select(AgentStep).where(
+                            AgentStep.run_id == run.id,
+                            AgentStep.step_id == row.step_id,
+                        )
+                    )
+                    if step is None:
+                        raise AgentRunStateError("approval request Agent step was not found")
+                    step.status = AgentStepStatus.CANCELLED.value
+                    step.completed_at = timestamp
                     event_type = AgentEventType.APPROVAL_REJECTED
                     self._cancel_other_pending_approvals(
                         session, run_id=run.id, exclude_approval_id=row.id

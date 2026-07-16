@@ -20,10 +20,12 @@ from quanxin_life.application.agent_runs import AgentRunService
 from quanxin_life.audit import AuditLedgerError
 from quanxin_life.core import (
     AgentEventType,
+    AgentFailurePolicy,
     AgentIntent,
     AgentPlan,
     AgentRunState,
     AgentRunStatus,
+    AgentStepStatus,
     ApprovalKind,
     ApprovalStatus,
     ProvenanceRecord,
@@ -102,20 +104,24 @@ class AgentRunExecutionWorker:
                 step_rows,
             )
             next_row = next(
-                (row for row in step_rows if row.status != "COMPLETED"),
+                (
+                    row
+                    for row in step_rows
+                    if row.status != AgentStepStatus.COMPLETED.value
+                ),
                 None,
             )
             if next_row is None:
                 self._complete_run(run_id, plan_hash)
                 return self._state(run_id)
-            if next_row.status == "RUNNING" and _lease_is_active(
+            if next_row.status == AgentStepStatus.RUNNING.value and _lease_is_active(
                 next_row.lease_expires_at,
                 self._now(),
             ):
                 raise AgentRunExecutionBusyError(
                     "Agent step has an active execution lease"
                 )
-            if next_row.status == "FAILED":
+            if next_row.status == AgentStepStatus.FAILED.value:
                 self._fail_run(
                     run_id,
                     next_row.id,
@@ -159,12 +165,14 @@ class AgentRunExecutionWorker:
                 return self._state(run_id)
 
             if outcome.status is not WorkflowStatus.COMPLETED or len(outcome.tool_results) != 1:
-                self._fail_run(
+                should_retry = self._handle_step_failure(
                     run_id,
                     next_row.id,
                     claim_token,
                     outcome.failure_code or "CONSTRAINED_STEP_FAILED",
                 )
+                if should_retry:
+                    continue
                 return self._state(run_id)
             self._persist_step_result(
                 run_id=run_id,
@@ -257,11 +265,11 @@ class AgentRunExecutionWorker:
                         )
                     ).all()
                 )
-                if step.status == "COMPLETED" and len(records) != 1:
+                if step.status == AgentStepStatus.COMPLETED.value and len(records) != 1:
                     raise AgentRunExecutionError(
                         "completed Agent step must have exactly one persisted ToolResult"
                     )
-                if step.status != "COMPLETED" and records:
+                if step.status != AgentStepStatus.COMPLETED.value and records:
                     raise AgentRunExecutionError(
                         "unfinished Agent step cannot own a persisted ToolResult"
                     )
@@ -345,23 +353,39 @@ class AgentRunExecutionWorker:
             status = AgentRunStatus(run.status)
             if status in _TERMINAL_STATUSES or status is AgentRunStatus.AWAITING_APPROVAL:
                 return None
-            if step.status == "COMPLETED":
+            if step.status == AgentStepStatus.COMPLETED.value:
                 return None
-            if step.status == "RUNNING" and _lease_is_active(step.lease_expires_at, now):
+            if step.status == AgentStepStatus.RUNNING.value and _lease_is_active(
+                step.lease_expires_at, now
+            ):
                 raise AgentRunExecutionBusyError(
                     "Agent step has an active execution lease"
                 )
-            if step.status not in {"PENDING", "RUNNING"}:
+            if step.status not in {
+                AgentStepStatus.PENDING.value,
+                AgentStepStatus.RUNNING.value,
+            }:
                 raise AgentRunExecutionError("Agent run step cannot be claimed")
             claim_token = uuid4().hex + uuid4().hex
             run.execution_plan_hash = plan_hash
             run.updated_at = now
-            step.status = "RUNNING"
+            step.status = AgentStepStatus.RUNNING.value
             step.attempts += 1
             step.claim_token = claim_token
             step.lease_expires_at = now + self._lease_ttl
             step.last_error_code = None
             step.started_at = now
+            self._append_event(
+                session,
+                run_id=run_id,
+                event_type=AgentEventType.STEP_STARTED,
+                payload={
+                    "step_id": step.step_id,
+                    "tool_name": step.tool_name,
+                    "attempt": step.attempts,
+                },
+                now=now,
+            )
             return claim_token
 
     def _persist_step_result(
@@ -383,7 +407,10 @@ class AgentRunExecutionWorker:
                 raise AgentRunExecutionError("Agent run step was not found")
             if run.plan_hash != plan_hash:
                 raise AgentRunExecutionError("Agent run plan hash changed during execution")
-            if step.status != "RUNNING" or step.claim_token != claim_token:
+            if (
+                step.status != AgentStepStatus.RUNNING.value
+                or step.claim_token != claim_token
+            ):
                 raise AgentRunExecutionError("Agent step execution claim is stale")
             existing = session.scalar(
                 select(ToolResultRecord).where(ToolResultRecord.agent_step_id == step.id)
@@ -422,12 +449,23 @@ class AgentRunExecutionWorker:
                         created_at=item.created_at,
                     )
                 )
-            step.status = "COMPLETED"
+            step.status = AgentStepStatus.COMPLETED.value
             step.claim_token = None
             step.lease_expires_at = None
             step.last_error_code = None
             step.completed_at = now
             run.updated_at = now
+            self._append_event(
+                session,
+                run_id=run_id,
+                event_type=AgentEventType.STEP_COMPLETED,
+                payload={
+                    "step_id": step.step_id,
+                    "tool_name": step.tool_name,
+                    "result_id": result.result_id,
+                },
+                now=now,
+            )
 
     def _is_step_approved(self, run_id: str, step_id: str, plan_hash: str) -> bool:
         with session_scope(self._session_factory) as session:
@@ -472,7 +510,7 @@ class AgentRunExecutionWorker:
             unfinished = session.scalar(
                 select(AgentStep.id).where(
                     AgentStep.run_id == run_id,
-                    AgentStep.status != "COMPLETED",
+                    AgentStep.status != AgentStepStatus.COMPLETED.value,
                 )
             )
             if unfinished is not None:
@@ -487,6 +525,65 @@ class AgentRunExecutionWorker:
                 payload={"status": AgentRunStatus.COMPLETED.value},
                 now=now,
             )
+
+    def _handle_step_failure(
+        self,
+        run_id: str,
+        step_row_id: str,
+        claim_token: str,
+        failure_code: str,
+    ) -> bool:
+        """Apply the persisted failure policy and report whether to retry now."""
+
+        now = self._now()
+        safe_code = failure_code[:100]
+        terminal_code = safe_code
+        with session_scope(self._session_factory) as session:
+            run = session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )
+            step = session.scalar(
+                select(AgentStep).where(AgentStep.id == step_row_id).with_for_update()
+            )
+            if run is None or step is None:
+                raise AgentRunExecutionError("Agent run step was not found")
+            if AgentRunStatus(run.status) in _TERMINAL_STATUSES:
+                return False
+            if (
+                step.status != AgentStepStatus.RUNNING.value
+                or step.claim_token != claim_token
+            ):
+                raise AgentRunExecutionError("Agent step failure claim is stale")
+            try:
+                policy = AgentFailurePolicy(step.failure_policy)
+            except ValueError as exc:
+                raise AgentRunExecutionError(
+                    "Agent step has an unsupported failure policy"
+                ) from exc
+            if policy is AgentFailurePolicy.RETRY_ONCE and step.attempts < 2:
+                step.status = AgentStepStatus.PENDING.value
+                step.claim_token = None
+                step.lease_expires_at = None
+                step.last_error_code = safe_code
+                step.completed_at = None
+                run.updated_at = now
+                self._append_event(
+                    session,
+                    run_id=run_id,
+                    event_type=AgentEventType.STEP_FAILED,
+                    payload={
+                        "step_id": step.step_id,
+                        "failure_code": safe_code,
+                        "will_retry": True,
+                    },
+                    now=now,
+                )
+                return True
+            if policy is AgentFailurePolicy.REPLAN:
+                terminal_code = f"REPLAN_UNAVAILABLE:{safe_code}"[:100]
+
+        self._fail_run(run_id, step_row_id, claim_token, terminal_code)
+        return False
 
     def _fail_run(
         self,
@@ -508,7 +605,7 @@ class AgentRunExecutionWorker:
                 return
             if claim_token is not None and step.claim_token != claim_token:
                 raise AgentRunExecutionError("Agent step failure claim is stale")
-            step.status = "FAILED"
+            step.status = AgentStepStatus.FAILED.value
             step.claim_token = None
             step.lease_expires_at = None
             step.last_error_code = safe_code
@@ -516,6 +613,17 @@ class AgentRunExecutionWorker:
             run.status = AgentRunStatus.FAILED.value
             run.completed_at = now
             run.updated_at = now
+            self._append_event(
+                session,
+                run_id=run_id,
+                event_type=AgentEventType.STEP_FAILED,
+                payload={
+                    "step_id": step.step_id,
+                    "failure_code": safe_code,
+                    "will_retry": False,
+                },
+                now=now,
+            )
             self._append_event(
                 session,
                 run_id=run_id,
@@ -559,7 +667,9 @@ class AgentRunExecutionWorker:
                 plan_hash=run.plan_hash,
                 status=AgentRunStatus(run.status),
                 completed_step_ids=tuple(
-                    step.step_id for step in steps if step.status == "COMPLETED"
+                    step.step_id
+                    for step in steps
+                    if step.status == AgentStepStatus.COMPLETED.value
                 ),
                 pending_approval_step_ids=pending,
                 result_ids=tuple(
@@ -599,6 +709,9 @@ class AgentRunExecutionWorker:
                 created_at=now,
             )
         )
+        # Make the assigned sequence visible to a second event appended in the
+        # same transaction. The run row is already locked by every caller.
+        session.flush()
 
 
 def _validate_identity(run_id: str, plan_hash: str) -> None:
