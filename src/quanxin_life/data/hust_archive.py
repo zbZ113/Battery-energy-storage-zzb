@@ -4,7 +4,10 @@ The pickle members are treated as opaque bytes.  This module never extracts or
 deserializes them; it only validates ZIP metadata and hashes bounded streams.
 """
 
+from __future__ import annotations
+
 import hashlib
+import json
 import os
 import re
 import stat
@@ -12,10 +15,18 @@ import unicodedata
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PureWindowsPath
-from typing import Annotated
+from typing import Annotated, Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
+from quanxin_life.core.hashing import sha256_canonical
 from quanxin_life.data.manifest import RawFileManifest, Sha256, verify_raw_file_stream
 from quanxin_life.data.source_catalog import IngestionMode, SourceCatalogEntry
 
@@ -42,6 +53,8 @@ class HustArchiveLimits(BaseModel):
 
 
 _DEFAULT_LIMITS = HustArchiveLimits()
+_MAX_AUDIT_JSON_BYTES = 4 * 1024 * 1024
+_JsonModel = TypeVar("_JsonModel", bound=BaseModel)
 
 
 class ExpectedHustMember(BaseModel):
@@ -78,6 +91,7 @@ class HustArchiveAudit(BaseModel):
     license_name: str = Field(min_length=1)
     raw_relative_path: str = Field(min_length=1)
     archive_sha256: Sha256
+    archive_size_bytes: int = Field(gt=0)
     member_count: int = Field(ge=0)
     total_compressed_size: int = Field(ge=0)
     total_uncompressed_size: int = Field(ge=0)
@@ -93,6 +107,248 @@ class HustArchiveAudit(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("audited_at must include a timezone")
         return value.astimezone(UTC)
+
+
+class HustFrozenInventory(BaseModel):
+    """Immutable reviewed expectation used before quarantine conversion."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    inventory_version: InventoryVersion
+    inventory_sha256: Sha256
+    review_status: Literal["CANDIDATE", "APPROVED"]
+    approved_by: str | None = Field(default=None, min_length=1)
+    approved_at: datetime | None = None
+    dataset_id: str = Field(min_length=1)
+    dataset_version: str = Field(min_length=1)
+    source_uri: str = Field(min_length=1)
+    paper_uri: str = Field(min_length=1)
+    license_name: str = Field(min_length=1)
+    raw_relative_path: str = Field(min_length=1)
+    archive_sha256: Sha256
+    archive_size_bytes: int = Field(gt=0)
+    member_count: int = Field(gt=0)
+    total_compressed_size: int = Field(ge=0)
+    total_uncompressed_size: int = Field(gt=0)
+    members: tuple[HustArchiveMember, ...] = Field(min_length=1)
+
+    @field_validator("approved_at")
+    @classmethod
+    def normalize_approval_time(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("approved_at must include a timezone")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def summary_and_digest_match_members(self) -> HustFrozenInventory:
+        if self.dataset_id != "HUST":
+            raise ValueError("frozen HUST inventory requires dataset_id=HUST")
+        if self.review_status == "CANDIDATE":
+            if self.approved_by is not None or self.approved_at is not None:
+                raise ValueError("candidate HUST inventory cannot contain approval evidence")
+        elif self.approved_by is None or self.approved_at is None:
+            raise ValueError("approved HUST inventory requires reviewer and timestamp")
+        if self.member_count != len(self.members):
+            raise ValueError("frozen HUST inventory member_count mismatch")
+        if self.total_compressed_size != sum(item.compressed_size for item in self.members):
+            raise ValueError("frozen HUST inventory compressed-size mismatch")
+        if self.total_uncompressed_size != sum(
+            item.uncompressed_size for item in self.members
+        ):
+            raise ValueError("frozen HUST inventory uncompressed-size mismatch")
+        paths = [item.path for item in self.members]
+        if paths != sorted(paths):
+            raise ValueError("frozen HUST inventory members must use sorted paths")
+        if len(paths) != len(set(paths)):
+            raise ValueError("frozen HUST inventory member paths must be unique")
+        expected_digest = sha256_canonical(_frozen_inventory_payload(self))
+        if self.inventory_sha256 != expected_digest:
+            raise ValueError("frozen HUST inventory digest mismatch")
+        return self
+
+
+def _frozen_inventory_payload(
+    inventory: HustFrozenInventory | dict[str, object],
+) -> dict[str, object]:
+    if isinstance(inventory, HustFrozenInventory):
+        payload = inventory.model_dump(mode="json", exclude={"inventory_sha256"})
+    else:
+        payload = dict(inventory)
+        payload.pop("inventory_sha256", None)
+    return payload
+
+
+def freeze_hust_inventory(
+    audit: HustArchiveAudit,
+    *,
+    inventory_version: str,
+) -> HustFrozenInventory:
+    """Freeze an initial opaque-byte audit into a deterministic expectation."""
+
+    validated = HustArchiveAudit.model_validate(audit.model_dump(mode="json"))
+    if validated.ready_for_conversion or validated.inventory_version is not None:
+        raise ValueError("only an initial non-conversion HUST audit can be frozen")
+    if not inventory_version.strip():
+        raise ValueError("inventory_version must not be blank")
+    payload: dict[str, object] = {
+        "inventory_version": inventory_version.strip(),
+        "review_status": "CANDIDATE",
+        "approved_by": None,
+        "approved_at": None,
+        "dataset_id": validated.dataset_id,
+        "dataset_version": validated.version,
+        "source_uri": validated.source_uri,
+        "paper_uri": validated.paper_uri,
+        "license_name": validated.license_name,
+        "raw_relative_path": validated.raw_relative_path,
+        "archive_sha256": validated.archive_sha256,
+        "archive_size_bytes": validated.archive_size_bytes,
+        "member_count": validated.member_count,
+        "total_compressed_size": validated.total_compressed_size,
+        "total_uncompressed_size": validated.total_uncompressed_size,
+        "members": [
+            member.model_dump(mode="json")
+            for member in sorted(validated.members, key=lambda item: item.path)
+        ],
+    }
+    payload["inventory_sha256"] = sha256_canonical(payload)
+    return HustFrozenInventory.model_validate(payload)
+
+
+def approve_hust_inventory(
+    candidate: HustFrozenInventory,
+    *,
+    approved_by: str,
+    approved_at: datetime,
+) -> HustFrozenInventory:
+    """Record an explicit human approval without altering frozen member evidence."""
+
+    validated = HustFrozenInventory.model_validate(candidate.model_dump(mode="json"))
+    if validated.review_status != "CANDIDATE":
+        raise ValueError("only a candidate HUST inventory can be approved")
+    reviewer = approved_by.strip()
+    if not reviewer:
+        raise ValueError("approved_by must not be blank")
+    if approved_at.tzinfo is None or approved_at.utcoffset() is None:
+        raise ValueError("approved_at must include a timezone")
+    payload = validated.model_dump(mode="json", exclude={"inventory_sha256"})
+    payload.update(
+        {
+            "review_status": "APPROVED",
+            "approved_by": reviewer,
+            "approved_at": approved_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        }
+    )
+    payload["inventory_sha256"] = sha256_canonical(payload)
+    return HustFrozenInventory.model_validate(payload)
+
+
+def audit_hust_archive_against_inventory(
+    archive_path: Path,
+    raw_manifest: RawFileManifest,
+    source: SourceCatalogEntry,
+    inventory: HustFrozenInventory,
+    limits: HustArchiveLimits = _DEFAULT_LIMITS,
+) -> HustArchiveAudit:
+    """Re-audit opaque member streams against one exact frozen expectation."""
+
+    validated = HustFrozenInventory.model_validate(inventory.model_dump(mode="json"))
+    if validated.review_status != "APPROVED":
+        raise ValueError("HUST inventory must be explicitly approved before conversion")
+    path = Path(archive_path)
+    expected_binding = (
+        validated.dataset_id,
+        validated.dataset_version,
+        validated.source_uri,
+        validated.paper_uri,
+        validated.license_name,
+        validated.raw_relative_path,
+        validated.archive_sha256,
+        validated.archive_size_bytes,
+    )
+    actual_binding = (
+        source.dataset_id,
+        source.version,
+        source.source_uri,
+        source.paper_uri,
+        source.license_status,
+        raw_manifest.relative_path,
+        raw_manifest.sha256,
+        path.stat().st_size,
+    )
+    if actual_binding != expected_binding:
+        raise ValueError("frozen HUST inventory does not match source or archive metadata")
+    audited = audit_hust_archive(
+        path,
+        raw_manifest,
+        source,
+        expected_inventory=tuple(
+            ExpectedHustMember(path=item.path, sha256=item.sha256)
+            for item in validated.members
+        ),
+        inventory_version=validated.inventory_version,
+        limits=limits,
+    )
+    if (
+        audited.total_compressed_size != validated.total_compressed_size
+        or audited.total_uncompressed_size != validated.total_uncompressed_size
+        or tuple(sorted(audited.members, key=lambda item: item.path)) != validated.members
+    ):
+        raise ValueError("frozen HUST inventory member metadata mismatch")
+    return audited
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-finite JSON constant is forbidden: {value}")
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key is forbidden: {key}")
+        result[key] = value
+    return result
+
+
+def _load_strict_json_model(
+    path: Path,
+    model_type: type[_JsonModel],
+) -> _JsonModel:
+    candidate = Path(path)
+    if candidate.suffix.casefold() != ".json":
+        raise ValueError("HUST audit and inventory files must use .json")
+    if not candidate.is_file():
+        raise ValueError(f"HUST JSON evidence file does not exist: {candidate}")
+    if candidate.is_symlink():
+        raise ValueError("HUST JSON evidence file must not be a symbolic link")
+    if candidate.stat().st_size > _MAX_AUDIT_JSON_BYTES:
+        raise ValueError("HUST JSON evidence file exceeds the size limit")
+    try:
+        payload = json.loads(
+            candidate.read_bytes(),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("HUST evidence file must contain valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("HUST evidence file must contain a JSON object")
+    return model_type.model_validate(payload)
+
+
+def load_hust_archive_audit(path: Path) -> HustArchiveAudit:
+    """Load a bounded audit record without touching opaque member payloads."""
+
+    return _load_strict_json_model(path, HustArchiveAudit)
+
+
+def load_hust_frozen_inventory(path: Path) -> HustFrozenInventory:
+    """Load and revalidate a frozen expected inventory."""
+
+    return _load_strict_json_model(path, HustFrozenInventory)
 
 
 def _validate_source_binding(
@@ -245,6 +501,8 @@ def audit_hust_archive(
 ) -> HustArchiveAudit:
     """Audit a HUST ZIP without extracting or deserializing any member."""
     path = Path(archive_path)
+    if path.is_symlink():
+        raise ValueError("HUST archive must not be a symbolic link")
     _validate_source_binding(path, raw_manifest, source)
 
     audited_members: list[HustArchiveMember] = []
@@ -254,7 +512,8 @@ def audit_hust_archive(
     streamed_total = 0
 
     with path.open("rb") as archive_handle:
-        if os.fstat(archive_handle.fileno()).st_size > limits.max_archive_size:
+        archive_size_bytes = os.fstat(archive_handle.fileno()).st_size
+        if archive_size_bytes > limits.max_archive_size:
             raise ValueError("HUST ZIP archive exceeds the outer size limit")
         archive_sha256 = verify_raw_file_stream(archive_handle, path, raw_manifest)
         if expected_inventory and not inventory_version:
@@ -337,6 +596,7 @@ def audit_hust_archive(
         license_name=source.license_status,
         raw_relative_path=raw_manifest.relative_path,
         archive_sha256=archive_sha256,
+        archive_size_bytes=archive_size_bytes,
         member_count=len(members),
         total_compressed_size=sum(member.compressed_size for member in members),
         total_uncompressed_size=streamed_total,

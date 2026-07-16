@@ -4,7 +4,7 @@ import struct
 import warnings
 import zipfile
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -13,7 +13,10 @@ import quanxin_life.data.hust_archive as hust_archive
 from quanxin_life.data.hust_archive import (
     ExpectedHustMember,
     HustArchiveLimits,
+    approve_hust_inventory,
     audit_hust_archive,
+    audit_hust_archive_against_inventory,
+    freeze_hust_inventory,
 )
 from quanxin_life.data.manifest import RawFileManifest
 from quanxin_life.data.source_catalog import IngestionMode, SourceCatalogEntry
@@ -99,6 +102,7 @@ def test_inventory_mode_streams_members_without_extracting(
     assert audit.paper_uri == _source().paper_uri
     assert audit.raw_relative_path == _manifest(path).relative_path
     assert audit.archive_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert audit.archive_size_bytes == path.stat().st_size
     assert audit.member_count == 1
     assert audit.total_uncompressed_size == len(payload)
     assert audit.members[0].path == "our_data/1-1.pkl"
@@ -131,12 +135,91 @@ def test_enforced_inventory_must_match_exactly(tmp_path: Path) -> None:
     assert audit.warnings == ()
 
 
+def test_freezes_untrusted_audit_then_reaudits_against_exact_inventory(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "our_data.zip"
+    payloads = {"our_data/1-1.pkl": b"cell one", "our_data/2-1.pkl": b"cell two"}
+    _write_archive(path, payloads)
+    first_audit = audit_hust_archive(path, _manifest(path), _source())
+
+    candidate = freeze_hust_inventory(
+        first_audit,
+        inventory_version="hust-mendeley-v2-local-freeze-v1",
+    )
+    assert candidate.review_status == "CANDIDATE"
+    with pytest.raises(ValueError, match="approved"):
+        audit_hust_archive_against_inventory(
+            path,
+            _manifest(path),
+            _source(),
+            candidate,
+        )
+    inventory = approve_hust_inventory(
+        candidate,
+        approved_by="test-reviewer",
+        approved_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    second_audit = audit_hust_archive_against_inventory(
+        path,
+        _manifest(path),
+        _source(),
+        inventory,
+    )
+
+    assert inventory.archive_sha256 == first_audit.archive_sha256
+    assert inventory.archive_size_bytes == path.stat().st_size
+    assert inventory.member_count == 2
+    assert inventory.inventory_sha256
+    assert second_audit.ready_for_conversion is True
+    assert second_audit.inventory_version == inventory.inventory_version
+    assert second_audit.warnings == ()
+
+
+def test_frozen_inventory_rejects_archive_metadata_tampering(tmp_path: Path) -> None:
+    path = tmp_path / "our_data.zip"
+    _write_archive(path, {"our_data/1-1.pkl": b"cell"})
+    audit = audit_hust_archive(path, _manifest(path), _source())
+    candidate = freeze_hust_inventory(audit, inventory_version="inventory-v1")
+    inventory = approve_hust_inventory(
+        candidate,
+        approved_by="test-reviewer",
+        approved_at=datetime(2026, 7, 16, tzinfo=UTC),
+    )
+    tampered = inventory.model_copy(update={"archive_size_bytes": path.stat().st_size + 1})
+
+    with pytest.raises(ValueError, match="frozen HUST inventory"):
+        audit_hust_archive_against_inventory(
+            path,
+            _manifest(path),
+            _source(),
+            tampered,
+        )
+
+
 def test_rejects_outer_archive_hash_mismatch(tmp_path: Path) -> None:
     path = tmp_path / "our_data.zip"
     _write_archive(path, {"our_data/1-1.pkl": b"cell"})
 
     with pytest.raises(ValueError, match="SHA-256 mismatch"):
         audit_hust_archive(path, _manifest(path, sha256="0" * 64), _source())
+
+
+def test_rejects_symbolic_link_to_outer_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "our_data.zip"
+    _write_archive(path, {"our_data/1-1.pkl": b"cell"})
+    original_is_symlink = Path.is_symlink
+
+    def report_archive_as_symlink(candidate: Path) -> bool:
+        return candidate == path or original_is_symlink(candidate)
+
+    monkeypatch.setattr(Path, "is_symlink", report_archive_as_symlink)
+
+    with pytest.raises(ValueError, match="symbolic link"):
+        audit_hust_archive(path, _manifest(path), _source())
 
 
 def test_rejects_outer_size_before_verifying_raw_stream(
@@ -233,8 +316,8 @@ def test_uses_fstat_for_the_outer_archive_size_limit(
     original_stat = Path.stat
 
     def path_stat_is_forbidden(self: Path, *args: object, **kwargs: object) -> object:
-        if self == path:
-            raise AssertionError("the archive path must not be stat'ed after opening")
+        if self == path and kwargs.get("follow_symlinks", True):
+            raise AssertionError("the archive size must come from the open file descriptor")
         return original_stat(self, *args, **kwargs)
 
     monkeypatch.setattr(Path, "stat", path_stat_is_forbidden)

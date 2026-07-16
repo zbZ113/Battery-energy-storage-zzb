@@ -8,7 +8,11 @@ import os
 import tempfile
 from pathlib import Path
 
-from quanxin_life.data.hust_archive import audit_hust_archive
+from quanxin_life.data.hust_archive import (
+    audit_hust_archive,
+    audit_hust_archive_against_inventory,
+    load_hust_frozen_inventory,
+)
 from quanxin_life.data.manifest import RawFileManifest
 from quanxin_life.data.source_catalog import SourceCatalog
 
@@ -53,19 +57,38 @@ def main() -> int:
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--manifest", type=_json_path, required=True)
     parser.add_argument("--catalog", type=Path, required=True)
+    parser.add_argument("--inventory", type=_json_path)
     parser.add_argument("--output", type=_json_path, required=True)
     arguments = parser.parse_args()
 
     _reject_output_input_collision(
         arguments.output,
-        (arguments.archive, arguments.manifest, arguments.catalog),
+        tuple(
+            path
+            for path in (
+                arguments.archive,
+                arguments.manifest,
+                arguments.catalog,
+                arguments.inventory,
+            )
+            if path is not None
+        ),
     )
 
     manifest = RawFileManifest.model_validate_json(
         arguments.manifest.read_text(encoding="utf-8")
     )
     source = SourceCatalog.load(arguments.catalog).require("HUST")
-    audit = audit_hust_archive(arguments.archive, manifest, source)
+    if arguments.inventory is None:
+        audit = audit_hust_archive(arguments.archive, manifest, source)
+    else:
+        inventory = load_hust_frozen_inventory(arguments.inventory)
+        audit = audit_hust_archive_against_inventory(
+            arguments.archive,
+            manifest,
+            source,
+            inventory,
+        )
     payload = audit.model_dump(mode="json")
     _write_atomic_json(arguments.output, payload)
     print(

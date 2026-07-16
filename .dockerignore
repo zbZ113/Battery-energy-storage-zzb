@@ -1,0 +1,38 @@
+# Source-control and local Python state
+.git/
+.github/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.test-tmp*/
+
+# Secrets and machine-local configuration
+.env*
+secrets/
+deploy/secrets/
+*.secret
+*.pem
+*.key
+
+# Untrusted or generated data must never enter a Docker build context
+data/
+artifacts/
+models/
+reports/generated/
+*.pkl
+*.pickle
+*.joblib
+*.pt
+*.pth
+
+# Frontend and packaging outputs
+node_modules/
+frontend/node_modules/
+frontend/.next/
+build/
+dist/
+coverage/
+*.log
