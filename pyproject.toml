@@ -71,7 +71,7 @@ tooling = ["dvc>=3.58,<4"]
 where = ["src"]
 
 [tool.pytest.ini_options]
-addopts = "--strict-config --strict-markers"
+addopts = "--strict-config --strict-markers --import-mode=importlib"
 pythonpath = ["src"]
 testpaths = ["tests"]
 
