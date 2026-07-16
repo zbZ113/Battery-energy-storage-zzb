@@ -63,3 +63,17 @@ CPMLP 与 Hybrid 的正式推理制品只能包含：
 ```
 
 加载器会重新检查四个文件的目录边界、SHA-256、大小、架构白名单、特征上下文、权重键、形状、float32 类型和有限值。目录里多出任何未登记文件也会拒绝加载。优化器状态不进入正式推理制品。
+
+## 训练结果下载验收
+
+A100 输出必须包含 `run_manifest.json`、解析后的配置、JSON/CSV 指标、JSONL 日志、模型卡、环境清单、至少一张图和至少一个安全模型制品。`run_manifest.json` 必须记录输入训练包与预检哈希、干净代码提交、数据/划分/特征版本、截断点、模型、随机种子和 UTC 时间。
+
+输出索引应放在结果目录外。下载后执行：
+
+```powershell
+python scripts/verify_a100_training_output.py `
+  D:\downloaded-a100-run `
+  D:\downloaded-a100-run-index.json
+```
+
+缺文件、多文件、哈希变化、符号链接、秘密内容或 `.pkl/.pt/.pth` 等危险格式都会阻断验收。
