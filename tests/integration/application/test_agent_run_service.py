@@ -28,6 +28,8 @@ from quanxin_life.core import (
     AgentPlanStep,
     AgentRole,
     AgentRunStatus,
+    ApprovalKind,
+    ApprovalStatus,
     UserRole,
     UserStatus,
 )
@@ -79,6 +81,16 @@ class FixedPlanner:
                     role=AgentRole.DATA_QUALITY,
                     tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
                     input_references={"record_batch_id": "intent.dataset_ids[0]"},
+                    requires_approval=True,
+                    failure_policy=AgentFailurePolicy.STOP,
+                ),
+                AgentPlanStep(
+                    step_id="features-retry",
+                    role=AgentRole.DATA_QUALITY,
+                    tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+                    depends_on=("features",),
+                    input_references={"record_batch_id": "intent.dataset_ids[0]"},
+                    requires_approval=True,
                     failure_policy=AgentFailurePolicy.STOP,
                 ),
             ),
@@ -381,3 +393,131 @@ def test_cancel_is_idempotent_and_preserves_completed_terminal_runs(
     assert service.list_events(member, created.run_id)[-1].event_type == "RUN_CANCELLED"
     with pytest.raises(AgentRunStateError, match="cancelled"):
         service.dispatch_pending(created.run_id, queue=RecordingQueue(), now=NOW)
+
+
+def test_approval_pauses_run_and_approve_or_reject_is_audited_and_idempotent(
+    run_context: tuple[
+        AgentRunService,
+        FixedPlanner,
+        ProjectService,
+        DatasetService,
+        dict[UserRole | str, AuthPrincipal],
+        SessionFactory,
+    ],
+) -> None:
+    service, _, projects, datasets, principals, _ = run_context
+    member = principals[UserRole.MEMBER]
+    project_id, dataset_id = _project_and_frozen_dataset(projects, datasets, member)
+    created = service.create_run(
+        member,
+        request=_request(project_id, dataset_id),
+        idempotency_key="approval-key-0001",
+        available_tools=(StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,),
+        now=NOW,
+    )
+    service.dispatch_pending(created.run_id, queue=RecordingQueue(), now=NOW)
+
+    approval = service.request_approval(
+        created.run_id,
+        step_id="features",
+        approval_kind=ApprovalKind.FORMAL_DECISION,
+        impact_scope="Release a formal reviewed result",
+        now=NOW,
+        expires_at=NOW + timedelta(hours=1),
+    )
+    assert approval.status is ApprovalStatus.PENDING
+    assert service.get_run(member, created.run_id).status is AgentRunStatus.AWAITING_APPROVAL
+
+    approved = service.approve_run(
+        member,
+        created.run_id,
+        approval_id=approval.approval_id,
+        reason="Reviewed source evidence",
+        now=NOW,
+    )
+    assert approved.status is AgentRunStatus.RUNNING
+    assert approved.dispatch_status == "PENDING"
+    assert service.approve_run(
+        member,
+        created.run_id,
+        approval_id=approval.approval_id,
+        reason="Repeated browser callback",
+        now=NOW,
+    ) == approved
+
+    second = service.request_approval(
+        created.run_id,
+        step_id="features-retry",
+        approval_kind=ApprovalKind.EXTERNAL_WRITE,
+        impact_scope="Write a reviewed result to an external integration",
+        now=NOW,
+        expires_at=NOW + timedelta(hours=1),
+    )
+    rejected = service.reject_run(
+        member,
+        created.run_id,
+        approval_id=second.approval_id,
+        reason="Do not publish externally",
+        now=NOW,
+    )
+    assert rejected.status is AgentRunStatus.CANCELLED
+    event_types = [
+        event.event_type for event in service.list_events(member, created.run_id)
+    ]
+    assert "APPROVAL_REQUESTED" in event_types
+    assert "APPROVAL_APPROVED" in event_types
+    assert event_types[-1] == "APPROVAL_REJECTED"
+
+
+def test_cancel_marks_pending_approval_cancelled_and_expired_approval_cannot_resume(
+    run_context: tuple[
+        AgentRunService,
+        FixedPlanner,
+        ProjectService,
+        DatasetService,
+        dict[UserRole | str, AuthPrincipal],
+        SessionFactory,
+    ],
+) -> None:
+    service, _, projects, datasets, principals, _ = run_context
+    member = principals[UserRole.MEMBER]
+    project_id, dataset_id = _project_and_frozen_dataset(projects, datasets, member)
+    created = service.create_run(
+        member,
+        request=_request(project_id, dataset_id),
+        idempotency_key="approval-expiry-key-0001",
+        available_tools=(StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,),
+        now=NOW,
+    )
+    approval = service.request_approval(
+        created.run_id,
+        step_id="features",
+        approval_kind=ApprovalKind.FORMAL_DECISION,
+        impact_scope="Time-bounded formal release",
+        now=NOW,
+        expires_at=NOW + timedelta(minutes=1),
+    )
+    with pytest.raises(AgentRunStateError, match="expired"):
+        service.approve_run(
+            member,
+            created.run_id,
+            approval_id=approval.approval_id,
+            reason=None,
+            now=NOW + timedelta(minutes=2),
+        )
+    assert service.get_approval(member, created.run_id, approval.approval_id).status is (
+        ApprovalStatus.EXPIRED
+    )
+
+    another = service.request_approval(
+        created.run_id,
+        step_id="features-retry",
+        approval_kind=ApprovalKind.FORMAL_DECISION,
+        impact_scope="A second pending gate",
+        now=NOW,
+        expires_at=NOW + timedelta(hours=1),
+    )
+    service.cancel_run(member, created.run_id, now=NOW)
+    assert service.get_approval(member, created.run_id, another.approval_id).status is (
+        ApprovalStatus.CANCELLED
+    )

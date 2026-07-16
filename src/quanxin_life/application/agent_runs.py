@@ -26,6 +26,9 @@ from quanxin_life.core import (
     AgentPlan,
     AgentPlanningMode,
     AgentRunStatus,
+    ApprovalKind,
+    ApprovalRequest,
+    ApprovalStatus,
     DatasetStatus,
     ProjectStatus,
     UserRole,
@@ -39,6 +42,8 @@ from quanxin_life.persistence.models import (
     AgentRun,
     AgentRunDispatch,
     AgentStep,
+    ApprovalAction,
+    ApprovalRequestRow,
     Dataset,
     Project,
 )
@@ -340,6 +345,241 @@ class AgentRunService:
             raise AgentRunStateError("Agent run dispatch produced no record")
         return record
 
+    def request_approval(
+        self,
+        run_id: str,
+        *,
+        step_id: str,
+        approval_kind: ApprovalKind,
+        impact_scope: str,
+        now: datetime,
+        expires_at: datetime,
+    ) -> ApprovalRequest:
+        """Persist a worker-requested human gate and pause the run atomically."""
+
+        timestamp = _utc(now)
+        with session_scope(self._session_factory) as session:
+            run = session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )
+            if run is None:
+                raise AgentRunNotFoundError("Agent run was not found")
+            if run.plan_hash is None:
+                raise AgentRunStateError("Agent run has no approved plan hash")
+            request = ApprovalRequest(
+                approval_id=str(uuid4()),
+                run_id=run_id,
+                approval_kind=approval_kind,
+                source_plan_hash=run.plan_hash,
+                step_id=step_id,
+                impact_scope=impact_scope,
+                status=ApprovalStatus.PENDING,
+                created_at=timestamp,
+                expires_at=expires_at,
+            )
+            status = self._run_status(run)
+            if status not in {AgentRunStatus.RUNNING, AgentRunStatus.AWAITING_APPROVAL}:
+                raise AgentRunStateError("Agent run cannot request approval in its current state")
+            step = session.scalar(
+                select(AgentStep).where(
+                    AgentStep.run_id == run.id,
+                    AgentStep.step_id == request.step_id,
+                )
+            )
+            if step is None or not step.requires_human_approval:
+                raise AgentRunStateError("Agent step is not approved for a human gate")
+            existing = session.scalar(
+                select(ApprovalRequestRow).where(
+                    ApprovalRequestRow.run_id == run.id,
+                    ApprovalRequestRow.step_id == request.step_id,
+                )
+            )
+            if existing is not None:
+                persisted = self._approval_record(existing)
+                if (
+                    persisted.approval_kind is request.approval_kind
+                    and persisted.impact_scope == request.impact_scope
+                    and persisted.expires_at == request.expires_at
+                ):
+                    return persisted
+                raise AgentRunConflictError("approval gate already exists for this step")
+            row = ApprovalRequestRow(
+                id=request.approval_id,
+                run_id=run.id,
+                approval_kind=request.approval_kind.value,
+                source_plan_hash=request.source_plan_hash,
+                step_id=request.step_id,
+                impact_scope=request.impact_scope,
+                status=request.status.value,
+                created_at=request.created_at,
+                expires_at=request.expires_at,
+            )
+            session.add(row)
+            run.status = AgentRunStatus.AWAITING_APPROVAL.value
+            run.updated_at = timestamp
+            self._append_next_event(
+                session,
+                run_id=run.id,
+                event_type=AgentEventType.APPROVAL_REQUESTED,
+                payload={
+                    "approval_id": request.approval_id,
+                    "approval_kind": request.approval_kind.value,
+                    "step_id": request.step_id,
+                    "expires_at": request.expires_at.isoformat(),
+                },
+                now=timestamp,
+            )
+            session.flush()
+            return self._approval_record(row)
+
+    def get_approval(
+        self,
+        principal: AuthPrincipal,
+        run_id: str,
+        approval_id: str,
+    ) -> ApprovalRequest:
+        with session_scope(self._session_factory) as session:
+            run = self._visible_run(session, principal, run_id)
+            row = session.scalar(
+                select(ApprovalRequestRow).where(
+                    ApprovalRequestRow.id == approval_id,
+                    ApprovalRequestRow.run_id == run.id,
+                )
+            )
+            if row is None:
+                raise AgentRunNotFoundError("approval request was not found")
+            return self._approval_record(row)
+
+    def approve_run(
+        self,
+        principal: AuthPrincipal,
+        run_id: str,
+        *,
+        approval_id: str,
+        reason: str | None,
+        now: datetime,
+    ) -> AgentRunRecord:
+        return self._act_on_approval(
+            principal,
+            run_id,
+            approval_id=approval_id,
+            reason=reason,
+            target=ApprovalStatus.APPROVED,
+            now=now,
+        )
+
+    def reject_run(
+        self,
+        principal: AuthPrincipal,
+        run_id: str,
+        *,
+        approval_id: str,
+        reason: str | None,
+        now: datetime,
+    ) -> AgentRunRecord:
+        return self._act_on_approval(
+            principal,
+            run_id,
+            approval_id=approval_id,
+            reason=reason,
+            target=ApprovalStatus.REJECTED,
+            now=now,
+        )
+
+    def _act_on_approval(
+        self,
+        principal: AuthPrincipal,
+        run_id: str,
+        *,
+        approval_id: str,
+        reason: str | None,
+        target: ApprovalStatus,
+        now: datetime,
+    ) -> AgentRunRecord:
+        self._require_operator(principal)
+        if target not in {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED}:
+            raise ValueError("approval target must be APPROVED or REJECTED")
+        timestamp = _utc(now)
+        normalized_reason = self._normalized_reason(reason)
+        expired = False
+        record: AgentRunRecord | None = None
+        with session_scope(self._session_factory) as session:
+            run = self._visible_run(session, principal, run_id, for_update=True)
+            dispatch = self._dispatch_for_run(session, run.id)
+            row = session.scalar(
+                select(ApprovalRequestRow)
+                .where(
+                    ApprovalRequestRow.id == approval_id,
+                    ApprovalRequestRow.run_id == run.id,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                raise AgentRunNotFoundError("approval request was not found")
+            persisted = self._approval_record(row)
+            if persisted.status is target:
+                return self._record(run, dispatch)
+            if persisted.status is not ApprovalStatus.PENDING:
+                raise AgentRunStateError("approval request is already closed")
+            if persisted.source_plan_hash != run.plan_hash:
+                raise AgentRunStateError("approval request plan hash is stale")
+            if timestamp >= persisted.expires_at:
+                row.status = ApprovalStatus.EXPIRED.value
+                self._append_next_event(
+                    session,
+                    run_id=run.id,
+                    event_type=AgentEventType.APPROVAL_EXPIRED,
+                    payload={
+                        "approval_id": row.id,
+                        "step_id": row.step_id,
+                    },
+                    now=timestamp,
+                )
+                expired = True
+            else:
+                row.status = target.value
+                session.add(
+                    ApprovalAction(
+                        id=str(uuid4()),
+                        approval_request_id=row.id,
+                        actor_user_id=principal.user_id,
+                        action=target.value,
+                        reason=normalized_reason,
+                        acted_at=timestamp,
+                    )
+                )
+                if target is ApprovalStatus.APPROVED:
+                    run.status = AgentRunStatus.RUNNING.value
+                    dispatch.status = AgentDispatchStatus.PENDING.value
+                    dispatch.task_id = None
+                    dispatch.updated_at = timestamp
+                    event_type = AgentEventType.APPROVAL_APPROVED
+                else:
+                    run.status = AgentRunStatus.CANCELLED.value
+                    run.completed_at = timestamp
+                    event_type = AgentEventType.APPROVAL_REJECTED
+                    self._cancel_other_pending_approvals(
+                        session, run_id=run.id, exclude_approval_id=row.id
+                    )
+                run.updated_at = timestamp
+                self._append_next_event(
+                    session,
+                    run_id=run.id,
+                    event_type=event_type,
+                    payload={
+                        "approval_id": row.id,
+                        "step_id": row.step_id,
+                    },
+                    now=timestamp,
+                )
+            session.flush()
+            record = self._record(run, dispatch)
+        if expired:
+            raise AgentRunStateError("approval request has expired")
+        if record is None:  # pragma: no cover - defensive transaction invariant
+            raise AgentRunStateError("approval action produced no Agent run record")
+        return record
+
     def cancel_run(
         self,
         principal: AuthPrincipal,
@@ -363,6 +603,7 @@ class AgentRunService:
             run.status = AgentRunStatus.CANCELLED.value
             run.completed_at = timestamp
             run.updated_at = timestamp
+            self._cancel_other_pending_approvals(session, run_id=run.id)
             self._append_next_event(
                 session,
                 run_id=run.id,
@@ -477,6 +718,59 @@ class AgentRunService:
         if dispatch is None:
             raise AgentRunStateError("Agent run has no durable dispatch record")
         return dispatch
+
+    @staticmethod
+    def _approval_record(row: ApprovalRequestRow) -> ApprovalRequest:
+        try:
+            approval_kind = ApprovalKind(row.approval_kind)
+            status = ApprovalStatus(row.status)
+        except ValueError as exc:
+            raise AgentRunStateError("approval request has invalid persisted state") from exc
+        return ApprovalRequest(
+            approval_id=row.id,
+            run_id=row.run_id,
+            approval_kind=approval_kind,
+            source_plan_hash=row.source_plan_hash,
+            step_id=row.step_id,
+            impact_scope=row.impact_scope,
+            status=status,
+            created_at=row.created_at,
+            expires_at=row.expires_at,
+        )
+
+    @staticmethod
+    def _cancel_other_pending_approvals(
+        session: Session,
+        *,
+        run_id: str,
+        exclude_approval_id: str | None = None,
+    ) -> None:
+        statement = select(ApprovalRequestRow).where(
+            ApprovalRequestRow.run_id == run_id,
+            ApprovalRequestRow.status == ApprovalStatus.PENDING.value,
+        )
+        if exclude_approval_id is not None:
+            statement = statement.where(ApprovalRequestRow.id != exclude_approval_id)
+        for row in session.scalars(statement).all():
+            row.status = ApprovalStatus.CANCELLED.value
+
+    @staticmethod
+    def _normalized_reason(reason: str | None) -> str | None:
+        if reason is None:
+            return None
+        normalized = reason.strip()
+        if not normalized:
+            return None
+        if len(normalized) > 2_000:
+            raise ValueError("approval reason must contain at most 2000 characters")
+        return normalized
+
+    @staticmethod
+    def _run_status(run: AgentRun) -> AgentRunStatus:
+        try:
+            return AgentRunStatus(run.status)
+        except ValueError as exc:
+            raise AgentRunStateError("Agent run has an unsupported status") from exc
 
     @staticmethod
     def _visible_run(

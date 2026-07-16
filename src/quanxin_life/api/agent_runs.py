@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import Field
 
 from quanxin_life.agents.supervisor import SupervisorPlanningRequest
 from quanxin_life.api.auth import AuthHttpAdapter
@@ -25,6 +26,7 @@ from quanxin_life.application.agent_runs import (
 from quanxin_life.application.task_queue import AgentRunQueue
 from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import AgentRunStatus, UserRole
+from quanxin_life.core.schemas import ContractModel
 from quanxin_life.tools import StandardToolName
 
 TERMINAL_AGENT_RUN_STATUSES = frozenset(
@@ -35,6 +37,11 @@ TERMINAL_AGENT_RUN_STATUSES = frozenset(
 @dataclass(frozen=True, slots=True)
 class AgentRunHttpAdapter:
     router: APIRouter
+
+
+class ApprovalActionRequest(ContractModel):
+    approval_id: str = Field(min_length=1, max_length=64)
+    reason: str | None = Field(default=None, max_length=2_000)
 
 
 def create_agent_run_http_adapter(
@@ -129,6 +136,68 @@ def create_agent_run_http_adapter(
             raise HTTPException(status_code=404, detail="agent_run_not_found") from exc
         except AgentRunStateError as exc:
             raise HTTPException(status_code=409, detail="agent_run_state_conflict") from exc
+
+    @router.post(
+        "/{run_id}/approve",
+        response_model=AgentRunRecord,
+        dependencies=[Depends(auth_adapter.require_trusted_origin)],
+    )
+    def approve_run(
+        run_id: str,
+        payload: ApprovalActionRequest,
+        principal: AuthPrincipal = operator_principal,
+    ) -> Any:
+        try:
+            record = service.approve_run(
+                principal,
+                run_id,
+                approval_id=payload.approval_id,
+                reason=payload.reason,
+                now=datetime.now(UTC),
+            )
+            try:
+                return service.dispatch_pending(
+                    record.run_id,
+                    queue=queue,
+                    now=datetime.now(UTC),
+                )
+            except AgentRunDispatchError:
+                return service.get_run(principal, record.run_id)
+        except AgentRunAccessError as exc:
+            raise HTTPException(status_code=403, detail="role_not_allowed") from exc
+        except AgentRunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="approval_not_found") from exc
+        except AgentRunStateError as exc:
+            raise HTTPException(status_code=409, detail="approval_state_conflict") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid_approval") from exc
+
+    @router.post(
+        "/{run_id}/reject",
+        response_model=AgentRunRecord,
+        dependencies=[Depends(auth_adapter.require_trusted_origin)],
+    )
+    def reject_run(
+        run_id: str,
+        payload: ApprovalActionRequest,
+        principal: AuthPrincipal = operator_principal,
+    ) -> Any:
+        try:
+            return service.reject_run(
+                principal,
+                run_id,
+                approval_id=payload.approval_id,
+                reason=payload.reason,
+                now=datetime.now(UTC),
+            )
+        except AgentRunAccessError as exc:
+            raise HTTPException(status_code=403, detail="role_not_allowed") from exc
+        except AgentRunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="approval_not_found") from exc
+        except AgentRunStateError as exc:
+            raise HTTPException(status_code=409, detail="approval_state_conflict") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid_approval") from exc
 
     @router.get("/{run_id}/events")
     async def stream_events(

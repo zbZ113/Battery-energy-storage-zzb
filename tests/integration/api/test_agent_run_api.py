@@ -33,6 +33,7 @@ from quanxin_life.core import (
     AgentPlanningMode,
     AgentPlanStep,
     AgentRole,
+    ApprovalKind,
     UserRole,
     UserStatus,
 )
@@ -79,6 +80,7 @@ class FixedPlanner:
                         input_references={
                             "record_batch_id": "intent.dataset_ids[0]"
                         },
+                        requires_approval=True,
                         failure_policy=AgentFailurePolicy.STOP,
                     ),
                 ),
@@ -98,7 +100,9 @@ class RecordingQueue:
 
 
 @pytest.fixture
-def agent_client(tmp_path: Path) -> tuple[TestClient, RecordingQueue]:
+def agent_client(
+    tmp_path: Path,
+) -> tuple[TestClient, RecordingQueue, AgentRunService]:
     engine = create_engine_from_config(
         DatabaseConfig(url=f"sqlite+pysqlite:///{tmp_path / 'agent-api.sqlite3'}")
     )
@@ -135,8 +139,9 @@ def agent_client(tmp_path: Path) -> tuple[TestClient, RecordingQueue]:
         DatasetService(session_factory), auth_adapter=auth_adapter
     )
     queue = RecordingQueue()
+    agent_service = AgentRunService(session_factory, planner=FixedPlanner())
     agent_adapter = create_agent_run_http_adapter(
-        AgentRunService(session_factory, planner=FixedPlanner()),
+        agent_service,
         auth_adapter=auth_adapter,
         available_tools=(StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,),
         queue=queue,
@@ -155,7 +160,7 @@ def agent_client(tmp_path: Path) -> tuple[TestClient, RecordingQueue]:
         json={"username": USERNAME, "password": PASSWORD},
     )
     assert login.status_code == 200
-    return client, queue
+    return client, queue, agent_service
 
 
 def _create_scope(client: TestClient) -> tuple[str, str]:
@@ -185,9 +190,9 @@ def _create_scope(client: TestClient) -> tuple[str, str]:
 
 
 def test_agent_run_create_requires_idempotency_and_dispatches_only_once(
-    agent_client: tuple[TestClient, RecordingQueue],
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService],
 ) -> None:
-    client, queue = agent_client
+    client, queue, _ = agent_client
     project_id, dataset_id = _create_scope(client)
     payload = {
         "project_id": project_id,
@@ -215,9 +220,9 @@ def test_agent_run_create_requires_idempotency_and_dispatches_only_once(
 
 
 def test_agent_run_write_requires_origin_and_idempotency_conflicts_return_409(
-    agent_client: tuple[TestClient, RecordingQueue],
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService],
 ) -> None:
-    client, _ = agent_client
+    client, _, _ = agent_client
     project_id, dataset_id = _create_scope(client)
     headers = {"Origin": ORIGIN, "Idempotency-Key": "conflict-key-0001"}
     payload = {
@@ -241,9 +246,9 @@ def test_agent_run_write_requires_origin_and_idempotency_conflicts_return_409(
 
 
 def test_cancelled_run_exposes_a_replayable_terminal_sse_timeline(
-    agent_client: tuple[TestClient, RecordingQueue],
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService],
 ) -> None:
-    client, _ = agent_client
+    client, _, _ = agent_client
     project_id, dataset_id = _create_scope(client)
     created = client.post(
         "/v1/agent/runs",
@@ -276,3 +281,66 @@ def test_cancelled_run_exposes_a_replayable_terminal_sse_timeline(
     assert "RUN_DISPATCHED" in body
     assert "RUN_CANCELLED" in body
     assert "build a safe timeline" not in body
+
+
+def test_approval_and_rejection_routes_resume_or_stop_the_run(
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService],
+) -> None:
+    client, queue, service = agent_client
+    project_id, dataset_id = _create_scope(client)
+
+    def create_run(key: str) -> dict[str, object]:
+        response = client.post(
+            "/v1/agent/runs",
+            headers={"Origin": ORIGIN, "Idempotency-Key": key},
+            json={
+                "project_id": project_id,
+                "user_goal": "approval API exercise",
+                "dataset_ids": [dataset_id],
+                "requested_outputs": ["cycle_life"],
+            },
+        )
+        assert response.status_code == 202, response.text
+        return response.json()
+
+    first = create_run("approve-api-key-0001")
+    first_approval = service.request_approval(
+        str(first["run_id"]),
+        step_id="features",
+        approval_kind=ApprovalKind.FORMAL_DECISION,
+        impact_scope="Release reviewed result",
+        now=NOW,
+        expires_at=NOW + timedelta(hours=1),
+    )
+    approved = client.post(
+        f"/v1/agent/runs/{first['run_id']}/approve",
+        headers={"Origin": ORIGIN},
+        json={
+            "approval_id": first_approval.approval_id,
+            "reason": "Evidence reviewed",
+        },
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "RUNNING"
+    assert approved.json()["dispatch_status"] == "DISPATCHED"
+    assert len(queue.calls) == 2
+
+    second = create_run("reject-api-key-0001")
+    second_approval = service.request_approval(
+        str(second["run_id"]),
+        step_id="features",
+        approval_kind=ApprovalKind.EXTERNAL_WRITE,
+        impact_scope="Write to external system",
+        now=NOW,
+        expires_at=NOW + timedelta(hours=1),
+    )
+    rejected = client.post(
+        f"/v1/agent/runs/{second['run_id']}/reject",
+        headers={"Origin": ORIGIN},
+        json={
+            "approval_id": second_approval.approval_id,
+            "reason": "External write not authorized",
+        },
+    )
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["status"] == "CANCELLED"
