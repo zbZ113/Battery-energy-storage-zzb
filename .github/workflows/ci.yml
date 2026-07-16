@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  quality:
+  python-quality:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -41,3 +41,40 @@ jobs:
 
       - name: Compile Python sources
         run: python -m compileall -q src workbench deploy migrations
+
+  frontend-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Enable the pinned pnpm release
+        run: corepack enable
+
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run frontend tests
+        run: pnpm test
+
+      - name: Run frontend lint
+        run: pnpm lint
+
+      - name: Run frontend type checking
+        run: pnpm typecheck
+
+      - name: Build the production frontend
+        run: pnpm build
