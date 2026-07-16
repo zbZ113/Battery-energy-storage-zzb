@@ -509,6 +509,7 @@ class KnowledgeDocument(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    created_by_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     source_uri: Mapped[str] = mapped_column(Text, nullable=False)
     source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -520,6 +521,8 @@ class KnowledgeDocument(Base):
     reviewer_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     object_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    object_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_content_type: Mapped[str] = mapped_column(String(200), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -541,6 +544,9 @@ class KnowledgeChunk(Base):
     page_end: Mapped[int | None] = mapped_column(Integer)
     text_object_uri: Mapped[str] = mapped_column(Text, nullable=False)
     text_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    text_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    text_content_type: Mapped[str] = mapped_column(String(200), nullable=False)
+    section_label: Mapped[str | None] = mapped_column(String(500))
     embedding_model_version: Mapped[str | None] = mapped_column(String(100))
     embedding: Mapped[list[float] | None] = mapped_column(EMBEDDING_TYPE)
     created_at: Mapped[datetime] = mapped_column(

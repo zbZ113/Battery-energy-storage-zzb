@@ -23,8 +23,15 @@ class _TextLoader:
     def __init__(self, payloads: dict[str, bytes]) -> None:
         self.payloads = payloads
 
-    def load_verified_text(self, *, object_uri: str, expected_sha256: str) -> str:
-        del expected_sha256
+    def load_verified_text(
+        self,
+        *,
+        object_uri: str,
+        expected_sha256: str,
+        size_bytes: int,
+        content_type: str,
+    ) -> str:
+        del expected_sha256, size_bytes, content_type
         payload = self.payloads[object_uri]
         return payload.decode("utf-8")
 
@@ -78,6 +85,7 @@ def _context(tmp_path):  # type: ignore[no-untyped-def]
                 KnowledgeDocument(
                     id=document_id,
                     project_id=project_id,
+                    created_by_user_id=user_id,
                     title=f"{suffix} LFP source",
                     source_uri=f"https://example.test/{suffix}.pdf",
                     source_sha256=hashlib.sha256(f"source-{suffix}".encode()).hexdigest(),
@@ -87,6 +95,8 @@ def _context(tmp_path):  # type: ignore[no-untyped-def]
                     reviewer_user_id=user_id if status is KnowledgeReviewStatus.APPROVED else None,
                     reviewed_at=NOW if status is KnowledgeReviewStatus.APPROVED else None,
                     object_uri=f"memory://document/{suffix}",
+                    object_size_bytes=len(text.encode()),
+                    object_content_type="application/pdf",
                     created_at=NOW,
                 )
             )
@@ -99,6 +109,9 @@ def _context(tmp_path):  # type: ignore[no-untyped-def]
                     page_end=3,
                     text_object_uri=f"memory://knowledge/{suffix}",
                     text_sha256=digest,
+                    text_size_bytes=len(text.encode()),
+                    text_content_type="text/plain; charset=utf-8",
+                    section_label="老化机理",
                     embedding_model_version=None,
                     embedding=None,
                     created_at=NOW,

@@ -57,7 +57,14 @@ class DatabaseKnowledgeConfig(ContractModel):
 class KnowledgeChunkTextLoader(Protocol):
     """Read one immutable text object; the backend rechecks its digest."""
 
-    def load_verified_text(self, *, object_uri: str, expected_sha256: str) -> str: ...
+    def load_verified_text(
+        self,
+        *,
+        object_uri: str,
+        expected_sha256: str,
+        size_bytes: int,
+        content_type: str,
+    ) -> str: ...
 
 
 class DatabaseVerifiedKnowledgeScopeResolver:
@@ -172,6 +179,8 @@ class DatabaseBm25EvidenceBackend:
             text = self._text_loader.load_verified_text(
                 object_uri=row.text_object_uri,
                 expected_sha256=row.text_sha256,
+                size_bytes=row.text_size_bytes,
+                content_type=row.text_content_type,
             )
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("knowledge chunk text must be nonblank UTF-8 text")
@@ -196,7 +205,7 @@ class DatabaseBm25EvidenceBackend:
                     document_id=row.document_id,
                     chunk_id=row.id,
                     page_number=row.page_start,
-                    section_label=None,
+                    section_label=row.section_label,
                     excerpt=text[:1_200],
                     evidence_level=EvidenceLevel.DOMAIN_KNOWLEDGE,
                     bm25_score=score,

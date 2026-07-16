@@ -100,6 +100,14 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
             tuple(constraint["column_names"])
             for constraint in upgraded_inspector.get_unique_constraints("tool_results")
         }
+        assert {"created_by_user_id", "object_size_bytes", "object_content_type"} <= {
+            column["name"]
+            for column in upgraded_inspector.get_columns("knowledge_documents")
+        }
+        assert {"text_size_bytes", "text_content_type", "section_label"} <= {
+            column["name"]
+            for column in upgraded_inspector.get_columns("knowledge_chunks")
+        }
 
         # The declared metadata must also round-trip through the lightweight
         # SQLite migration target without producing type drift.
@@ -117,6 +125,10 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
         }
         assert "claim_token" not in {
             column["name"] for column in revision_one_inspector.get_columns("agent_steps")
+        }
+        assert "object_size_bytes" not in {
+            column["name"]
+            for column in revision_one_inspector.get_columns("knowledge_documents")
         }
         assert ("agent_step_id",) not in {
             tuple(constraint["column_names"])
