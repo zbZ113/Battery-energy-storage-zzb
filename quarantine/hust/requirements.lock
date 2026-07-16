@@ -1,0 +1,2 @@
+# OPCODE_INSPECTION_ONLY uses only the Python 3.11 standard library.
+# No third-party package is installed, so no network is needed at runtime.

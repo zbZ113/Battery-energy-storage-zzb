@@ -1,0 +1,31 @@
+services:
+  hust-opcode-inspector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: none
+    read_only: true
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 2g
+    cpus: "1.0"
+    restart: "no"
+    init: true
+    environment:
+      HUST_ARCHIVE: /input/our_data.zip
+      HUST_RAW_MANIFEST: /input/raw-manifest.json
+      HUST_APPROVED_INVENTORY: /input/inventory-approved.json
+      HUST_APPROVED_AUDIT: /input/archive-audit-approved.json
+      HUST_JOB: /job/job.json
+      HUST_OUTPUT: /output/opcode-report.json
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ${HUST_QUARANTINE_INPUT:?set a workspace-external read-only input directory}:/input:ro
+      - ${HUST_QUARANTINE_JOB:?set a workspace-external read-only job directory}:/job:ro
+      - ${HUST_QUARANTINE_OUTPUT:?set a workspace-external output directory}:/output:rw
+    tmpfs:
+      - /tmp:size=256m,noexec,nosuid,nodev
