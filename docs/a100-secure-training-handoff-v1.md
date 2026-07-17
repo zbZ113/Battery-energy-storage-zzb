@@ -2,6 +2,27 @@
 
 本协议只负责“训练前检查”和“安全文件清单”，不自动上传文件，也不保存实验室账号或密钥。
 
+## 服务器环境从零安装
+
+工程固定使用 Conda Python 3.11.13、PyTorch 2.12.0 和 Linux/Python 3.11 哈希锁。服务器驱动 595.71.05 可以承载 PyTorch wheel 使用的 CUDA 13.0 运行时，不安装独立 CUDA Toolkit，也不使用 CUDA 13.2 nightly。
+
+```bash
+bash scripts/a100/create_env.sh
+conda activate quanxin-a100
+bash scripts/a100/preflight.sh
+```
+
+环境脚本会先安装 `torch==2.12.0`，再以 `--require-hashes` 安装 `requirements/a100-linux-py311.lock`，最后执行 `pip check`。若同名环境已经存在，脚本会拒绝覆盖。
+
+正式训练建议在 `tmux` 中执行：
+
+```bash
+tmux new -s quanxin-matr
+bash scripts/a100/train_dataset.sh matr smoke
+# Smoke 验收后：
+bash scripts/a100/train_dataset.sh matr final
+```
+
 ## 你要准备什么
 
 在 HUST 隔离转换和人工字段审核完成后，单独建立一个训练暂存目录。目录只允许包含：
