@@ -4,6 +4,9 @@ import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from quanxin_life.core import CellMetadata, PredictionTarget
 from quanxin_life.data.matr_pipeline import (
     MatrSupervisionArtifact,
@@ -11,7 +14,10 @@ from quanxin_life.data.matr_pipeline import (
 )
 from quanxin_life.data.schemas import CycleRecord, SplitManifest
 from quanxin_life.data.storage import write_cell_artifacts
-from quanxin_life.training.matr_data import load_matr_cycle_life_curve_cohorts
+from quanxin_life.training.matr_data import (
+    load_matr_cycle_life_curve_cohorts,
+    load_matr_hybrid_trajectory_cohorts,
+)
 
 
 def _write_cell(root: Path, cell_id: str, *, official_life_label: int) -> None:
@@ -42,7 +48,11 @@ def _write_cell(root: Path, cell_id: str, *, official_life_label: int) -> None:
         )
         for cycle in range(1, 21)
         for sample, (voltage, capacity) in enumerate(
-            ((3.6, 0.0), (2.8, 0.5), (2.0, 1.0))
+            (
+                (3.6, 0.0),
+                (2.8, (1.05 - cycle * 0.0001) / 2),
+                (2.0, 1.05 - cycle * 0.0001),
+            )
         )
     )
     write_cell_artifacts(root, metadata, records)
@@ -59,7 +69,19 @@ def test_loads_cell_disjoint_official_life_batches_from_early_parquet_only(
     supervision_root = tmp_path / "supervision"
     supervision_file = supervision_root / "trajectories" / "labels.parquet"
     supervision_file.parent.mkdir(parents=True)
-    supervision_file.write_bytes(b"separate-supervision-fixture")
+    rows = [
+        {
+            "dataset_id": "MATR",
+            "cell_id": cell_id,
+            "cycle_index": cycle,
+            "discharge_capacity_ah": 1.05 - cycle * 0.0001,
+            "reference_capacity_ah": 1.05,
+            "soh": (1.05 - cycle * 0.0001) / 1.05,
+        }
+        for cell_id in cell_ids
+        for cycle in range(1, 501)
+    ]
+    pq.write_table(pa.Table.from_pylist(rows), supervision_file)
     supervision_hash = hashlib.sha256(supervision_file.read_bytes()).hexdigest()
     supervision = MatrSupervisionArtifact(
         source_report_sha256="b" * 64,
@@ -108,3 +130,16 @@ def test_loads_cell_disjoint_official_life_batches_from_early_parquet_only(
     assert cohorts.train.target is PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE
     assert cohorts.train.curve_values.shape == (1, 21, 17)
     assert cohorts.train.observed_cycles.tolist() == [200.0]
+
+    hybrid = load_matr_hybrid_trajectory_cohorts(
+        processed_root=processed,
+        supervision_root=supervision_root,
+        supervision=supervision,
+        split_manifest=split,
+        cutoff_cycle=20,
+    )
+    assert hybrid.train.cell_ids == ("MATR_a",)
+    assert hybrid.validation.cell_ids == ("MATR_b",)
+    assert hybrid.train.prediction_cycles[0] == 21
+    assert hybrid.train.prediction_cycles[-1] == 500
+    assert hybrid.train.target_soh.shape == (1, 480)

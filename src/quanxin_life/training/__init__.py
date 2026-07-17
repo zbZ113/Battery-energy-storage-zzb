@@ -33,7 +33,9 @@ from quanxin_life.training.engine import (
 )
 from quanxin_life.training.matr_data import (
     MatrCurveCohorts,
+    MatrHybridCohorts,
     load_matr_cycle_life_curve_cohorts,
+    load_matr_hybrid_trajectory_cohorts,
 )
 from quanxin_life.training.outputs import (
     A100TrainingRunManifest,
@@ -70,6 +72,7 @@ __all__ = [
     "HybridTrajectoryTrainingTask",
     "LoggingPolicy",
     "MatrCurveCohorts",
+    "MatrHybridCohorts",
     "ModelTrainingConfig",
     "PackageSnapshot",
     "PhysicalGpuSnapshot",
@@ -89,6 +92,7 @@ __all__ = [
     "build_training_preflight",
     "collect_local_training_preflight",
     "load_matr_cycle_life_curve_cohorts",
+    "load_matr_hybrid_trajectory_cohorts",
     "load_training_checkpoint",
     "load_training_output_index",
     "save_training_checkpoint",
