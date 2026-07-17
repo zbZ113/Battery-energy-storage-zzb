@@ -112,20 +112,6 @@ python -m zipfile -e \
 cd "$PROJECT_DIR"
 ```
 
-使用包内受控验证器再次检查内部清单：
-
-```bash
-python scripts/verify_matr_three_batch_a100_package.py \
-  "$HOME/quanxin-transfer/quanxin-matr-three-batch-a100.zip" \
-  "$HOME/quanxin-transfer/quanxin-matr-three-batch-a100.sha256.json"
-```
-
-预期状态：
-
-```text
-MATR_THREE_BATCH_A100_PACKAGE_VERIFIED
-```
-
 ## 四、服务器：创建 Conda Python 3.11 环境
 
 不安装独立 CUDA Toolkit，使用 PyTorch wheel 自带 CUDA runtime，由服务器 595.71.05 驱动承载。
@@ -155,6 +141,22 @@ python -m pip install torch==2.12.0
 python -m pip install --require-hashes -r requirements/a100-linux-py311.lock
 python -m pip install -e . --no-deps
 python -m pip check
+```
+
+环境安装完成后，使用包内受控验证器再次检查 ZIP 内部清单。验证器依赖项目的 Python 环境，因此必须放在 Conda 环境创建之后：
+
+```bash
+cd "$PROJECT_DIR"
+conda activate quanxin-a100
+python scripts/verify_matr_three_batch_a100_package.py \
+  "$HOME/quanxin-transfer/quanxin-matr-three-batch-a100.zip" \
+  "$HOME/quanxin-transfer/quanxin-matr-three-batch-a100.sha256.json"
+```
+
+预期状态：
+
+```text
+MATR_THREE_BATCH_A100_PACKAGE_VERIFIED
 ```
 
 检查关键版本：
