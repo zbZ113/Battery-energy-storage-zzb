@@ -6,4 +6,4 @@ if [[ $# -ne 1 || ( "$1" != "smoke" && "$1" != "final" ) ]]; then
   exit 2
 fi
 
-bash scripts/a100/train_dataset.sh matr "$1"
+bash scripts/a100/train_dataset.sh matr-three-batch "$1"

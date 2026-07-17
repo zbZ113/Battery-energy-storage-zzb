@@ -66,6 +66,7 @@ def _component(
         batch_index=batch_index,
         batch_date=batch_date,
         raw_relative_path=f"data/{batch_date.isoformat()}_batch.mat",
+        raw_manifest=f"configs/data_manifests/batch{batch_index}.json",
         raw_sha256=str(batch_index) * 64,
         processed_root=f"data/processed/MATR/{batch_date.isoformat()}-cutoff150",
         conversion_report=f"reports/data_quality/batch{batch_index}-conversion.json",

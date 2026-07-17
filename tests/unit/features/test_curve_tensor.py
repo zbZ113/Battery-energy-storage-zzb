@@ -108,3 +108,37 @@ def test_explicit_voltage_bounds_produce_a_cohort_stable_grid() -> None:
 def test_explicit_voltage_bounds_must_be_provided_together() -> None:
     with pytest.raises(ValueError, match="provided together"):
         CurveTensorConfig(cutoff_cycle=20, voltage_min_v=3.0)
+
+
+def test_excludes_exact_duplicate_zero_information_telemetry_rows() -> None:
+    duplicate_zero = CycleRecord(
+        dataset_id="MATR",
+        cell_id="MATR_b1c0",
+        cycle_index=0,
+        sample_index=0,
+        time_s=0.0,
+        voltage_v=0.0,
+        current_a=0.0,
+        charge_capacity_ah=0.0,
+        discharge_capacity_ah=0.0,
+    )
+    repeated = duplicate_zero.model_copy(update={"sample_index": 1})
+
+    result = build_discharge_curve_tensor(
+        (duplicate_zero, repeated, *_records()),
+        config=CurveTensorConfig(cutoff_cycle=20, voltage_grid_step_v=0.1),
+    )
+
+    assert "EXACT_DUPLICATE_TELEMETRY_EXCLUDED" in result.warnings
+    assert result.observed_mask[1:3] == (True, True)
+
+
+def test_same_time_with_different_telemetry_remains_a_quality_error() -> None:
+    first, second, *remaining = _records()
+    conflicting = second.model_copy(update={"time_s": first.time_s})
+
+    with pytest.raises(ValueError, match="NON_MONOTONIC_TIME"):
+        build_discharge_curve_tensor(
+            (first, conflicting, *remaining),
+            config=CurveTensorConfig(cutoff_cycle=20, voltage_grid_step_v=0.1),
+        )

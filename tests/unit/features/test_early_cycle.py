@@ -136,3 +136,28 @@ def test_rejects_non_monotonic_time_even_when_cycle_records_are_otherwise_valid(
             tuple(records),
             config=EarlyCycleFeatureConfig(cutoff_cycle=20),
         )
+
+
+def test_excludes_exact_duplicate_placeholder_rows_before_trend_features() -> None:
+    placeholder = CycleRecord(
+        dataset_id="MATR",
+        cell_id="MATR_b1c0",
+        cycle_index=0,
+        sample_index=0,
+        time_s=0.0,
+        voltage_v=0.0,
+        current_a=0.0,
+        charge_capacity_ah=0.0,
+        discharge_capacity_ah=0.0,
+    )
+    repeated = placeholder.model_copy(update={"sample_index": 1})
+
+    result = extract_early_cycle_features(
+        (placeholder, repeated, *_records()),
+        config=EarlyCycleFeatureConfig(cutoff_cycle=20),
+    )
+
+    assert "EXACT_DUPLICATE_TELEMETRY_EXCLUDED" in result.warnings
+    assert "NONPOSITIVE_CAPACITY_EXCLUDED_FROM_TREND" in result.warnings
+    assert result.values["capacity_first_ah"] == pytest.approx(0.4)
+    assert result.values["capacity_last_ah"] == pytest.approx(0.36)

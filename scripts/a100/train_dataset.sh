@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "usage: bash scripts/a100/train_dataset.sh <matr|hust|naumann-cycle|naumann-calendar> <smoke|final>" >&2
+  echo "usage: bash scripts/a100/train_dataset.sh <matr|matr-three-batch|hust|naumann-cycle|naumann-calendar> <smoke|final>" >&2
   exit 2
 fi
 
@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-if [[ "${DATASET}" != "matr" ]]; then
+if [[ "${DATASET}" != "matr" && "${DATASET}" != "matr-three-batch" ]]; then
   python scripts/run_training_suite.py "${DATASET}" "${MODE}" --plan-only
   exit $?
 fi
@@ -25,6 +25,10 @@ fi
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=1
 
-python scripts/prepare_matr_training_data.py "${MODE}"
+if [[ "${DATASET}" == "matr-three-batch" ]]; then
+  python scripts/prepare_matr_three_batch_data.py "${MODE}"
+else
+  python scripts/prepare_matr_training_data.py "${MODE}"
+fi
 bash scripts/a100/preflight.sh
-python scripts/run_training_suite.py matr "${MODE}"
+python scripts/run_training_suite.py "${DATASET}" "${MODE}"

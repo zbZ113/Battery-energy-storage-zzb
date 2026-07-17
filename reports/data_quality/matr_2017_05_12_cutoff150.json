@@ -1,0 +1,760 @@
+{
+  "adapter_version": "matr-hdf5-v1.2.0",
+  "batch_date": "2017-05-12",
+  "batch_index": 1,
+  "cell_count": 46,
+  "cells": [
+    {
+      "cell_id": "MATR_b1c0",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c0.json",
+      "metadata_sha256": "03c52853ca7aee5ca3658b6fd65e55a2fee51cb0bdf87c798b6901f3dc8f9d4d",
+      "official_life_label": 1190,
+      "official_life_right_censored": false,
+      "parquet_sha256": "0693d0afb4c15392a6d4bc1e1af3c87bceb01b0e5458570ad69e6b0138f8e101",
+      "protocol_id": "MATR_policy_c7e149fddeba22bc",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c0",
+      "reference_capacity_ah": 1.0725095,
+      "row_count": 168704
+    },
+    {
+      "cell_id": "MATR_b1c1",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c1.json",
+      "metadata_sha256": "cb279146ff36d256839bbb1ed166f13d782f87a355f6f9808246306b9aa004e1",
+      "official_life_label": 1179,
+      "official_life_right_censored": false,
+      "parquet_sha256": "c4ef6c158407afcc7eed01bac79c7ab267f616f769714510a6cf8aef95efeea3",
+      "protocol_id": "MATR_policy_c7e149fddeba22bc",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c1",
+      "reference_capacity_ah": 1.0772982,
+      "row_count": 165895
+    },
+    {
+      "cell_id": "MATR_b1c2",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c2.json",
+      "metadata_sha256": "260e9961cd48b27c16abe0f3ad086fab0eb6f9aa76728281ba32aed957b5e302",
+      "official_life_label": 1177,
+      "official_life_right_censored": false,
+      "parquet_sha256": "e5b1756ca2dc9f8c1872546bd716f8a73e004cdf282baeb66b57c8f545a43702",
+      "protocol_id": "MATR_policy_c7e149fddeba22bc",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c2",
+      "reference_capacity_ah": 1.082234,
+      "row_count": 166703
+    },
+    {
+      "cell_id": "MATR_b1c3",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c3.json",
+      "metadata_sha256": "4ec19b233eeb0449aeab5566e2affdaad169708ffec751ef334d8cee996e920e",
+      "official_life_label": 1226,
+      "official_life_right_censored": false,
+      "parquet_sha256": "d2c98ae04517858095d746f83cab919d35ca0b7288755f247207c49ce4baf87b",
+      "protocol_id": "MATR_policy_c965437ca53f79d6",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c3",
+      "reference_capacity_ah": 1.0819938,
+      "row_count": 162982
+    },
+    {
+      "cell_id": "MATR_b1c4",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c4.json",
+      "metadata_sha256": "1d5de7e35e5ca2d591caf1b3f37c777583b00b6ab15db7b9ed0aeea0f623817b",
+      "official_life_label": 1227,
+      "official_life_right_censored": false,
+      "parquet_sha256": "6ff81a757a6c9d47275af07dcad520adf209bbd546a2f50c14f0fee736b1f7e9",
+      "protocol_id": "MATR_policy_c965437ca53f79d6",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c4",
+      "reference_capacity_ah": 1.0797466,
+      "row_count": 162041
+    },
+    {
+      "cell_id": "MATR_b1c5",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c5.json",
+      "metadata_sha256": "6bf01c488dc40f4442ab5c4b631ceb8ba4198db949bc875aa7abc68ce98406e4",
+      "official_life_label": 1074,
+      "official_life_right_censored": false,
+      "parquet_sha256": "3cfb07a4ddf6de33c25767853fcff84bd480959c30d097a4032234d2e3c41aac",
+      "protocol_id": "MATR_policy_9715d15fed58ab39",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c5",
+      "reference_capacity_ah": 1.0775996,
+      "row_count": 160208
+    },
+    {
+      "cell_id": "MATR_b1c6",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c6.json",
+      "metadata_sha256": "a468c05697188bd408ff3177a4a7e22f267bb6230035c650b4a339ae6f22b903",
+      "official_life_label": 636,
+      "official_life_right_censored": false,
+      "parquet_sha256": "e6eb6af3e5ebd156bf01bc59f474724a3d271c75d9a10db3c18de400d63aaa34",
+      "protocol_id": "MATR_policy_d95a62f559521a6e",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c6",
+      "reference_capacity_ah": 1.0784051,
+      "row_count": 159611
+    },
+    {
+      "cell_id": "MATR_b1c7",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c7.json",
+      "metadata_sha256": "b1daf0aec12b6943a73a9779329d765924a5da8395595f7fccb17b09b6432535",
+      "official_life_label": 870,
+      "official_life_right_censored": false,
+      "parquet_sha256": "cea59e7509c74769fd949c06473e2d261ae1688faf31a6945b4ff37553d77c52",
+      "protocol_id": "MATR_policy_d95a62f559521a6e",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c7",
+      "reference_capacity_ah": 1.0959545,
+      "row_count": 160021
+    },
+    {
+      "cell_id": "MATR_b1c8",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c8.json",
+      "metadata_sha256": "3befffa4e20294320903633aad78f7e57eada3a957be67bfb06e925e265ac391",
+      "official_life_label": 879,
+      "official_life_right_censored": false,
+      "parquet_sha256": "81f3ea887851d8f93cfe210de928f11bc2828153d64655853a68b29f6cc36727",
+      "protocol_id": "MATR_policy_3ae1019f98c32777",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c8",
+      "reference_capacity_ah": 1.0920961,
+      "row_count": 164508
+    },
+    {
+      "cell_id": "MATR_b1c9",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c9.json",
+      "metadata_sha256": "8f55f0abe3d27c59cf4b5e0d20cfd4c753813ac599cbb47e834fdf6cae451be1",
+      "official_life_label": 1054,
+      "official_life_right_censored": false,
+      "parquet_sha256": "34a2f8baceb02ad4759afc7de3c396b0b9ec0422f1371f086d5bd1351c7eedc6",
+      "protocol_id": "MATR_policy_3ae1019f98c32777",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c9",
+      "reference_capacity_ah": 1.0842299,
+      "row_count": 163029
+    },
+    {
+      "cell_id": "MATR_b1c10",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c10.json",
+      "metadata_sha256": "7eeed571c3c6885021914cfc6ad8810f2ecb474c2f6915e57fabce010f33c429",
+      "official_life_label": 906,
+      "official_life_right_censored": false,
+      "parquet_sha256": "d1131b8f2e9687e599c020456e7137ce7ca00b0e9f8ada750caae8d36681a7be",
+      "protocol_id": "MATR_policy_aa25027329025d6f",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c10",
+      "reference_capacity_ah": 1.076798,
+      "row_count": 165289
+    },
+    {
+      "cell_id": "MATR_b1c11",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c11.json",
+      "metadata_sha256": "802f2592889433a624cd63f1a75c08a3219a59ee92e5f860ede168a291890922",
+      "official_life_label": 788,
+      "official_life_right_censored": false,
+      "parquet_sha256": "91a60ae81544410707df35da42b5c3b22e197d24bdb2ffe120b69b311c1e09ba",
+      "protocol_id": "MATR_policy_aa25027329025d6f",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c11",
+      "reference_capacity_ah": 1.0558786,
+      "row_count": 164764
+    },
+    {
+      "cell_id": "MATR_b1c12",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c12.json",
+      "metadata_sha256": "27819ccf3fad561868f582e6ec285d92ccb37dc7519261ccc1bfa6038f220c52",
+      "official_life_label": 902,
+      "official_life_right_censored": false,
+      "parquet_sha256": "6b71a4558f175e1b344f0497800cee27071dc5d9d5ba5005559e99e291469c2b",
+      "protocol_id": "MATR_policy_7ef36fc695229311",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c12",
+      "reference_capacity_ah": 1.0793798,
+      "row_count": 162219
+    },
+    {
+      "cell_id": "MATR_b1c13",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c13.json",
+      "metadata_sha256": "e93d650c83bd9a749c056f4ad8fe9cede7ce5834ffcfccbd52256fd160a4ffaf",
+      "official_life_label": 897,
+      "official_life_right_censored": false,
+      "parquet_sha256": "cf46094df2023424fa82b40343fb3e80bbeeca9d69820eab09bfa01cb67c0a73",
+      "protocol_id": "MATR_policy_7ef36fc695229311",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c13",
+      "reference_capacity_ah": 1.081895,
+      "row_count": 161732
+    },
+    {
+      "cell_id": "MATR_b1c14",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c14.json",
+      "metadata_sha256": "790f57585f9dd4dcef4f2a8c5d0283ac665c9c6bfe248c105ff696eeeddb22fd",
+      "official_life_label": 880,
+      "official_life_right_censored": false,
+      "parquet_sha256": "cf324a812a006879be8c9d0affd0fb0c19ab92b8ead7a98dd0c72a80b185cefb",
+      "protocol_id": "MATR_policy_1fe80a4e45fee42e",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c14",
+      "reference_capacity_ah": 1.0724825,
+      "row_count": 163277
+    },
+    {
+      "cell_id": "MATR_b1c15",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c15.json",
+      "metadata_sha256": "b937135722095f9ed6bd8990a6529628675f8cd290f885b13f62b269bd205f2e",
+      "official_life_label": 719,
+      "official_life_right_censored": false,
+      "parquet_sha256": "713727444678ae140782da064d3575cf33c57056e156a9541a5ba55bb318ef8b",
+      "protocol_id": "MATR_policy_1fe80a4e45fee42e",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c15",
+      "reference_capacity_ah": 1.0637267,
+      "row_count": 162759
+    },
+    {
+      "cell_id": "MATR_b1c16",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c16.json",
+      "metadata_sha256": "6e28520fa850742f9b2e69507ccb52362872b0b9d690d3becaaf3c36fcb44f9e",
+      "official_life_label": 862,
+      "official_life_right_censored": false,
+      "parquet_sha256": "885ac32bbb592450004ca750df1e6448488327b48f364a675251897171dc47bc",
+      "protocol_id": "MATR_policy_aba66515319360bf",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c16",
+      "reference_capacity_ah": 1.0833585,
+      "row_count": 159846
+    },
+    {
+      "cell_id": "MATR_b1c17",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c17.json",
+      "metadata_sha256": "f408be66ec3b995c6dec455ee79799ec2d312edcb996ff0202941649da52dfa8",
+      "official_life_label": 857,
+      "official_life_right_censored": false,
+      "parquet_sha256": "cb99981b8def1c9756a44dd863c2185159c8f491eaebbb1a0c2e730f3cf250fd",
+      "protocol_id": "MATR_policy_aba66515319360bf",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c17",
+      "reference_capacity_ah": 1.073923,
+      "row_count": 160521
+    },
+    {
+      "cell_id": "MATR_b1c18",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c18.json",
+      "metadata_sha256": "ed8ce00f807dd0c1f09c1ca397d2f1f613b2fdde319fe6170ae388b6447ca3b3",
+      "official_life_label": 691,
+      "official_life_right_censored": false,
+      "parquet_sha256": "7cc028f3093b7a43950fa8fef718e7bcbb66e5a6709a92e846a946e47d8b7e2d",
+      "protocol_id": "MATR_policy_d26c7a61acd0a231",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c18",
+      "reference_capacity_ah": 1.0674137,
+      "row_count": 305748
+    },
+    {
+      "cell_id": "MATR_b1c19",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c19.json",
+      "metadata_sha256": "fbc4081639f8a8eb35ae0f3c6cbd59dfcda3b784688d5b389db6150b2af68c37",
+      "official_life_label": 788,
+      "official_life_right_censored": false,
+      "parquet_sha256": "5bfbd0d89a4d7c1d5b5bf9af031087662bd5ce2405d92d9eac0f371775106c8f",
+      "protocol_id": "MATR_policy_d26c7a61acd0a231",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c19",
+      "reference_capacity_ah": 1.0869932,
+      "row_count": 159410
+    },
+    {
+      "cell_id": "MATR_b1c20",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c20.json",
+      "metadata_sha256": "287727302a98fc2816bb69f0a020dab94e4a73d6ad92a1aba2c8f105490056df",
+      "official_life_label": 534,
+      "official_life_right_censored": false,
+      "parquet_sha256": "54559dbf8bea431f728b8e5aa4b630f73c25bdc5a6bca662d4618b243f39e17f",
+      "protocol_id": "MATR_policy_56bc0533e2070bd0",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c20",
+      "reference_capacity_ah": 1.0744811,
+      "row_count": 159195
+    },
+    {
+      "cell_id": "MATR_b1c21",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c21.json",
+      "metadata_sha256": "7e7d35e5a35df7522dccdf0dcfffcf496856d6edc81985c82e6173733cc66ea1",
+      "official_life_label": 559,
+      "official_life_right_censored": false,
+      "parquet_sha256": "ec66d0f8f985f699b2741c663402db13ffdf879cb925ad965b8f84c151e7111d",
+      "protocol_id": "MATR_policy_56bc0533e2070bd0",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c21",
+      "reference_capacity_ah": 1.0844665,
+      "row_count": 157547
+    },
+    {
+      "cell_id": "MATR_b1c22",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c22.json",
+      "metadata_sha256": "e4b4dbb6092abc6c12efe68fb8f42cd6b4d2371a67c3623609c40e4bdd504f0f",
+      "official_life_label": 891,
+      "official_life_right_censored": false,
+      "parquet_sha256": "25e9ec9f3f3f69a40bc9ba6b0fbd4073588445a55025226af8c1fcc8f1246702",
+      "protocol_id": "MATR_policy_8669b7d0e2ef14ce",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c22",
+      "reference_capacity_ah": 1.0813867,
+      "row_count": 165050
+    },
+    {
+      "cell_id": "MATR_b1c23",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c23.json",
+      "metadata_sha256": "3d84107c842f0bb6bf9e011156e76ee03edfd405f39128673cdc367e5d8cf216",
+      "official_life_label": 1014,
+      "official_life_right_censored": false,
+      "parquet_sha256": "0af79f173efb51d5ffa098920c06045288e50a1646c64a64f3239f84329e0491",
+      "protocol_id": "MATR_policy_8669b7d0e2ef14ce",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c23",
+      "reference_capacity_ah": 1.0813111,
+      "row_count": 163989
+    },
+    {
+      "cell_id": "MATR_b1c24",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c24.json",
+      "metadata_sha256": "29081d589d6bc4fb1d0c369a503419b81d3f3e0138ff5561e5e9e1cd1b8c7af4",
+      "official_life_label": 1017,
+      "official_life_right_censored": false,
+      "parquet_sha256": "4bcc784a9c8091312941847ec37af2f397f488cb48d216c159789f0b18af41bd",
+      "protocol_id": "MATR_policy_6148023365795566",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c24",
+      "reference_capacity_ah": 1.0761921,
+      "row_count": 165776
+    },
+    {
+      "cell_id": "MATR_b1c25",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c25.json",
+      "metadata_sha256": "96344b9ddfa8e0b9a26addc96290255736cd2fad22e1c118e5e577a561673bef",
+      "official_life_label": 854,
+      "official_life_right_censored": false,
+      "parquet_sha256": "8c22d05c980c96ec1bb46cac4e37d2a9b9c774cefdfbd9a4222465af22d4c697",
+      "protocol_id": "MATR_policy_6148023365795566",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c25",
+      "reference_capacity_ah": 1.0766819,
+      "row_count": 165245
+    },
+    {
+      "cell_id": "MATR_b1c26",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c26.json",
+      "metadata_sha256": "db2e3b52629889edc4b41373864c55bfb3a02e1e81e9bddb4976458519fc1dd6",
+      "official_life_label": 870,
+      "official_life_right_censored": false,
+      "parquet_sha256": "3ff9f23fcc858de6d897725860149df47ee8cc7f654272371fe09b6ee84a5d18",
+      "protocol_id": "MATR_policy_92fc19589c86e504",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c26",
+      "reference_capacity_ah": 1.0895739,
+      "row_count": 162712
+    },
+    {
+      "cell_id": "MATR_b1c27",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c27.json",
+      "metadata_sha256": "593ee343cce82f59d652bf8794449fb56cc14722d150eb30dc67a3fa4b366a0f",
+      "official_life_label": 842,
+      "official_life_right_censored": false,
+      "parquet_sha256": "4cda75efdfd429e2aba7760e55c92fd9dd15047f9e94a228d73b1191b57e5d0c",
+      "protocol_id": "MATR_policy_92fc19589c86e504",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c27",
+      "reference_capacity_ah": 1.0807079,
+      "row_count": 162285
+    },
+    {
+      "cell_id": "MATR_b1c28",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c28.json",
+      "metadata_sha256": "5a4e97dc8b2a690d8fdc889fecfd35ee910a2cc9f245b4508ca5323cef168588",
+      "official_life_label": 860,
+      "official_life_right_censored": false,
+      "parquet_sha256": "3fec84a67a77ae9e46cef310593e1b8c875baaf73753be70f353ca2bfb28fe0c",
+      "protocol_id": "MATR_policy_ee9d8f0e14a93eb5",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c28",
+      "reference_capacity_ah": 1.0796903,
+      "row_count": 164689
+    },
+    {
+      "cell_id": "MATR_b1c29",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c29.json",
+      "metadata_sha256": "e3aed17c2fd462f881bdef2e4946578e5bf5532e69ed024dfe1a4fc1afcce0fa",
+      "official_life_label": 917,
+      "official_life_right_censored": false,
+      "parquet_sha256": "e0af3c5d9fa1df1ddce7ba2358e11fd574933b8ae9652849815509e0aa1f4c99",
+      "protocol_id": "MATR_policy_ee9d8f0e14a93eb5",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c29",
+      "reference_capacity_ah": 1.0812927,
+      "row_count": 162934
+    },
+    {
+      "cell_id": "MATR_b1c30",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c30.json",
+      "metadata_sha256": "5baa055fb67d9b6c7b7f787793db83645d14caa6b7515e592cef6e4e54fe3e62",
+      "official_life_label": 709,
+      "official_life_right_censored": false,
+      "parquet_sha256": "cd953dedf1a4ab32049e3539b3bc1349b9308149326a8f2e2fae9fb2a0d4f0e0",
+      "protocol_id": "MATR_policy_4fc289e752898e79",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c30",
+      "reference_capacity_ah": 1.0818657,
+      "row_count": 162110
+    },
+    {
+      "cell_id": "MATR_b1c31",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c31.json",
+      "metadata_sha256": "3200ed848ec5903719f784d7b15442568b2cd8951c83483f163c00867644b381",
+      "official_life_label": 876,
+      "official_life_right_censored": false,
+      "parquet_sha256": "36673b3880eecbd8ddc29065b5a414adeb91e5b7c737aa7b8b339d61629d7d9f",
+      "protocol_id": "MATR_policy_4fc289e752898e79",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c31",
+      "reference_capacity_ah": 1.0967276,
+      "row_count": 159971
+    },
+    {
+      "cell_id": "MATR_b1c32",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c32.json",
+      "metadata_sha256": "d3f7a1813ed3c898eccb282c0441b03b11ef87dca40a2a820d54ae7d8d4e48b4",
+      "official_life_label": 731,
+      "official_life_right_censored": false,
+      "parquet_sha256": "ac31c6ecc018c7f956925c853be990188befc149b230827b10533c699cf15ad2",
+      "protocol_id": "MATR_policy_c6885e966e0515c5",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c32",
+      "reference_capacity_ah": 1.0795897,
+      "row_count": 161393
+    },
+    {
+      "cell_id": "MATR_b1c33",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c33.json",
+      "metadata_sha256": "f543b97660f74443dec74bbd93a58a181b863b8e07c08f038be62ba43f836895",
+      "official_life_label": 757,
+      "official_life_right_censored": false,
+      "parquet_sha256": "e6b4bf1151431c2032173ca709b6b27e7ef886cc55bf6f922ebb8bb5b6fc23f3",
+      "protocol_id": "MATR_policy_c6885e966e0515c5",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c33",
+      "reference_capacity_ah": 1.0946157,
+      "row_count": 160908
+    },
+    {
+      "cell_id": "MATR_b1c34",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c34.json",
+      "metadata_sha256": "fd3eef92a065a4735124cd05fd40f99c041508679c3fbf224ff0d0161b3aec25",
+      "official_life_label": 742,
+      "official_life_right_censored": false,
+      "parquet_sha256": "1104842cd09b1cba294ac2b6d137b038fd5209c01f33a1829e7edbd47671b228",
+      "protocol_id": "MATR_policy_0831ed46d3589651",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c34",
+      "reference_capacity_ah": 1.0782866,
+      "row_count": 162642
+    },
+    {
+      "cell_id": "MATR_b1c35",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c35.json",
+      "metadata_sha256": "fdd095875ed964283508e72252cb9f7beff90b890fda52049478656a211774ad",
+      "official_life_label": 703,
+      "official_life_right_censored": false,
+      "parquet_sha256": "6d8cd7c6dc64f370706d108850fc2c945d64757753dd0a81c6dd4cb442fe894b",
+      "protocol_id": "MATR_policy_0831ed46d3589651",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c35",
+      "reference_capacity_ah": 1.0727253,
+      "row_count": 163117
+    },
+    {
+      "cell_id": "MATR_b1c36",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c36.json",
+      "metadata_sha256": "71f0003f3cbe98d717e6e44747d8d84c6b15fcdf2a805fd5650b55281e3b7cae",
+      "official_life_label": 704,
+      "official_life_right_censored": false,
+      "parquet_sha256": "6c71c7044f2045fe67ebc5bd991f354556fc541db95df41394e3db57ef6c4de8",
+      "protocol_id": "MATR_policy_8b1e99ab6e5b208a",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c36",
+      "reference_capacity_ah": 1.0799077,
+      "row_count": 165123
+    },
+    {
+      "cell_id": "MATR_b1c37",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c37.json",
+      "metadata_sha256": "27676295ef5c2ec4613e373b9879d210580a65a83a8804b578032ceca28b9cdb",
+      "official_life_label": 648,
+      "official_life_right_censored": false,
+      "parquet_sha256": "445e7e8981789e7d47099ead16054cff1d7e54149186fba85031951d935a0594",
+      "protocol_id": "MATR_policy_8b1e99ab6e5b208a",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c37",
+      "reference_capacity_ah": 1.0766596,
+      "row_count": 163997
+    },
+    {
+      "cell_id": "MATR_b1c38",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c38.json",
+      "metadata_sha256": "c917ee1991ae43f4e8025de0e5ba8ef854bf668f349b17041799af3682f53ec3",
+      "official_life_label": 617,
+      "official_life_right_censored": false,
+      "parquet_sha256": "87819dd00b2071001253c5e9433125b177f3f70077a9392e80e27e09a8b4db72",
+      "protocol_id": "MATR_policy_1531eaf771fc87e1",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c38",
+      "reference_capacity_ah": 1.0743377,
+      "row_count": 161316
+    },
+    {
+      "cell_id": "MATR_b1c39",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c39.json",
+      "metadata_sha256": "d8e66657cf25099587eef6c96c61e54e58020cf8502a16048a536a94d1f81161",
+      "official_life_label": 625,
+      "official_life_right_censored": false,
+      "parquet_sha256": "333f142954d8a8c036c585dc1db2a49dd1dbcf8dc13f38e4848eefc2edeb393a",
+      "protocol_id": "MATR_policy_1531eaf771fc87e1",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c39",
+      "reference_capacity_ah": 1.0838681,
+      "row_count": 160753
+    },
+    {
+      "cell_id": "MATR_b1c40",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c40.json",
+      "metadata_sha256": "6b8dd7b63d3466018259944ef77d4006e51031598a28bc6c988c024bb54ff728",
+      "official_life_label": 966,
+      "official_life_right_censored": false,
+      "parquet_sha256": "7c5feacea1c10463ee76efeaa5794334db9c7fbab7143a28bb0f80be353de296",
+      "protocol_id": "MATR_policy_7e2838301ba7061f",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c40",
+      "reference_capacity_ah": 1.0854201,
+      "row_count": 166840
+    },
+    {
+      "cell_id": "MATR_b1c41",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c41.json",
+      "metadata_sha256": "21d298c082b258c01acebb6279a9e273d0ddffba5b52a20305ec162dd16425d7",
+      "official_life_label": 1051,
+      "official_life_right_censored": false,
+      "parquet_sha256": "c6bb15ec587b9ec6bdbf30702763af09d7cfa8df9413534838235edba456918e",
+      "protocol_id": "MATR_policy_7e2838301ba7061f",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c41",
+      "reference_capacity_ah": 1.0810505,
+      "row_count": 165623
+    },
+    {
+      "cell_id": "MATR_b1c42",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c42.json",
+      "metadata_sha256": "d3e986c9be3d734fdcf1231e2d41e7b6775d99d2e3a91eb43146aee8eb9bdea2",
+      "official_life_label": 702,
+      "official_life_right_censored": false,
+      "parquet_sha256": "99c9307f5993198bda6a13f2492b9dbbe6ba1e77c62f8d55d876ed86afd15e57",
+      "protocol_id": "MATR_policy_7ba90f66d3c4d09c",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c42",
+      "reference_capacity_ah": 1.0821602,
+      "row_count": 164282
+    },
+    {
+      "cell_id": "MATR_b1c43",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c43.json",
+      "metadata_sha256": "d71bedb4a937d0625f7bd33fc499a5628f0a24248218068a1871ba37d80f8fa3",
+      "official_life_label": 651,
+      "official_life_right_censored": false,
+      "parquet_sha256": "8a6f335e8fd174ae9e725534c245b66d5ea9740d57deac238552890382f5141f",
+      "protocol_id": "MATR_policy_7ba90f66d3c4d09c",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 2
+      },
+      "raw_cell_id": "b1c43",
+      "reference_capacity_ah": 1.0701088,
+      "row_count": 163906
+    },
+    {
+      "cell_id": "MATR_b1c44",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c44.json",
+      "metadata_sha256": "53743340ea57febda3d22e4184af8c608de2f77334b86e859443c72c6f6c3f27",
+      "official_life_label": 616,
+      "official_life_right_censored": false,
+      "parquet_sha256": "1fde801224c5218e35566ee6bd65353b22b888903f061e8194e80a411963a5fa",
+      "protocol_id": "MATR_policy_441a82fb2084b709",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c44",
+      "reference_capacity_ah": 1.0867941,
+      "row_count": 155948
+    },
+    {
+      "cell_id": "MATR_b1c45",
+      "cycle_count": 151,
+      "manifest_relative_path": "manifests/MATR_b1c45.json",
+      "metadata_sha256": "ec6c1878b9c44c4613841aac634c4d91ac74c29157c994920ba142f1545873c8",
+      "official_life_label": 599,
+      "official_life_right_censored": false,
+      "parquet_sha256": "e74f991e7c55f3b0ff8a89e30d30ed032908bec1dd695cf128da217026c98b3d",
+      "protocol_id": "MATR_policy_441a82fb2084b709",
+      "quality_issue_counts": {
+        "NON_MONOTONIC_TIME": 1
+      },
+      "raw_cell_id": "b1c45",
+      "reference_capacity_ah": 1.0860058,
+      "row_count": 160679
+    }
+  ],
+  "created_at": "2026-07-17T12:05:18.701168Z",
+  "dataset_id": "MATR",
+  "license_name": "must_verify_before_download",
+  "license_uri": null,
+  "max_cycle_index": 150,
+  "paper_doi": "https://doi.org/10.1038/s41560-019-0356-8",
+  "quality_issue_counts": {
+    "NON_MONOTONIC_TIME": 74
+  },
+  "raw_relative_path": "2017-05-12_batchdata_updated_struct_errorcorrect.mat",
+  "raw_sha256": "9d928ab978f0e3c70b31cb833a749fedd35094d01af76475d69b40aa3497f5ba",
+  "raw_size_bytes": 3025320241,
+  "schema_version": "matr-batch-conversion-v1",
+  "source_uri": "https://data.matr.io/1/projects/5c48dd2bc625d700019f3204",
+  "time_unit": "minutes",
+  "total_row_count": 7627297
+}

@@ -53,6 +53,84 @@ class MatrHybridCohorts:
     test: HybridTrajectoryBatch
 
 
+@dataclass(frozen=True)
+class MatrOfficialLifeEvidence:
+    """Hash-context-bound scalar label evidence independent of trajectory eligibility."""
+
+    cell_id: str
+    official_life_label: int | None
+    official_life_right_censored: bool
+    reference_capacity_ah: float
+
+    def __post_init__(self) -> None:
+        if not self.cell_id or self.reference_capacity_ah <= 0:
+            raise ValueError("MATR official life evidence is invalid")
+        if self.official_life_right_censored == (
+            self.official_life_label is not None
+        ):
+            raise ValueError("MATR official life label and censoring flag disagree")
+
+
+def restrict_matr_split_to_cells(
+    split: SplitManifest,
+    selected_cell_ids: set[str],
+) -> SplitManifest:
+    """Filter task-ineligible cells without moving any selected cell across partitions."""
+
+    if split.dataset_id != "MATR" or not selected_cell_ids:
+        raise ValueError("restricted MATR split requires selected MATR cells")
+    if not selected_cell_ids.issubset(set(split.all_cells)):
+        raise ValueError("restricted MATR split contains cells outside the source split")
+    partitions = tuple(
+        tuple(cell for cell in partition if cell in selected_cell_ids)
+        for partition in (split.train, split.validation, split.calibration, split.test)
+    )
+    if any(not partition for partition in partitions):
+        raise ValueError("every restricted MATR partition must retain eligible cells")
+    return SplitManifest(
+        dataset_id="MATR",
+        seed=split.seed,
+        train=partitions[0],
+        validation=partitions[1],
+        calibration=partitions[2],
+        test=partitions[3],
+    )
+
+
+def merge_matr_curve_cohorts(
+    components: tuple[MatrCurveCohorts, ...],
+) -> MatrCurveCohorts:
+    """Join batch-local scalar cohorts while preserving split membership."""
+
+    if len(components) != 3:
+        raise ValueError("MATR three-batch curves require exactly three components")
+    return MatrCurveCohorts(
+        train=_merge_curve_batches(tuple(item.train for item in components)),
+        validation=_merge_curve_batches(tuple(item.validation for item in components)),
+        calibration=_merge_curve_batches(tuple(item.calibration for item in components)),
+        test=_merge_curve_batches(tuple(item.test for item in components)),
+    )
+
+
+def merge_matr_hybrid_cohorts(
+    components: tuple[MatrHybridCohorts, ...],
+) -> MatrHybridCohorts:
+    """Join only batch-local cells with genuine trajectories through cycle 500."""
+
+    if len(components) != 3:
+        raise ValueError("MATR three-batch Hybrid requires exactly three components")
+    return MatrHybridCohorts(
+        train=_merge_hybrid_batches(tuple(item.train for item in components)),
+        validation=_merge_hybrid_batches(
+            tuple(item.validation for item in components)
+        ),
+        calibration=_merge_hybrid_batches(
+            tuple(item.calibration for item in components)
+        ),
+        test=_merge_hybrid_batches(tuple(item.test for item in components)),
+    )
+
+
 def load_matr_cycle_life_curve_cohorts(
     *,
     processed_root: Path,
@@ -69,9 +147,45 @@ def load_matr_cycle_life_curve_cohorts(
     if split_manifest.dataset_id != "MATR" or supervision.dataset_id != "MATR":
         raise ValueError("MATR curve loading requires MATR split and supervision contracts")
     _verify_supervision_bytes(supervision_root, supervision)
-    supervision_by_cell = {cell.cell_id: cell for cell in supervision.cells}
-    if len(supervision_by_cell) != len(supervision.cells):
-        raise ValueError("MATR supervision cell identifiers must be unique")
+    evidence = tuple(
+        MatrOfficialLifeEvidence(
+            cell_id=cell.cell_id,
+            official_life_label=cell.official_life_label,
+            official_life_right_censored=cell.official_life_right_censored,
+            reference_capacity_ah=cell.reference_capacity_ah,
+        )
+        for cell in supervision.cells
+    )
+    return load_matr_cycle_life_curve_cohorts_from_evidence(
+        processed_root=processed_root,
+        raw_sha256=supervision.raw_sha256,
+        evidence=evidence,
+        split_manifest=split_manifest,
+        cutoff_cycle=cutoff_cycle,
+        voltage_min_v=voltage_min_v,
+        voltage_max_v=voltage_max_v,
+        voltage_grid_step_v=voltage_grid_step_v,
+    )
+
+
+def load_matr_cycle_life_curve_cohorts_from_evidence(
+    *,
+    processed_root: Path,
+    raw_sha256: str,
+    evidence: tuple[MatrOfficialLifeEvidence, ...],
+    split_manifest: SplitManifest,
+    cutoff_cycle: int,
+    voltage_min_v: float,
+    voltage_max_v: float,
+    voltage_grid_step_v: float,
+) -> MatrCurveCohorts:
+    """Build scalar cohorts from conversion evidence, not trajectory membership."""
+
+    if split_manifest.dataset_id != "MATR":
+        raise ValueError("MATR curve loading requires a MATR split")
+    evidence_by_cell = {cell.cell_id: cell for cell in evidence}
+    if len(evidence_by_cell) != len(evidence):
+        raise ValueError("MATR official life evidence cell identifiers must be unique")
     split_cells = set(
         (
             *split_manifest.train,
@@ -80,8 +194,8 @@ def load_matr_cycle_life_curve_cohorts(
             *split_manifest.test,
         )
     )
-    if split_cells != set(supervision_by_cell):
-        raise ValueError("MATR split cells must exactly match supervision cells")
+    if split_cells != set(evidence_by_cell):
+        raise ValueError("MATR split cells must exactly match scalar label evidence")
 
     manifest_directory = Path(processed_root) / "manifests"
     manifest_paths = tuple(sorted(manifest_directory.glob("*.json")))
@@ -101,14 +215,14 @@ def load_matr_cycle_life_curve_cohorts(
     for cell_id in sorted(split_cells):
         manifest = manifests[cell_id]
         verified = verify_cell_artifacts(processed_root, manifest)
-        label = supervision_by_cell[cell_id]
-        if verified.metadata.source_sha256 != supervision.raw_sha256:
-            raise ValueError("early input and supervision raw source hashes differ")
+        label = evidence_by_cell[cell_id]
+        if verified.metadata.source_sha256 != raw_sha256:
+            raise ValueError("early input and scalar evidence raw source hashes differ")
         if (
             verified.metadata.official_life_label != label.official_life_label
             or verified.metadata.reference_capacity_ah != label.reference_capacity_ah
         ):
-            raise ValueError("early metadata and supervision label evidence differ")
+            raise ValueError("early metadata and scalar label evidence differ")
         if label.official_life_right_censored:
             continue
         if label.official_life_label is None:
@@ -255,6 +369,61 @@ def _build_batch(
             dtype=torch.float32,
         ),
         cutoff_cycle=cutoff_cycle,
+    )
+
+
+def _merge_curve_batches(
+    batches: tuple[CycleLifeCurveBatch, ...],
+) -> CycleLifeCurveBatch:
+    first = batches[0]
+    cell_ids = tuple(cell for batch in batches for cell in batch.cell_ids)
+    if len(set(cell_ids)) != len(cell_ids):
+        raise ValueError("merged MATR curve cell identifiers must be globally unique")
+    if any(
+        batch.dataset_id != first.dataset_id
+        or batch.target is not first.target
+        or batch.cutoff_cycle != first.cutoff_cycle
+        or batch.curve_values.shape[1:] != first.curve_values.shape[1:]
+        for batch in batches[1:]
+    ):
+        raise ValueError("merged MATR curve batch schemas must agree")
+    return CycleLifeCurveBatch(
+        dataset_id=first.dataset_id,
+        target=first.target,
+        cell_ids=cell_ids,
+        curve_values=torch.cat(tuple(batch.curve_values for batch in batches), dim=0),
+        observed_mask=torch.cat(tuple(batch.observed_mask for batch in batches), dim=0),
+        observed_cycles=torch.cat(
+            tuple(batch.observed_cycles for batch in batches), dim=0
+        ),
+        cutoff_cycle=first.cutoff_cycle,
+    )
+
+
+def _merge_hybrid_batches(
+    batches: tuple[HybridTrajectoryBatch, ...],
+) -> HybridTrajectoryBatch:
+    first = batches[0]
+    cell_ids = tuple(cell for batch in batches for cell in batch.cell_ids)
+    if len(set(cell_ids)) != len(cell_ids):
+        raise ValueError("merged MATR Hybrid cell identifiers must be globally unique")
+    if any(
+        batch.dataset_id != first.dataset_id
+        or batch.cutoff_cycle != first.cutoff_cycle
+        or batch.prediction_cycles != first.prediction_cycles
+        or batch.features.shape[1:] != first.features.shape[1:]
+        or batch.target_soh.shape[1:] != first.target_soh.shape[1:]
+        for batch in batches[1:]
+    ):
+        raise ValueError("merged MATR Hybrid batch schemas must agree")
+    return HybridTrajectoryBatch(
+        dataset_id=first.dataset_id,
+        cell_ids=cell_ids,
+        features=torch.cat(tuple(batch.features for batch in batches), dim=0),
+        initial_soh=torch.cat(tuple(batch.initial_soh for batch in batches), dim=0),
+        target_soh=torch.cat(tuple(batch.target_soh for batch in batches), dim=0),
+        prediction_cycles=first.prediction_cycles,
+        cutoff_cycle=first.cutoff_cycle,
     )
 
 

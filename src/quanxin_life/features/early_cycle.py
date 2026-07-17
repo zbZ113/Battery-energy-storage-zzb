@@ -19,6 +19,7 @@ from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 from quanxin_life.data.leakage import assert_cycles_within_cutoff
 from quanxin_life.data.schemas import CycleRecord, DataQualitySeverity
 from quanxin_life.data.validation import validate_cycle_records
+from quanxin_life.features.telemetry import exclude_exact_duplicate_telemetry
 
 EARLY_CYCLE_FEATURE_VERSION = "early-cycle-v1"
 """Version of the feature definitions in this module."""
@@ -106,7 +107,8 @@ def extract_early_cycle_features(
     assert_cycles_within_cutoff(
         (record.cycle_index for record in records), cutoff_cycle=config.cutoff_cycle
     )
-    report = validate_cycle_records(records)
+    prepared_records, duplicate_count = exclude_exact_duplicate_telemetry(records)
+    report = validate_cycle_records(prepared_records)
     fatal_issues = tuple(
         issue
         for issue in report.issues
@@ -116,7 +118,7 @@ def extract_early_cycle_features(
         codes = ", ".join(issue.code for issue in fatal_issues)
         raise ValueError(f"feature extraction rejected due to data quality: {codes}")
 
-    valid_records = tuple(record for record in records if record.valid)
+    valid_records = tuple(record for record in prepared_records if record.valid)
     if not valid_records:
         raise ValueError("feature extraction requires at least one valid record")
 
@@ -134,7 +136,9 @@ def extract_early_cycle_features(
 
     values: dict[str, float | None] = {name: None for name in EARLY_CYCLE_FEATURE_NAMES}
     warnings: list[str] = []
-    if len(valid_records) != len(records):
+    if duplicate_count:
+        warnings.append("EXACT_DUPLICATE_TELEMETRY_EXCLUDED")
+    if len(valid_records) != len(prepared_records):
         warnings.append("INVALID_RECORDS_EXCLUDED")
 
     _populate_capacity_features(values, by_cycle, source_cycles, warnings)
@@ -192,9 +196,16 @@ def _populate_capacity_features(
     capacity_by_cycle = {
         cycle: _cycle_maximum(by_cycle[cycle], "discharge_capacity_ah") for cycle in source_cycles
     }
-    observed = [
+    all_observed = [
         (cycle, capacity) for cycle, capacity in capacity_by_cycle.items() if capacity is not None
     ]
+    observed = [
+        (cycle, capacity)
+        for cycle, capacity in all_observed
+        if capacity is not None and capacity > 0
+    ]
+    if len(observed) != len(all_observed):
+        warnings.append("NONPOSITIVE_CAPACITY_EXCLUDED_FROM_TREND")
     if len(observed) < 2:
         warnings.append("DISCHARGE_CAPACITY_UNAVAILABLE")
         return
@@ -206,10 +217,8 @@ def _populate_capacity_features(
     values["capacity_first_ah"] = first_capacity
     values["capacity_last_ah"] = last_capacity
     values["capacity_delta_ah"] = delta
-    values["capacity_relative_change"] = delta / first_capacity if first_capacity > 0 else None
+    values["capacity_relative_change"] = delta / first_capacity
     values["capacity_slope_ah_per_cycle"] = delta / (last_cycle - first_cycle)
-    if first_capacity <= 0:
-        warnings.append("NONPOSITIVE_INITIAL_CAPACITY")
 
 
 def _populate_coulombic_efficiency_features(

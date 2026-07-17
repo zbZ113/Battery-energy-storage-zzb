@@ -1,0 +1,138 @@
+{
+  "batch_index": 2,
+  "created_at": "2026-07-17T12:09:03.102760Z",
+  "eligible_cell_ids": [
+    "MATR_b2c10",
+    "MATR_b2c11",
+    "MATR_b2c13",
+    "MATR_b2c14",
+    "MATR_b2c17",
+    "MATR_b2c18",
+    "MATR_b2c20",
+    "MATR_b2c21",
+    "MATR_b2c22",
+    "MATR_b2c23",
+    "MATR_b2c24",
+    "MATR_b2c28",
+    "MATR_b2c29",
+    "MATR_b2c30",
+    "MATR_b2c31",
+    "MATR_b2c32",
+    "MATR_b2c33",
+    "MATR_b2c34",
+    "MATR_b2c36",
+    "MATR_b2c37",
+    "MATR_b2c40",
+    "MATR_b2c45",
+    "MATR_b2c47",
+    "MATR_b2c5",
+    "MATR_b2c6",
+    "MATR_b2c7",
+    "MATR_b2c8",
+    "MATR_b2c9"
+  ],
+  "excluded": [
+    {
+      "cell_id": "MATR_b2c0",
+      "observed_cycle_count": 326,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c1",
+      "observed_cycle_count": 170,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c12",
+      "observed_cycle_count": 491,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c15",
+      "observed_cycle_count": 208,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c16",
+      "observed_cycle_count": 482,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c19",
+      "observed_cycle_count": 489,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c2",
+      "observed_cycle_count": 464,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c25",
+      "observed_cycle_count": 487,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c26",
+      "observed_cycle_count": 498,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c27",
+      "observed_cycle_count": 495,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c3",
+      "observed_cycle_count": 361,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c35",
+      "observed_cycle_count": 486,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c38",
+      "observed_cycle_count": 487,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c39",
+      "observed_cycle_count": 480,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c4",
+      "observed_cycle_count": 471,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c41",
+      "observed_cycle_count": 452,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c42",
+      "observed_cycle_count": 492,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c43",
+      "observed_cycle_count": 487,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c44",
+      "observed_cycle_count": 479,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    },
+    {
+      "cell_id": "MATR_b2c46",
+      "observed_cycle_count": 449,
+      "reason": "INSUFFICIENT_REAL_TRAJECTORY_500"
+    }
+  ],
+  "horizon_cycle": 500,
+  "schema_version": "matr-trajectory-eligibility-v1"
+}

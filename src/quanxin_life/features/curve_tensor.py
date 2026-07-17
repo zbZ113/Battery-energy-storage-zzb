@@ -18,6 +18,7 @@ from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
 from quanxin_life.data.leakage import assert_cycles_within_cutoff
 from quanxin_life.data.schemas import CycleRecord, DataQualitySeverity
 from quanxin_life.data.validation import validate_cycle_records
+from quanxin_life.features.telemetry import exclude_exact_duplicate_telemetry
 
 CURVE_TENSOR_FEATURE_VERSION = "discharge-curve-tensor-v1"
 _SUPPORTED_CUTOFF_CYCLES = (20, 50, 100, 150)
@@ -114,7 +115,8 @@ def build_discharge_curve_tensor(
     assert_cycles_within_cutoff(
         (record.cycle_index for record in records), cutoff_cycle=config.cutoff_cycle
     )
-    report = validate_cycle_records(records)
+    prepared_records, duplicate_count = exclude_exact_duplicate_telemetry(records)
+    report = validate_cycle_records(prepared_records)
     fatal_issues = tuple(
         issue
         for issue in report.issues
@@ -124,7 +126,7 @@ def build_discharge_curve_tensor(
         codes = ", ".join(issue.code for issue in fatal_issues)
         raise ValueError(f"curve tensor extraction rejected due to data quality: {codes}")
 
-    valid_records = tuple(record for record in records if record.valid)
+    valid_records = tuple(record for record in prepared_records if record.valid)
     if not valid_records:
         raise ValueError("curve tensor extraction requires at least one valid record")
     dataset_ids = {record.dataset_id for record in valid_records}
@@ -135,7 +137,9 @@ def build_discharge_curve_tensor(
     cycle_indices = tuple(range(config.cutoff_cycle + 1))
     by_cycle = _group_by_cycle(valid_records)
     warnings: list[str] = []
-    if len(valid_records) != len(records):
+    if duplicate_count:
+        warnings.append("EXACT_DUPLICATE_TELEMETRY_EXCLUDED")
+    if len(valid_records) != len(prepared_records):
         warnings.append("INVALID_RECORDS_EXCLUDED")
 
     curves = {

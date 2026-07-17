@@ -1,0 +1,58 @@
+{
+  "calibration": [
+    "MATR_b1c10",
+    "MATR_b1c23",
+    "MATR_b1c25",
+    "MATR_b1c30"
+  ],
+  "dataset_id": "MATR",
+  "seed": 20260712,
+  "test": [
+    "MATR_b1c11",
+    "MATR_b1c16",
+    "MATR_b1c2",
+    "MATR_b1c21",
+    "MATR_b1c29",
+    "MATR_b1c32",
+    "MATR_b1c4",
+    "MATR_b1c41",
+    "MATR_b1c5"
+  ],
+  "train": [
+    "MATR_b1c0",
+    "MATR_b1c1",
+    "MATR_b1c13",
+    "MATR_b1c14",
+    "MATR_b1c15",
+    "MATR_b1c17",
+    "MATR_b1c18",
+    "MATR_b1c19",
+    "MATR_b1c20",
+    "MATR_b1c22",
+    "MATR_b1c24",
+    "MATR_b1c27",
+    "MATR_b1c3",
+    "MATR_b1c31",
+    "MATR_b1c33",
+    "MATR_b1c34",
+    "MATR_b1c35",
+    "MATR_b1c36",
+    "MATR_b1c37",
+    "MATR_b1c39",
+    "MATR_b1c40",
+    "MATR_b1c43",
+    "MATR_b1c45",
+    "MATR_b1c6",
+    "MATR_b1c7",
+    "MATR_b1c8",
+    "MATR_b1c9"
+  ],
+  "validation": [
+    "MATR_b1c12",
+    "MATR_b1c26",
+    "MATR_b1c28",
+    "MATR_b1c38",
+    "MATR_b1c42",
+    "MATR_b1c44"
+  ]
+}

@@ -60,6 +60,7 @@ class MatrBatchArtifactReference(ContractModel):
     batch_index: int = Field(ge=1, le=3)
     batch_date: date
     raw_relative_path: str = Field(min_length=1)
+    raw_manifest: str = Field(min_length=1)
     raw_sha256: Sha256
     processed_root: str = Field(min_length=1)
     conversion_report: str = Field(min_length=1)

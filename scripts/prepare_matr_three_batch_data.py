@@ -263,6 +263,7 @@ def _prepare_batch(
             batch_index=spec.batch_index,
             batch_date=spec.batch_date,
             raw_relative_path=spec.raw_path,
+            raw_manifest=spec.raw_manifest,
             raw_sha256=raw_manifest.sha256,
             processed_root=spec.processed_root,
             conversion_report=spec.conversion_report,

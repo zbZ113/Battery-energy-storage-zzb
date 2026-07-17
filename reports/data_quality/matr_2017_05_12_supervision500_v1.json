@@ -1,0 +1,382 @@
+{
+  "cell_count": 46,
+  "cells": [
+    {
+      "cell_id": "MATR_b1c0",
+      "observed_cycle_count": 1189,
+      "official_life_label": 1190,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c0",
+      "reference_capacity_ah": 1.0725095
+    },
+    {
+      "cell_id": "MATR_b1c1",
+      "observed_cycle_count": 1178,
+      "official_life_label": 1179,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c1",
+      "reference_capacity_ah": 1.0772982
+    },
+    {
+      "cell_id": "MATR_b1c2",
+      "observed_cycle_count": 1176,
+      "official_life_label": 1177,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c2",
+      "reference_capacity_ah": 1.082234
+    },
+    {
+      "cell_id": "MATR_b1c3",
+      "observed_cycle_count": 1225,
+      "official_life_label": 1226,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c3",
+      "reference_capacity_ah": 1.0819938
+    },
+    {
+      "cell_id": "MATR_b1c4",
+      "observed_cycle_count": 1226,
+      "official_life_label": 1227,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c4",
+      "reference_capacity_ah": 1.0797466
+    },
+    {
+      "cell_id": "MATR_b1c5",
+      "observed_cycle_count": 1073,
+      "official_life_label": 1074,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c5",
+      "reference_capacity_ah": 1.0775996
+    },
+    {
+      "cell_id": "MATR_b1c6",
+      "observed_cycle_count": 635,
+      "official_life_label": 636,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c6",
+      "reference_capacity_ah": 1.0784051
+    },
+    {
+      "cell_id": "MATR_b1c7",
+      "observed_cycle_count": 869,
+      "official_life_label": 870,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c7",
+      "reference_capacity_ah": 1.0959545
+    },
+    {
+      "cell_id": "MATR_b1c8",
+      "observed_cycle_count": 878,
+      "official_life_label": 879,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c8",
+      "reference_capacity_ah": 1.0920961
+    },
+    {
+      "cell_id": "MATR_b1c9",
+      "observed_cycle_count": 1053,
+      "official_life_label": 1054,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c9",
+      "reference_capacity_ah": 1.0842299
+    },
+    {
+      "cell_id": "MATR_b1c10",
+      "observed_cycle_count": 905,
+      "official_life_label": 906,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c10",
+      "reference_capacity_ah": 1.076798
+    },
+    {
+      "cell_id": "MATR_b1c11",
+      "observed_cycle_count": 787,
+      "official_life_label": 788,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c11",
+      "reference_capacity_ah": 1.0558786
+    },
+    {
+      "cell_id": "MATR_b1c12",
+      "observed_cycle_count": 901,
+      "official_life_label": 902,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c12",
+      "reference_capacity_ah": 1.0793798
+    },
+    {
+      "cell_id": "MATR_b1c13",
+      "observed_cycle_count": 896,
+      "official_life_label": 897,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c13",
+      "reference_capacity_ah": 1.081895
+    },
+    {
+      "cell_id": "MATR_b1c14",
+      "observed_cycle_count": 879,
+      "official_life_label": 880,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c14",
+      "reference_capacity_ah": 1.0724825
+    },
+    {
+      "cell_id": "MATR_b1c15",
+      "observed_cycle_count": 718,
+      "official_life_label": 719,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c15",
+      "reference_capacity_ah": 1.0637267
+    },
+    {
+      "cell_id": "MATR_b1c16",
+      "observed_cycle_count": 861,
+      "official_life_label": 862,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c16",
+      "reference_capacity_ah": 1.0833585
+    },
+    {
+      "cell_id": "MATR_b1c17",
+      "observed_cycle_count": 856,
+      "official_life_label": 857,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c17",
+      "reference_capacity_ah": 1.073923
+    },
+    {
+      "cell_id": "MATR_b1c18",
+      "observed_cycle_count": 690,
+      "official_life_label": 691,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c18",
+      "reference_capacity_ah": 1.0674137
+    },
+    {
+      "cell_id": "MATR_b1c19",
+      "observed_cycle_count": 787,
+      "official_life_label": 788,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c19",
+      "reference_capacity_ah": 1.0869932
+    },
+    {
+      "cell_id": "MATR_b1c20",
+      "observed_cycle_count": 533,
+      "official_life_label": 534,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c20",
+      "reference_capacity_ah": 1.0744811
+    },
+    {
+      "cell_id": "MATR_b1c21",
+      "observed_cycle_count": 558,
+      "official_life_label": 559,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c21",
+      "reference_capacity_ah": 1.0844665
+    },
+    {
+      "cell_id": "MATR_b1c22",
+      "observed_cycle_count": 890,
+      "official_life_label": 891,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c22",
+      "reference_capacity_ah": 1.0813867
+    },
+    {
+      "cell_id": "MATR_b1c23",
+      "observed_cycle_count": 1013,
+      "official_life_label": 1014,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c23",
+      "reference_capacity_ah": 1.0813111
+    },
+    {
+      "cell_id": "MATR_b1c24",
+      "observed_cycle_count": 1016,
+      "official_life_label": 1017,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c24",
+      "reference_capacity_ah": 1.0761921
+    },
+    {
+      "cell_id": "MATR_b1c25",
+      "observed_cycle_count": 853,
+      "official_life_label": 854,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c25",
+      "reference_capacity_ah": 1.0766819
+    },
+    {
+      "cell_id": "MATR_b1c26",
+      "observed_cycle_count": 869,
+      "official_life_label": 870,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c26",
+      "reference_capacity_ah": 1.0895739
+    },
+    {
+      "cell_id": "MATR_b1c27",
+      "observed_cycle_count": 841,
+      "official_life_label": 842,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c27",
+      "reference_capacity_ah": 1.0807079
+    },
+    {
+      "cell_id": "MATR_b1c28",
+      "observed_cycle_count": 859,
+      "official_life_label": 860,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c28",
+      "reference_capacity_ah": 1.0796903
+    },
+    {
+      "cell_id": "MATR_b1c29",
+      "observed_cycle_count": 916,
+      "official_life_label": 917,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c29",
+      "reference_capacity_ah": 1.0812927
+    },
+    {
+      "cell_id": "MATR_b1c30",
+      "observed_cycle_count": 708,
+      "official_life_label": 709,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c30",
+      "reference_capacity_ah": 1.0818657
+    },
+    {
+      "cell_id": "MATR_b1c31",
+      "observed_cycle_count": 875,
+      "official_life_label": 876,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c31",
+      "reference_capacity_ah": 1.0967276
+    },
+    {
+      "cell_id": "MATR_b1c32",
+      "observed_cycle_count": 730,
+      "official_life_label": 731,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c32",
+      "reference_capacity_ah": 1.0795897
+    },
+    {
+      "cell_id": "MATR_b1c33",
+      "observed_cycle_count": 756,
+      "official_life_label": 757,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c33",
+      "reference_capacity_ah": 1.0946157
+    },
+    {
+      "cell_id": "MATR_b1c34",
+      "observed_cycle_count": 741,
+      "official_life_label": 742,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c34",
+      "reference_capacity_ah": 1.0782866
+    },
+    {
+      "cell_id": "MATR_b1c35",
+      "observed_cycle_count": 702,
+      "official_life_label": 703,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c35",
+      "reference_capacity_ah": 1.0727253
+    },
+    {
+      "cell_id": "MATR_b1c36",
+      "observed_cycle_count": 703,
+      "official_life_label": 704,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c36",
+      "reference_capacity_ah": 1.0799077
+    },
+    {
+      "cell_id": "MATR_b1c37",
+      "observed_cycle_count": 647,
+      "official_life_label": 648,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c37",
+      "reference_capacity_ah": 1.0766596
+    },
+    {
+      "cell_id": "MATR_b1c38",
+      "observed_cycle_count": 616,
+      "official_life_label": 617,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c38",
+      "reference_capacity_ah": 1.0743377
+    },
+    {
+      "cell_id": "MATR_b1c39",
+      "observed_cycle_count": 624,
+      "official_life_label": 625,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c39",
+      "reference_capacity_ah": 1.0838681
+    },
+    {
+      "cell_id": "MATR_b1c40",
+      "observed_cycle_count": 965,
+      "official_life_label": 966,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c40",
+      "reference_capacity_ah": 1.0854201
+    },
+    {
+      "cell_id": "MATR_b1c41",
+      "observed_cycle_count": 1050,
+      "official_life_label": 1051,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c41",
+      "reference_capacity_ah": 1.0810505
+    },
+    {
+      "cell_id": "MATR_b1c42",
+      "observed_cycle_count": 701,
+      "official_life_label": 702,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c42",
+      "reference_capacity_ah": 1.0821602
+    },
+    {
+      "cell_id": "MATR_b1c43",
+      "observed_cycle_count": 650,
+      "official_life_label": 651,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c43",
+      "reference_capacity_ah": 1.0701088
+    },
+    {
+      "cell_id": "MATR_b1c44",
+      "observed_cycle_count": 615,
+      "official_life_label": 616,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c44",
+      "reference_capacity_ah": 1.0867941
+    },
+    {
+      "cell_id": "MATR_b1c45",
+      "observed_cycle_count": 598,
+      "official_life_label": 599,
+      "official_life_right_censored": false,
+      "raw_cell_id": "b1c45",
+      "reference_capacity_ah": 1.0860058
+    }
+  ],
+  "created_at": "2026-07-17T12:05:35.717866Z",
+  "dataset_id": "MATR",
+  "horizon_cycle": 500,
+  "parquet_relative_path": "trajectories/2893d752476c6c83d12c87391e64a170bd0f30149f7dd1383ee6c97620ecca19.parquet",
+  "parquet_sha256": "2893d752476c6c83d12c87391e64a170bd0f30149f7dd1383ee6c97620ecca19",
+  "raw_sha256": "9d928ab978f0e3c70b31cb833a749fedd35094d01af76475d69b40aa3497f5ba",
+  "row_count": 23000,
+  "schema_version": "matr-supervision-v1",
+  "source_report_sha256": "cc692f2dcc4f972dcd30036b77570ae44a2d072739bbca47a3d6c74322fd1ce6"
+}

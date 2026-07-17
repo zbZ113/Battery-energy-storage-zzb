@@ -18,9 +18,20 @@ def test_dataset_shell_is_one_command_and_never_parallelizes_models() -> None:
     assert script.index("scripts/prepare_matr_training_data.py") < script.index(
         "scripts/a100/preflight.sh"
     )
-    assert 'python scripts/run_training_suite.py matr "${MODE}"' in script
+    assert 'python scripts/run_training_suite.py "${DATASET}" "${MODE}"' in script
     assert "xargs -P" not in script
     assert " wait" not in script
+
+
+def test_three_batch_dataset_shell_prepares_all_batches_before_training() -> None:
+    script = Path("scripts/a100/train_dataset.sh").read_text(encoding="utf-8")
+
+    assert "matr-three-batch" in script
+    assert "scripts/prepare_matr_three_batch_data.py" in script
+    assert 'python scripts/run_training_suite.py "${DATASET}" "${MODE}"' in script
+    assert script.index("scripts/prepare_matr_three_batch_data.py") < script.index(
+        "scripts/a100/preflight.sh"
+    )
 
 
 def test_a100_environment_is_hash_locked_and_does_not_install_cuda_toolkit() -> None:

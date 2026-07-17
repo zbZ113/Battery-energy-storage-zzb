@@ -1,0 +1,30 @@
+{
+  "schema_version": "matr-three-batch-run-config-v1",
+  "mode": "final",
+  "suite": {
+    "schema_version": "training-suite-v1",
+    "dataset_id": "MATR",
+    "target": "matr_official_cycle_life",
+    "cutoffs": [20, 50, 100, 150],
+    "seeds": [20260712, 20260713, 20260714, 20260715, 20260716],
+    "models": [
+      {"name": "dummy", "max_epochs": 1, "validation_interval": 1, "early_stopping_patience": 1},
+      {"name": "variance", "max_epochs": 1, "validation_interval": 1, "early_stopping_patience": 1},
+      {"name": "xgboost", "max_epochs": 2000, "validation_interval": 1, "early_stopping_patience": 100},
+      {"name": "cpmlp", "max_epochs": 300, "validation_interval": 5, "early_stopping_patience": 10},
+      {"name": "hybrid", "max_epochs": 500, "validation_interval": 5, "early_stopping_patience": 10}
+    ],
+    "physical_gpu_index": 1,
+    "precision": "fp32",
+    "batch_size": 64,
+    "data_version": "matr-three-batch-4b78769df9ddd562",
+    "split_version": "matr-three-batch-cell-split-v1",
+    "feature_version": "matr-fixed-grid-and-capacity-trend-v1"
+  },
+  "paths": {
+    "three_batch_manifest": "reports/data_quality/matr_three_batch_manifest_v1.json",
+    "split_manifest": "configs/data_splits/matr_three_batch_cell_split_v1.json",
+    "run_root": "runs/a100/matr-three-batch/final"
+  },
+  "xgboost_early_stopping_rounds": 100
+}

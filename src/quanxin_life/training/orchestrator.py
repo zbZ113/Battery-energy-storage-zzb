@@ -9,6 +9,7 @@ import os
 import platform
 import subprocess
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from quanxin_life.core import (
     sha256_canonical,
 )
 from quanxin_life.data.manifest import RawFileManifest, verify_raw_file
+from quanxin_life.data.matr_multibatch import MatrThreeBatchManifest
 from quanxin_life.data.matr_pipeline import MatrSupervisionArtifact
 from quanxin_life.data.schemas import SplitManifest
 from quanxin_life.models.metrics import evaluate_cycle_life_predictions
@@ -40,12 +42,20 @@ from quanxin_life.training.matr_data import (
     load_matr_cycle_life_curve_cohorts,
     load_matr_hybrid_trajectory_cohorts,
 )
+from quanxin_life.training.matr_three_batch_data import (
+    load_matr_three_batch_training_cohorts,
+)
 from quanxin_life.training.plots import (
     write_cycle_life_evaluation_plot,
     write_hybrid_trajectory_plot,
 )
 from quanxin_life.training.reports import write_matr_experiment_reports
-from quanxin_life.training.suite import MatrRunConfig, TrainingRunKey, build_run_matrix
+from quanxin_life.training.suite import (
+    MatrRunConfig,
+    MatrThreeBatchRunConfig,
+    TrainingRunKey,
+    build_run_matrix,
+)
 from quanxin_life.training.tasks import (
     CPMLPTrainingTask,
     CycleLifeCurveBatch,
@@ -86,9 +96,8 @@ def execute_matr_suite(
             "suite_config_sha256": config.suite.config_sha256,
         }
     )
-    all_metrics: list[dict[str, Any]] = []
-    for cutoff in config.suite.cutoffs:
-        curve_cohorts = load_matr_cycle_life_curve_cohorts(
+    def load_cohorts(cutoff: int) -> tuple[MatrCurveCohorts, MatrHybridCohorts]:
+        curves = load_matr_cycle_life_curve_cohorts(
             processed_root=_inside(root, paths.processed_root),
             supervision_root=_inside(root, paths.supervision_root),
             supervision=supervision,
@@ -98,13 +107,102 @@ def execute_matr_suite(
             voltage_max_v=3.6,
             voltage_grid_step_v=0.01,
         )
-        hybrid_cohorts = load_matr_hybrid_trajectory_cohorts(
+        hybrid = load_matr_hybrid_trajectory_cohorts(
             processed_root=_inside(root, paths.processed_root),
             supervision_root=_inside(root, paths.supervision_root),
             supervision=supervision,
             split_manifest=split,
             cutoff_cycle=cutoff,
         )
+        return curves, hybrid
+
+    return _execute_matr_matrix(
+        config=config,
+        run_root=run_root,
+        split=split,
+        source_commit=source_commit,
+        input_bundle_sha256=input_bundle_sha256,
+        load_cohorts=load_cohorts,
+        device=device,
+    )
+
+
+def execute_matr_three_batch_suite(
+    *,
+    project_root: Path,
+    config: MatrThreeBatchRunConfig,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Execute the same model matrix over three separately governed MATR batches."""
+
+    root = project_root.resolve(strict=True)
+    manifest_path = _inside(root, config.paths.three_batch_manifest)
+    manifest = MatrThreeBatchManifest.model_validate_json(manifest_path.read_bytes())
+    split = SplitManifest.model_validate_json(
+        _inside(root, config.paths.split_manifest).read_bytes()
+    )
+    if (
+        manifest.data_version != config.suite.data_version
+        or manifest.split_version != config.suite.split_version
+        or manifest.combined_split_manifest != config.paths.split_manifest
+    ):
+        raise ValueError("three-batch MATR manifest and training config disagree")
+    raw_hashes: list[str] = []
+    for component in manifest.batches:
+        raw_manifest = RawFileManifest.model_validate_json(
+            _inside(root, component.raw_manifest).read_bytes()
+        )
+        if (
+            raw_manifest.relative_path != Path(component.raw_relative_path).name
+            or raw_manifest.sha256 != component.raw_sha256
+        ):
+            raise ValueError("three-batch raw manifest differs from component evidence")
+        verify_raw_file(_inside(root, component.raw_relative_path), raw_manifest)
+        raw_hashes.append(raw_manifest.sha256)
+    run_root = _inside(root, config.paths.run_root, must_exist=False)
+    run_root.mkdir(parents=True, exist_ok=True)
+    source_commit = _source_commit(root)
+    input_bundle_sha256 = sha256_canonical(
+        {
+            "raw_sha256": raw_hashes,
+            "three_batch_manifest_sha256": _sha256_file(manifest_path),
+            "split": split.model_dump(mode="json"),
+            "suite_config_sha256": config.suite.config_sha256,
+        }
+    )
+
+    def load_cohorts(cutoff: int) -> tuple[MatrCurveCohorts, MatrHybridCohorts]:
+        return load_matr_three_batch_training_cohorts(
+            project_root=root,
+            manifest=manifest,
+            combined_split=split,
+            cutoff_cycle=cutoff,
+        )
+
+    return _execute_matr_matrix(
+        config=config,
+        run_root=run_root,
+        split=split,
+        source_commit=source_commit,
+        input_bundle_sha256=input_bundle_sha256,
+        load_cohorts=load_cohorts,
+        device=device,
+    )
+
+
+def _execute_matr_matrix(
+    *,
+    config: MatrRunConfig | MatrThreeBatchRunConfig,
+    run_root: Path,
+    split: SplitManifest,
+    source_commit: str,
+    input_bundle_sha256: str,
+    load_cohorts: Callable[[int], tuple[MatrCurveCohorts, MatrHybridCohorts]],
+    device: torch.device,
+) -> dict[str, Any]:
+    all_metrics: list[dict[str, Any]] = []
+    for cutoff in config.suite.cutoffs:
+        curve_cohorts, hybrid_cohorts = load_cohorts(cutoff)
         keys = tuple(key for key in build_run_matrix(config.suite) if key.cutoff_cycle == cutoff)
         for key in keys:
             model_config = next(
