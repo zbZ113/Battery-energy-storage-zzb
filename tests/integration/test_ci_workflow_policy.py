@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -17,3 +18,12 @@ def test_frontend_ci_installs_pnpm_before_setup_node_uses_its_cache() -> None:
     cache_config = workflow.index("cache: pnpm")
 
     assert pnpm_setup < node_setup < cache_config
+
+
+def test_python_ci_installs_extras_imported_by_the_full_test_suite() -> None:
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    editable_install = re.search(r'pip install -e "\.\[([^]]+)\]"', workflow)
+
+    assert editable_install is not None
+    installed_extras = {value.strip() for value in editable_install.group(1).split(",")}
+    assert {"knowledge", "llm"} <= installed_extras
