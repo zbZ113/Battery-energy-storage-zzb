@@ -180,6 +180,17 @@ def _run_one(
         training_started = time.perf_counter()
         dummy_model = fit_dummy_cycle_life(curve_cohorts.train)
         training_time_seconds = time.perf_counter() - training_started
+        validation_predicted = dummy_model.predict(curve_cohorts.validation)
+        _write_static_baseline_logs(
+            run_directory,
+            context=context,
+            training_time_seconds=training_time_seconds,
+            validation_metrics=_validation_cycle_metrics(
+                curve_cohorts.validation,
+                validation_predicted,
+                context,
+            ),
+        )
         predicted = dummy_model.predict(curve_cohorts.test)
         calibration_predicted = dummy_model.predict(curve_cohorts.calibration)
         _write_json_atomic(
@@ -200,6 +211,17 @@ def _run_one(
         training_started = time.perf_counter()
         variance_model = fit_variance_cycle_life(curve_cohorts.train)
         training_time_seconds = time.perf_counter() - training_started
+        validation_predicted = variance_model.predict(curve_cohorts.validation)
+        _write_static_baseline_logs(
+            run_directory,
+            context=context,
+            training_time_seconds=training_time_seconds,
+            validation_metrics=_validation_cycle_metrics(
+                curve_cohorts.validation,
+                validation_predicted,
+                context,
+            ),
+        )
         predicted = variance_model.predict(curve_cohorts.test)
         calibration_predicted = variance_model.predict(curve_cohorts.calibration)
         _write_json_atomic(
@@ -429,6 +451,83 @@ def _cycle_predictions(
             strict=True,
         )
     ]
+
+
+def _validation_cycle_metrics(
+    batch: CycleLifeCurveBatch,
+    predicted: np.ndarray,
+    context: CheckpointContext,
+) -> dict[str, float | None]:
+    metrics = evaluate_cycle_life_predictions(_cycle_predictions(batch, predicted, context))
+    return {
+        "mae": metrics.mae_cycle,
+        "rmse": metrics.rmse_cycle,
+        "mape": metrics.mape_percent,
+        "r2": metrics.r2,
+    }
+
+
+def _write_static_baseline_logs(
+    run_directory: Path,
+    *,
+    context: CheckpointContext,
+    training_time_seconds: float,
+    validation_metrics: dict[str, float | None],
+) -> None:
+    event = {
+        "event": "fit_and_validation_complete",
+        "dataset": context.dataset_id,
+        "target": context.target.value,
+        "model": context.model_name,
+        "cutoff_cycle": context.cutoff_cycle,
+        "seed": context.seed,
+        "epoch": 0,
+        "training_time_seconds": training_time_seconds,
+        "validation_mae": validation_metrics["mae"],
+        "validation_rmse": validation_metrics["rmse"],
+        "validation_mape": validation_metrics["mape"],
+        "validation_r2": validation_metrics["r2"],
+        "gpu_memory_allocated_bytes": 0,
+        "gpu_memory_reserved_bytes": 0,
+    }
+    _write_text_atomic(
+        run_directory / "training_log.jsonl",
+        json.dumps(event, allow_nan=False, ensure_ascii=False, sort_keys=True) + "\n",
+    )
+    _write_metrics_csv(
+        run_directory / "metrics_epoch.csv",
+        [
+            {
+                "dataset": context.dataset_id,
+                "target": context.target.value,
+                "model": context.model_name,
+                "cutoff_cycle": context.cutoff_cycle,
+                "seed": context.seed,
+                "epoch": 0,
+                "training_time_seconds": training_time_seconds,
+            }
+        ],
+    )
+    _write_metrics_csv(
+        run_directory / "metrics_validation.csv",
+        [
+            {
+                "dataset": context.dataset_id,
+                "target": context.target.value,
+                "model": context.model_name,
+                "cutoff_cycle": context.cutoff_cycle,
+                "seed": context.seed,
+                "epoch": 0,
+                **validation_metrics,
+            }
+        ],
+    )
+    print(
+        f"dataset={context.dataset_id} model={context.model_name} "
+        f"cutoff={context.cutoff_cycle} seed={context.seed} epoch=0 "
+        f"validation_mae={validation_metrics['mae']} "
+        f"training_time_seconds={training_time_seconds:.6f}"
+    )
 
 
 def _write_cycle_plot(
@@ -756,6 +855,16 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _write_text_atomic(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(value, encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _write_metrics_csv(path: Path, rows: list[dict[str, Any]]) -> None:
