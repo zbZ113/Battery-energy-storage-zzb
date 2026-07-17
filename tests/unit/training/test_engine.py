@@ -83,6 +83,8 @@ def test_engine_validates_early_stops_and_writes_consistent_evidence(
     assert result.status is TrainingRunStatus.EARLY_STOPPED
     assert result.last_epoch == 6
     assert result.best_epoch == 2
+    assert result.training_time_seconds > 0
+    assert result.peak_gpu_memory_bytes == 0
     assert task.validated_epochs == [2, 4, 6]
     assert (tmp_path / "training_log.jsonl").is_file()
     assert (tmp_path / "metrics_epoch.csv").is_file()
@@ -154,6 +156,8 @@ def test_engine_resumes_last_checkpoint_and_completed_run_is_skipped(
     ).run()
     assert resumed.status is TrainingRunStatus.COMPLETED
     assert resumed.resumed_from_epoch == 2
+    assert resumed.training_time_seconds >= first.training_time_seconds
+    assert resumed.peak_gpu_memory_bytes == 0
     assert resumed_task.trained_epochs == [3, 4]
 
     skipped_task = ToyTrainingTask({2: 1.0, 4: 0.9})

@@ -8,6 +8,7 @@ import json
 import math
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,7 @@ class XGBoostCycleLifeResult:
     best_iteration: int
     evaluation_history: dict[str, dict[str, list[float]]]
     resumed_from_round: int | None = None
+    training_time_seconds: float = 0.0
 
     def predict(self, batch: CycleLifeCurveBatch) -> np.ndarray:
         tabular = curve_batch_to_tabular(batch)
@@ -202,6 +204,7 @@ def train_xgboost_cycle_life(
         best_score: float | None = None
         no_improvement = 0
         history: dict[str, dict[str, list[float]]] = {}
+        prior_training_time = 0.0
     else:
         (
             initial_booster,
@@ -210,6 +213,7 @@ def train_xgboost_cycle_life(
             best_score,
             no_improvement,
             history,
+            prior_training_time,
         ) = recovered
     interval = checkpoint_interval or min(50, max_rounds)
     if interval <= 0:
@@ -225,6 +229,7 @@ def train_xgboost_cycle_life(
         no_improvement=no_improvement,
         history=history,
         log_directory=log_directory or checkpoint_directory.parent,
+        prior_training_time=prior_training_time,
         interrupt_after_round=_interrupt_after_round,
     )
     remaining_rounds = max_rounds - completed_rounds
@@ -236,6 +241,7 @@ def train_xgboost_cycle_life(
             best_iteration=best_iteration,
             evaluation_history=history,
             resumed_from_round=completed_rounds,
+            training_time_seconds=prior_training_time,
         )
     booster = xgb.train(
         {
@@ -261,6 +267,7 @@ def train_xgboost_cycle_life(
         best_iteration=callback.best_iteration,
         evaluation_history=callback.history,
         resumed_from_round=completed_rounds or None,
+        training_time_seconds=callback.training_time_seconds,
     )
 
 
@@ -278,6 +285,7 @@ class _XGBoostRecoveryCallback(xgb.callback.TrainingCallback):
         no_improvement: int,
         history: dict[str, dict[str, list[float]]],
         log_directory: Path,
+        prior_training_time: float,
         interrupt_after_round: int | None,
     ) -> None:
         self.checkpoint_directory = checkpoint_directory
@@ -290,6 +298,9 @@ class _XGBoostRecoveryCallback(xgb.callback.TrainingCallback):
         self.no_improvement = no_improvement
         self.history = history
         self.log_directory = log_directory
+        self.prior_training_time = prior_training_time
+        self.session_started = time.perf_counter()
+        self.training_time_seconds = prior_training_time
         self.interrupt_after_round = interrupt_after_round
         self.completed_rounds = starting_round
         self.last_saved_round = starting_round
@@ -338,6 +349,9 @@ class _XGBoostRecoveryCallback(xgb.callback.TrainingCallback):
         return model
 
     def _save(self, model: xgb.Booster) -> None:
+        self.training_time_seconds = self.prior_training_time + (
+            time.perf_counter() - self.session_started
+        )
         _save_xgboost_checkpoint(
             self.checkpoint_directory,
             context_sha256=self.context_sha256,
@@ -346,6 +360,7 @@ class _XGBoostRecoveryCallback(xgb.callback.TrainingCallback):
             best_score=self.best_score,
             no_improvement=self.no_improvement,
             history=self.history,
+            training_time_seconds=self.training_time_seconds,
             booster=model,
         )
         _write_xgboost_logs(self.log_directory, self.history)
@@ -411,6 +426,7 @@ def _save_xgboost_checkpoint(
     best_score: float | None,
     no_improvement: int,
     history: dict[str, dict[str, list[float]]],
+    training_time_seconds: float,
     booster: xgb.Booster,
 ) -> None:
     name = f"round-{completed_rounds:06d}"
@@ -431,6 +447,7 @@ def _save_xgboost_checkpoint(
             "best_score": best_score,
             "no_improvement": no_improvement,
             "evaluation_history": history,
+            "training_time_seconds": training_time_seconds,
         }
         _write_json(state_path, state)
         manifest_payload = {
@@ -467,6 +484,7 @@ def _load_xgboost_checkpoint(
     float | None,
     int,
     dict[str, dict[str, list[float]]],
+    float,
 ] | None:
     pointer = checkpoint_directory / "last.json"
     if not pointer.exists():
@@ -523,6 +541,14 @@ def _load_xgboost_checkpoint(
     if not isinstance(history_value, dict):
         raise ValueError("XGBoost checkpoint evaluation history is invalid")
     history = _validate_xgboost_history(history_value, completed_rounds)
+    training_time_value = state.get("training_time_seconds")
+    if (
+        not isinstance(training_time_value, (int, float))
+        or isinstance(training_time_value, bool)
+        or not math.isfinite(training_time_value)
+        or training_time_value < 0
+    ):
+        raise ValueError("XGBoost checkpoint training time is invalid")
     booster = xgb.Booster()
     booster.load_model(root / "model.ubj")
     if booster.num_boosted_rounds() != completed_rounds:
@@ -534,6 +560,7 @@ def _load_xgboost_checkpoint(
         None if best_score_value is None else float(best_score_value),
         no_improvement,
         history,
+        float(training_time_value),
     )
 
 

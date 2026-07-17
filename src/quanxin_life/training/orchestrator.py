@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import subprocess
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -174,7 +175,9 @@ def _run_one(
     artifacts = run_directory / "artifacts"
     artifacts.mkdir(exist_ok=True)
     if key.model_name == "dummy":
+        training_started = time.perf_counter()
         dummy_model = fit_dummy_cycle_life(curve_cohorts.train)
+        training_time_seconds = time.perf_counter() - training_started
         predicted = dummy_model.predict(curve_cohorts.test)
         calibration_predicted = dummy_model.predict(curve_cohorts.calibration)
         _write_json_atomic(
@@ -189,9 +192,12 @@ def _run_one(
             calibration_predicted=calibration_predicted,
             split_manifest=split_manifest,
         )
+        metrics["training_time_seconds"] = training_time_seconds
         _write_cycle_plot(run_directory, curve_cohorts.test, predicted, metrics)
     elif key.model_name == "variance":
+        training_started = time.perf_counter()
         variance_model = fit_variance_cycle_life(curve_cohorts.train)
+        training_time_seconds = time.perf_counter() - training_started
         predicted = variance_model.predict(curve_cohorts.test)
         calibration_predicted = variance_model.predict(curve_cohorts.calibration)
         _write_json_atomic(
@@ -209,6 +215,7 @@ def _run_one(
             calibration_predicted=calibration_predicted,
             split_manifest=split_manifest,
         )
+        metrics["training_time_seconds"] = training_time_seconds
         _write_cycle_plot(run_directory, curve_cohorts.test, predicted, metrics)
     elif key.model_name == "xgboost":
         xgboost_model = train_xgboost_cycle_life(
@@ -234,6 +241,7 @@ def _run_one(
                 split_manifest=split_manifest,
             ),
             "best_iteration": xgboost_model.best_iteration,
+            "training_time_seconds": xgboost_model.training_time_seconds,
         }
         _write_cycle_plot(run_directory, curve_cohorts.test, predicted, metrics)
         _write_json_atomic(
@@ -283,6 +291,8 @@ def _run_one(
             "best_epoch": result.best_epoch,
             "last_epoch": result.last_epoch,
             "training_status": result.status.value,
+            "training_time_seconds": result.training_time_seconds,
+            "peak_gpu_memory_bytes": result.peak_gpu_memory_bytes,
         }
         _write_cycle_plot(run_directory, curve_cohorts.test, predicted, metrics)
         _save_safe_tensor_artifact(cpmlp_task.model, artifacts)
@@ -320,6 +330,8 @@ def _run_one(
             "best_epoch": result.best_epoch,
             "last_epoch": result.last_epoch,
             "training_status": result.status.value,
+            "training_time_seconds": result.training_time_seconds,
+            "peak_gpu_memory_bytes": result.peak_gpu_memory_bytes,
             "conformal_status": "NOT_APPLICABLE_TRAJECTORY_TARGET",
         }
         write_hybrid_trajectory_plot(

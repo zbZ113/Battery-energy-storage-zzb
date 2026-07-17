@@ -48,7 +48,7 @@ class TrainingRunStatus(StrEnum):
 class TrainingRunResult(ContractModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str = "training-run-result-v1"
+    schema_version: str = "training-run-result-v2"
     run_id: str = Field(min_length=1)
     context_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     status: TrainingRunStatus
@@ -56,6 +56,8 @@ class TrainingRunResult(ContractModel):
     best_epoch: int | None = Field(default=None, ge=0)
     best_metric: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     resumed_from_epoch: int | None = Field(default=None, ge=0)
+    training_time_seconds: float = Field(ge=0, allow_inf_nan=False)
+    peak_gpu_memory_bytes: int = Field(ge=0)
     finished_at: datetime
 
 
@@ -111,14 +113,22 @@ class TrainingEngine:
         checkpoints = self.run_directory / "checkpoints"
         checkpoints.mkdir(exist_ok=True)
         self.task.model.to(self.device)
-        completed = self._load_terminal_result()
-        if completed is not None:
+        previous = self._load_recorded_result()
+        if previous is not None and previous.status in {
+            TrainingRunStatus.COMPLETED,
+            TrainingRunStatus.EARLY_STOPPED,
+        }:
             pointer_name = "best.json" if (checkpoints / "best.json").is_file() else "last.json"
             self._restore_pointer(checkpoints, pointer_name)
-            return completed.model_copy(update={"status": TrainingRunStatus.SKIPPED_COMPLETED})
+            return previous.model_copy(update={"status": TrainingRunStatus.SKIPPED_COMPLETED})
 
         start_epoch, progress = self._resume(checkpoints)
         resumed_from = progress.epoch if progress.epoch > 0 else None
+        prior_training_time = 0.0 if previous is None else previous.training_time_seconds
+        prior_peak_memory = 0 if previous is None else previous.peak_gpu_memory_bytes
+        if self.device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(self.device)
+        session_started = time.perf_counter()
         logger = _RunLogger(self.run_directory, self.context)
         signal_flag = _SignalFlag()
         signal_flag.install()
@@ -201,6 +211,14 @@ class TrainingEngine:
             best_epoch=progress.best_epoch,
             best_metric=progress.best_metric,
             resumed_from_epoch=resumed_from,
+            training_time_seconds=prior_training_time
+            + (time.perf_counter() - session_started),
+            peak_gpu_memory_bytes=max(
+                prior_peak_memory,
+                int(torch.cuda.max_memory_reserved(self.device))
+                if self.device.type == "cuda"
+                else 0,
+            ),
             finished_at=datetime.now(UTC),
         )
         _write_json_atomic(
@@ -212,7 +230,7 @@ class TrainingEngine:
             self._restore_pointer(checkpoints, pointer_name)
         return result
 
-    def _load_terminal_result(self) -> TrainingRunResult | None:
+    def _load_recorded_result(self) -> TrainingRunResult | None:
         path = self.run_directory / "run_status.json"
         if not path.is_file() or path.is_symlink():
             return None
@@ -222,12 +240,7 @@ class TrainingEngine:
             or result.context_sha256 != self._context_sha256()
         ):
             raise ValueError("completed training result does not match the requested run")
-        if result.status in {
-            TrainingRunStatus.COMPLETED,
-            TrainingRunStatus.EARLY_STOPPED,
-        }:
-            return result
-        return None
+        return result
 
     def _context_sha256(self) -> str:
         return sha256_canonical(self.context.model_dump(mode="json"))

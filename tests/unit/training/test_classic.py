@@ -106,6 +106,7 @@ def test_xgboost_resumes_hash_bound_ubj_checkpoint(tmp_path: Path) -> None:
     )
 
     assert resumed.resumed_from_round == 4
+    assert resumed.training_time_seconds > 0
     assert np.allclose(resumed.predict(test), continuous.predict(test), atol=1e-6)
     assert (tmp_path / "training_log.jsonl").is_file()
     assert (tmp_path / "metrics_epoch.csv").is_file()
