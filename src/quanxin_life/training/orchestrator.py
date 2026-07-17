@@ -144,7 +144,11 @@ def execute_matr_suite(
                 metrics=metrics,
                 required=config.mode == "final",
             )
-    aggregate = _aggregate(all_metrics, mode=config.mode)
+    aggregate = _aggregate(
+        all_metrics,
+        mode=config.mode,
+        expected_seeds=config.suite.seeds,
+    )
     _write_json_atomic(run_root / "aggregate_metrics.json", aggregate)
     _write_metrics_csv(run_root / "metrics_test.csv", all_metrics)
     return aggregate
@@ -453,32 +457,86 @@ def _save_safe_tensor_artifact(model: torch.nn.Module, artifact_directory: Path)
     )
 
 
-def _aggregate(metrics: list[dict[str, Any]], *, mode: str) -> dict[str, Any]:
-    groups: dict[tuple[str, int, str], list[float]] = {}
+def _aggregate(
+    metrics: list[dict[str, Any]],
+    *,
+    mode: str,
+    expected_seeds: tuple[int, ...],
+) -> dict[str, Any]:
+    metric_names = (
+        "mae",
+        "rmse",
+        "mape",
+        "r2",
+        "picp",
+        "mpiw_cycle",
+        "monotonic_violation_rate",
+        "best_epoch",
+        "last_epoch",
+        "best_iteration",
+        "training_time_seconds",
+        "peak_gpu_memory_bytes",
+    )
+    groups: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
     failures: list[dict[str, Any]] = []
     for row in metrics:
-        metric_name = "mae"
-        value = row.get(metric_name)
-        if isinstance(value, (int, float)) and np.isfinite(value):
+        value = row.get("mae")
+        seed = row.get("seed")
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and np.isfinite(value)
+            and isinstance(seed, int)
+            and not isinstance(seed, bool)
+        ):
             key = (str(row["model"]), int(row["cutoff_cycle"]), str(row["target"]))
-            groups.setdefault(key, []).append(float(value))
+            groups.setdefault(key, []).append(row)
         else:
             failures.append(row)
-    summaries = [
-        {
-            "model": key[0],
-            "cutoff_cycle": key[1],
-            "target": key[2],
-            "run_count": len(values),
-            "mae_mean": float(np.mean(values)),
-            "mae_std": float(np.std(values, ddof=1)) if len(values) > 1 else 0.0,
-        }
-        for key, values in sorted(groups.items())
-    ]
+    summaries: list[dict[str, Any]] = []
+    expected_seed_set = set(expected_seeds)
+    for key, rows in sorted(groups.items()):
+        seeds = sorted(int(row["seed"]) for row in rows)
+        if len(seeds) != len(set(seeds)):
+            failures.extend(rows)
+            continue
+        aggregated: dict[str, dict[str, float | int]] = {}
+        for metric_name in metric_names:
+            values = [
+                float(row[metric_name])
+                for row in rows
+                if isinstance(row.get(metric_name), (int, float))
+                and not isinstance(row.get(metric_name), bool)
+                and np.isfinite(row[metric_name])
+            ]
+            if values:
+                aggregated[metric_name] = {
+                    "count": len(values),
+                    "mean": float(np.mean(values)),
+                    "std": float(np.std(values, ddof=1)) if len(values) > 1 else 0.0,
+                }
+        mae = aggregated["mae"]
+        summaries.append(
+            {
+                "model": key[0],
+                "cutoff_cycle": key[1],
+                "target": key[2],
+                "run_count": len(rows),
+                "seeds": seeds,
+                "complete_seed_matrix": set(seeds) == expected_seed_set,
+                "metrics": aggregated,
+                "mae_mean": mae["mean"],
+                "mae_std": mae["std"],
+            }
+        )
+    complete = bool(summaries) and all(
+        bool(summary["complete_seed_matrix"]) for summary in summaries
+    )
     return {
         "schema_version": "matr-aggregate-metrics-v1",
         "mode": mode,
-        "formal_performance_claim": mode == "final",
+        "formal_performance_claim": mode == "final" and complete and not failures,
+        "expected_seed_count": len(expected_seeds),
         "run_count": len(metrics),
         "summaries": summaries,
         "failed_metric_rows": failures,
