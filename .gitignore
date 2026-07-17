@@ -30,6 +30,7 @@ data/NAUMANN_CYCLE/
 data/NAUMANN_CALENDAR/
 artifacts/
 /models/
+/runs/
 reports/generated/
 *.log
 .DS_Store

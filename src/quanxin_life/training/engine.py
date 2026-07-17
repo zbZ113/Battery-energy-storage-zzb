@@ -65,9 +65,14 @@ Scheduler = (
 
 
 class TrainingTask(Protocol):
-    model: torch.nn.Module
-    optimizer: torch.optim.Optimizer
-    scheduler: Scheduler | None
+    @property
+    def model(self) -> torch.nn.Module: ...
+
+    @property
+    def optimizer(self) -> torch.optim.Optimizer: ...
+
+    @property
+    def scheduler(self) -> Scheduler | None: ...
 
     def train_epoch(self, epoch: int, *, device: torch.device) -> EpochMetrics: ...
 

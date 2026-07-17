@@ -62,6 +62,12 @@ from quanxin_life.training.preflight import (
     build_training_preflight,
     collect_local_training_preflight,
 )
+from quanxin_life.training.suite import (
+    MatrRunConfig,
+    MatrTrainingPaths,
+    TrainingRunKey,
+    build_run_matrix,
+)
 from quanxin_life.training.tasks import (
     CPMLPTrainingTask,
     CycleLifeCurveBatch,
@@ -85,6 +91,8 @@ __all__ = [
     "LoggingPolicy",
     "MatrCurveCohorts",
     "MatrHybridCohorts",
+    "MatrRunConfig",
+    "MatrTrainingPaths",
     "ModelTrainingConfig",
     "PackageSnapshot",
     "PhysicalGpuSnapshot",
@@ -95,12 +103,14 @@ __all__ = [
     "TrainingOutputIndex",
     "TrainingPreflightReport",
     "TrainingProgress",
+    "TrainingRunKey",
     "TrainingRunResult",
     "TrainingRunStatus",
     "TrainingSuiteConfig",
     "VarianceCycleLifeModel",
     "VisibleCudaSnapshot",
     "XGBoostCycleLifeResult",
+    "build_run_matrix",
     "build_training_bundle_manifest",
     "build_training_output_index",
     "build_training_preflight",
