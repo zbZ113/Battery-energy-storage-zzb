@@ -19,6 +19,8 @@ data/interim/
 data/processed/
 # Local raw MATR payload; provenance is tracked by the reviewed manifest below.
 /data/2018-04-12_batchdata_updated_struct_errorcorrect.mat
+/data/2017-05-12_batchdata_updated_struct_errorcorrect.mat
+/data/2017-06-30_batchdata_updated_struct_errorcorrect.mat
 # Downloaded HUST pickle archives are raw, untrusted input.  They must never
 # be deserialized or committed; adapters may only audit their manifest/hash.
 data/HUST/

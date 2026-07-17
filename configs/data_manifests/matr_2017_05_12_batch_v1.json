@@ -1,0 +1,10 @@
+{
+  "dataset_id": "MATR",
+  "relative_path": "2017-05-12_batchdata_updated_struct_errorcorrect.mat",
+  "sha256": "9d928ab978f0e3c70b31cb833a749fedd35094d01af76475d69b40aa3497f5ba",
+  "source_uri": "https://data.matr.io/1/projects/5c48dd2bc625d700019f3204",
+  "license_name": "must_verify_before_download",
+  "license_uri": null,
+  "paper_doi": "https://doi.org/10.1038/s41560-019-0356-8",
+  "downloaded_at": "2026-07-17T08:37:21Z"
+}
