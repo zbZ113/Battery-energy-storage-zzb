@@ -11,11 +11,18 @@ import pytest
 from quanxin_life.training.a100_package import (
     build_matr_a100_archive,
     build_matr_a100_archive_index,
+    filter_a100_source_paths,
     verify_matr_a100_archive,
     verify_matr_a100_archive_index,
 )
 
 RAW_NAME = "2018-04-12_batchdata_updated_struct_errorcorrect.mat"
+
+
+def test_source_inventory_excludes_env_templates_without_hiding_dangerous_models() -> None:
+    assert filter_a100_source_paths(
+        ("src/train.py", ".env.example", "frontend/.env.local", "models/unsafe.pth")
+    ) == ("src/train.py", "models/unsafe.pth")
 
 
 def _write_matlab_v73(path: Path, payload: bytes = b"approved-matr") -> str:

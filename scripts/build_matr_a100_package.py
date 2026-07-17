@@ -18,6 +18,7 @@ if str(SRC_ROOT) not in sys.path:
 from quanxin_life.training.a100_package import (  # noqa: E402
     build_matr_a100_archive,
     build_matr_a100_archive_index,
+    filter_a100_source_paths,
     verify_matr_a100_archive,
     verify_matr_a100_archive_index,
 )
@@ -29,7 +30,7 @@ def main() -> int:
     parser.add_argument("--output-index", type=Path)
     args = parser.parse_args()
     _require_clean_git(REPO_ROOT)
-    tracked = _tracked_files(REPO_ROOT)
+    tracked = filter_a100_source_paths(_tracked_files(REPO_ROOT))
     source_commit = _git_output(REPO_ROOT, ["git", "rev-parse", "HEAD"])
     output = args.output_archive.resolve(strict=False)
     index_path = (

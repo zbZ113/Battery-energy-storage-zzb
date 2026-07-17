@@ -97,6 +97,19 @@ class MatrA100ArchiveIndex(ContractModel):
         return value
 
 
+def filter_a100_source_paths(tracked_files: tuple[str, ...]) -> tuple[str, ...]:
+    """Exclude environment templates while preserving dangerous files for rejection."""
+
+    approved: list[str] = []
+    for relative in tracked_files:
+        normalized = _safe_relative_path(relative)
+        lowered = tuple(part.lower() for part in PurePosixPath(normalized).parts)
+        if any(part.startswith(".env") for part in lowered):
+            continue
+        approved.append(normalized)
+    return tuple(approved)
+
+
 def build_matr_a100_archive(
     *,
     project_root: Path,
