@@ -19,6 +19,12 @@ from quanxin_life.training.config import (
     ModelTrainingConfig,
     TrainingSuiteConfig,
 )
+from quanxin_life.training.engine import (
+    EpochMetrics,
+    TrainingEngine,
+    TrainingRunResult,
+    TrainingRunStatus,
+)
 from quanxin_life.training.outputs import (
     A100TrainingRunManifest,
     TrainingOutputIndex,
@@ -39,6 +45,7 @@ __all__ = [
     "A100TrainingRunManifest",
     "CheckpointContext",
     "CheckpointPolicy",
+    "EpochMetrics",
     "GpuDevice",
     "HardwareSnapshot",
     "LoggingPolicy",
@@ -47,9 +54,12 @@ __all__ = [
     "TrainingBundleFile",
     "TrainingBundleManifest",
     "TrainingCheckpointManifest",
+    "TrainingEngine",
     "TrainingOutputIndex",
     "TrainingPreflightReport",
     "TrainingProgress",
+    "TrainingRunResult",
+    "TrainingRunStatus",
     "TrainingSuiteConfig",
     "build_training_bundle_manifest",
     "build_training_output_index",
