@@ -44,6 +44,7 @@ from quanxin_life.training.plots import (
     write_cycle_life_evaluation_plot,
     write_hybrid_trajectory_plot,
 )
+from quanxin_life.training.reports import write_matr_experiment_reports
 from quanxin_life.training.suite import MatrRunConfig, TrainingRunKey, build_run_matrix
 from quanxin_life.training.tasks import (
     CPMLPTrainingTask,
@@ -152,6 +153,7 @@ def execute_matr_suite(
     )
     _write_json_atomic(run_root / "aggregate_metrics.json", aggregate)
     _write_metrics_csv(run_root / "metrics_test.csv", all_metrics)
+    write_matr_experiment_reports(run_root, aggregate)
     return aggregate
 
 
@@ -650,8 +652,11 @@ def _load_completed_run(
     if manifest_path.is_symlink() or not manifest_path.is_file():
         raise ValueError("completed run manifest must be a regular file")
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or payload.get("schema_version") != "completed-run-v1":
+    if not isinstance(payload, dict) or payload.get("schema_version") != "completed-run-v2":
         raise ValueError("completed run manifest schema is invalid")
+    expected_provenance = _completed_run_provenance(context)
+    if any(payload.get(key) != value for key, value in expected_provenance.items()):
+        raise ValueError("completed run explicit context does not match the requested task")
     expected_context = sha256_canonical(context.model_dump(mode="json"))
     if payload.get("context_sha256") != expected_context:
         raise ValueError("completed run context does not match the requested task")
@@ -709,12 +714,30 @@ def _write_completed_run_manifest(
     _write_json_atomic(
         run_directory / "run_manifest.json",
         {
-            "schema_version": "completed-run-v1",
+            "schema_version": "completed-run-v2",
+            **_completed_run_provenance(context),
             "context_sha256": sha256_canonical(context.model_dump(mode="json")),
             "files": files,
-            "created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "completed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         },
     )
+
+
+def _completed_run_provenance(context: CheckpointContext) -> dict[str, Any]:
+    return {
+        "run_id": context.run_id,
+        "dataset_id": context.dataset_id,
+        "target": context.target.value,
+        "model_name": context.model_name,
+        "cutoff_cycle": context.cutoff_cycle,
+        "seed": context.seed,
+        "config_sha256": context.config_sha256,
+        "input_bundle_sha256": context.input_bundle_sha256,
+        "source_commit": context.source_commit,
+        "data_version": context.data_version,
+        "split_version": context.split_version,
+        "feature_version": context.feature_version,
+    }
 
 
 def _inside(root: Path, relative: str, *, must_exist: bool = True) -> Path:
