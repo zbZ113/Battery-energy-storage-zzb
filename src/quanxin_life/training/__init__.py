@@ -40,14 +40,24 @@ from quanxin_life.training.preflight import (
     build_training_preflight,
     collect_local_training_preflight,
 )
+from quanxin_life.training.tasks import (
+    CPMLPTrainingTask,
+    CycleLifeCurveBatch,
+    HybridTrajectoryBatch,
+    HybridTrajectoryTrainingTask,
+)
 
 __all__ = [
     "A100TrainingRunManifest",
+    "CPMLPTrainingTask",
     "CheckpointContext",
     "CheckpointPolicy",
+    "CycleLifeCurveBatch",
     "EpochMetrics",
     "GpuDevice",
     "HardwareSnapshot",
+    "HybridTrajectoryBatch",
+    "HybridTrajectoryTrainingTask",
     "LoggingPolicy",
     "ModelTrainingConfig",
     "PackageSnapshot",

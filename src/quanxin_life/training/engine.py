@@ -100,6 +100,7 @@ class TrainingEngine:
         self.run_directory.mkdir(parents=True, exist_ok=True)
         checkpoints = self.run_directory / "checkpoints"
         checkpoints.mkdir(exist_ok=True)
+        self.task.model.to(self.device)
         completed = self._load_terminal_result()
         if completed is not None:
             return completed.model_copy(update={"status": TrainingRunStatus.SKIPPED_COMPLETED})
