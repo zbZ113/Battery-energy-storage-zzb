@@ -1,7 +1,10 @@
 import pytest
 
-from quanxin_life.core import LifePrediction
-from quanxin_life.models.metrics import evaluate_eol80_predictions
+from quanxin_life.core import CycleLifePrediction, LifePrediction, PredictionTarget
+from quanxin_life.models.metrics import (
+    evaluate_cycle_life_predictions,
+    evaluate_eol80_predictions,
+)
 
 
 def _prediction(
@@ -112,3 +115,59 @@ def test_returns_undefined_r2_warning_for_constant_observed_labels() -> None:
 def test_rejects_empty_evaluation_cohort() -> None:
     with pytest.raises(ValueError, match="at least one"):
         evaluate_eol80_predictions([])
+
+
+def test_evaluates_matr_official_cycle_life_without_relabelling_target() -> None:
+    predictions = [
+        CycleLifePrediction(
+            dataset_id="MATR",
+            cell_id=cell_id,
+            cutoff_cycle=20,
+            target=PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE,
+            predicted_cycle=predicted,
+            observed_cycle=observed,
+            right_censored=False,
+            feature_version="early-v1",
+            split_version="split-v1",
+            model_version="cpmlp-official-v1",
+            data_version="matr-v1",
+        )
+        for cell_id, predicted, observed in (
+            ("cell-a", 100.0, 110),
+            ("cell-b", 230.0, 220),
+        )
+    ]
+
+    metrics = evaluate_cycle_life_predictions(predictions)
+
+    assert metrics.target is PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE
+    assert metrics.mae_cycle == pytest.approx(10.0)
+
+
+def test_generic_cycle_life_metrics_reject_mixed_targets() -> None:
+    common = {
+        "dataset_id": "MATR",
+        "cutoff_cycle": 20,
+        "predicted_cycle": 100.0,
+        "observed_cycle": 110,
+        "right_censored": False,
+        "feature_version": "early-v1",
+        "split_version": "split-v1",
+        "model_version": "model-v1",
+        "data_version": "matr-v1",
+    }
+    predictions = [
+        CycleLifePrediction(
+            **common,
+            cell_id="cell-a",
+            target=PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE,
+        ),
+        CycleLifePrediction(
+            **common,
+            cell_id="cell-b",
+            target=PredictionTarget.UNIFIED_EOL80_CYCLE,
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="target"):
+        evaluate_cycle_life_predictions(predictions)

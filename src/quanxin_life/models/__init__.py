@@ -3,7 +3,10 @@
 from typing import TYPE_CHECKING
 
 from quanxin_life.models.dummy import DummyLifePredictor
-from quanxin_life.models.metrics import evaluate_eol80_predictions
+from quanxin_life.models.metrics import (
+    evaluate_cycle_life_predictions,
+    evaluate_eol80_predictions,
+)
 
 if TYPE_CHECKING:
     from quanxin_life.models.cpmlp import CPMLPLifePredictor
@@ -17,6 +20,7 @@ __all__ = [
     "HybridDegradationPredictor",
     "VarianceLifePredictor",
     "XGBoostLifePredictor",
+    "evaluate_cycle_life_predictions",
     "evaluate_eol80_predictions",
 ]
 

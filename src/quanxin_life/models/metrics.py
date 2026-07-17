@@ -6,7 +6,12 @@ import math
 from collections.abc import Sequence
 from statistics import fmean
 
-from quanxin_life.core import LifePrediction, LifetimeMetrics, PredictionTarget
+from quanxin_life.core import (
+    CycleLifePrediction,
+    LifePrediction,
+    LifetimeMetrics,
+    PredictionTarget,
+)
 
 _CONTEXT_FIELDS = (
     "dataset_id",
@@ -16,6 +21,40 @@ _CONTEXT_FIELDS = (
     "model_version",
     "data_version",
 )
+
+
+def evaluate_cycle_life_predictions(
+    predictions: Sequence[CycleLifePrediction],
+) -> LifetimeMetrics:
+    """Evaluate one homogeneous, explicitly named cycle-life target cohort."""
+
+    cohort = tuple(predictions)
+    if not cohort:
+        raise ValueError("at least one cell-level prediction is required for evaluation")
+    reference = cohort[0]
+    seen_cell_ids: set[str] = set()
+    observed: list[int] = []
+    predicted: list[float] = []
+    for prediction in cohort:
+        if prediction.cell_id in seen_cell_ids:
+            raise ValueError(f"duplicate cell_id in evaluation cohort: {prediction.cell_id}")
+        seen_cell_ids.add(prediction.cell_id)
+        for field in (*_CONTEXT_FIELDS, "target"):
+            if getattr(prediction, field) != getattr(reference, field):
+                raise ValueError(f"evaluation predictions must share {field}")
+        if prediction.right_censored or prediction.observed_cycle is None:
+            raise ValueError("right-censored predictions cannot be evaluated")
+        if prediction.observed_cycle == 0:
+            raise ValueError("observed cycle must be positive for MAPE evaluation")
+        observed.append(prediction.observed_cycle)
+        predicted.append(prediction.predicted_cycle)
+
+    return _regression_metrics(
+        target=reference.target,
+        observed=observed,
+        predicted=predicted,
+        constant_warning="R2_UNDEFINED_CONSTANT_OBSERVED_CYCLE_LIFE",
+    )
 
 
 def evaluate_eol80_predictions(predictions: Sequence[LifePrediction]) -> LifetimeMetrics:
@@ -42,20 +81,37 @@ def evaluate_eol80_predictions(predictions: Sequence[LifePrediction]) -> Lifetim
 
     observed = [_require_observed_eol80(prediction) for prediction in cohort]
     predicted = [prediction.predicted_eol_cycle for prediction in cohort]
+    return _regression_metrics(
+        target=PredictionTarget.EOL80_CYCLE,
+        observed=observed,
+        predicted=predicted,
+        constant_warning="R2_UNDEFINED_CONSTANT_OBSERVED_EOL80",
+    )
+
+
+def _regression_metrics(
+    *,
+    target: PredictionTarget,
+    observed: Sequence[int],
+    predicted: Sequence[float],
+    constant_warning: str,
+) -> LifetimeMetrics:
     errors = [estimate - actual for estimate, actual in zip(predicted, observed, strict=True)]
     absolute_errors = [abs(error) for error in errors]
-
     mae = fmean(absolute_errors)
     rmse = math.sqrt(fmean(error * error for error in errors))
     mape = 100.0 * fmean(
         absolute_error / actual
         for absolute_error, actual in zip(absolute_errors, observed, strict=True)
     )
-    r2, warnings = _calculate_r2(observed=observed, errors=errors)
-
+    r2, warnings = _calculate_r2(
+        observed=observed,
+        errors=errors,
+        constant_warning=constant_warning,
+    )
     return LifetimeMetrics(
-        target=PredictionTarget.EOL80_CYCLE,
-        evaluated_cell_count=len(cohort),
+        target=target,
+        evaluated_cell_count=len(observed),
         mae_cycle=mae,
         rmse_cycle=rmse,
         mape_percent=mape,
@@ -84,12 +140,15 @@ def _require_observed_eol80(prediction: LifePrediction) -> int:
 
 
 def _calculate_r2(
-    *, observed: Sequence[int], errors: Sequence[float]
+    *,
+    observed: Sequence[int],
+    errors: Sequence[float],
+    constant_warning: str,
 ) -> tuple[float | None, list[str]]:
     observed_mean = fmean(observed)
     total_sum_of_squares = sum((actual - observed_mean) ** 2 for actual in observed)
     if total_sum_of_squares == 0:
-        return None, ["R2_UNDEFINED_CONSTANT_OBSERVED_EOL80"]
+        return None, [constant_warning]
 
     residual_sum_of_squares = sum(error * error for error in errors)
     return 1.0 - residual_sum_of_squares / total_sum_of_squares, []
