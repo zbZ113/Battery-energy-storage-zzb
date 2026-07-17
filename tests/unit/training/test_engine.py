@@ -146,6 +146,10 @@ def test_engine_resumes_last_checkpoint_and_completed_run_is_skipped(
     ).run()
     assert skipped.status is TrainingRunStatus.SKIPPED_COMPLETED
     assert skipped_task.trained_epochs == []
+    for expected, actual in zip(
+        resumed_task.model.parameters(), skipped_task.model.parameters(), strict=True
+    ):
+        assert torch.equal(expected, actual)
 
 
 def test_completed_run_cannot_be_reused_with_another_context(tmp_path: Path) -> None:

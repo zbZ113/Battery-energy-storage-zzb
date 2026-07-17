@@ -103,6 +103,8 @@ class TrainingEngine:
         self.task.model.to(self.device)
         completed = self._load_terminal_result()
         if completed is not None:
+            pointer_name = "best.json" if (checkpoints / "best.json").is_file() else "last.json"
+            self._restore_pointer(checkpoints, pointer_name)
             return completed.model_copy(update={"status": TrainingRunStatus.SKIPPED_COMPLETED})
 
         start_epoch, progress = self._resume(checkpoints)
@@ -189,6 +191,9 @@ class TrainingEngine:
             self.run_directory / "run_status.json",
             result.model_dump(mode="json"),
         )
+        if status in {TrainingRunStatus.COMPLETED, TrainingRunStatus.EARLY_STOPPED}:
+            pointer_name = "best.json" if (checkpoints / "best.json").is_file() else "last.json"
+            self._restore_pointer(checkpoints, pointer_name)
         return result
 
     def _load_terminal_result(self) -> TrainingRunResult | None:
@@ -215,12 +220,16 @@ class TrainingEngine:
         pointer = checkpoints / "last.json"
         if not pointer.exists():
             return 1, TrainingProgress(epoch=0, global_step=0)
-        checkpoint_name = _read_pointer(pointer)
+        progress = self._restore_pointer(checkpoints, "last.json")
+        return progress.epoch + 1, progress
+
+    def _restore_pointer(self, checkpoints: Path, pointer_name: str) -> TrainingProgress:
+        checkpoint_name = _read_pointer(checkpoints / pointer_name)
         checkpoint_root = checkpoints / checkpoint_name
         manifest = TrainingCheckpointManifest.model_validate(
             _read_json(checkpoint_root / "manifest.json")
         )
-        progress = load_training_checkpoint(
+        return load_training_checkpoint(
             checkpoint_root,
             manifest,
             expected_context=self.context,
@@ -228,7 +237,6 @@ class TrainingEngine:
             optimizer=self.task.optimizer,
             scheduler=self.task.scheduler,
         )
-        return progress.epoch + 1, progress
 
     def _save_checkpoint(self, checkpoints: Path, progress: TrainingProgress) -> str:
         name = f"epoch-{progress.epoch:06d}"
