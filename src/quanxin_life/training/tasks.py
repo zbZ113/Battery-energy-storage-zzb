@@ -224,10 +224,27 @@ class HybridTrajectoryTrainingTask:
 
     def validate(self, epoch: int, *, device: torch.device) -> EpochMetrics:
         del epoch
+        return self.evaluate(self.validation_batch, device=device)
+
+    def predict(
+        self,
+        batch: HybridTrajectoryBatch,
+        *,
+        device: torch.device,
+    ) -> Tensor:
+        _validate_trajectory_cohorts(self.train_batch, batch)
         self.model.eval()
         with torch.no_grad():
-            predicted = self._predict(self.validation_batch, device=device)
-        target = self.validation_batch.target_soh.to(device)
+            return self._predict(batch, device=device)
+
+    def evaluate(
+        self,
+        batch: HybridTrajectoryBatch,
+        *,
+        device: torch.device,
+    ) -> EpochMetrics:
+        predicted = self.predict(batch, device=device)
+        target = batch.target_soh.to(device)
         errors = predicted - target
         mae = float(errors.abs().mean().cpu())
         rmse = float(errors.square().mean().sqrt().cpu())

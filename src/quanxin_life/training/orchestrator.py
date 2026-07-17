@@ -39,6 +39,10 @@ from quanxin_life.training.matr_data import (
     load_matr_cycle_life_curve_cohorts,
     load_matr_hybrid_trajectory_cohorts,
 )
+from quanxin_life.training.plots import (
+    write_cycle_life_evaluation_plot,
+    write_hybrid_trajectory_plot,
+)
 from quanxin_life.training.suite import MatrRunConfig, TrainingRunKey, build_run_matrix
 from quanxin_life.training.tasks import (
     CPMLPTrainingTask,
@@ -181,6 +185,7 @@ def _run_one(
             calibration_predicted=calibration_predicted,
             split_manifest=split_manifest,
         )
+        _write_cycle_plot(run_directory, curve_cohorts.test, predicted, metrics)
     elif key.model_name == "variance":
         variance_model = fit_variance_cycle_life(curve_cohorts.train)
         predicted = variance_model.predict(curve_cohorts.test)
@@ -200,6 +205,7 @@ def _run_one(
             calibration_predicted=calibration_predicted,
             split_manifest=split_manifest,
         )
+        _write_cycle_plot(run_directory, curve_cohorts.test, predicted, metrics)
     elif key.model_name == "xgboost":
         xgboost_model = train_xgboost_cycle_life(
             train_batch=curve_cohorts.train,
@@ -225,6 +231,7 @@ def _run_one(
             ),
             "best_iteration": xgboost_model.best_iteration,
         }
+        _write_cycle_plot(run_directory, curve_cohorts.test, predicted, metrics)
         _write_json_atomic(
             run_directory / "training_log.json",
             {"evaluation_history": xgboost_model.evaluation_history},
@@ -273,6 +280,7 @@ def _run_one(
             "last_epoch": result.last_epoch,
             "training_status": result.status.value,
         }
+        _write_cycle_plot(run_directory, curve_cohorts.test, predicted, metrics)
         _save_safe_tensor_artifact(cpmlp_task.model, artifacts)
     elif key.model_name == "hybrid":
         hybrid_task = HybridTrajectoryTrainingTask(
@@ -290,9 +298,13 @@ def _run_one(
             device=device,
             keep_recent_checkpoints=3,
         ).run()
-        test_metrics = hybrid_task.validate(
-            result.best_epoch or result.last_epoch,
-            device=device,
+        test_metrics = hybrid_task.evaluate(hybrid_cohorts.test, device=device)
+        test_prediction = (
+            hybrid_task.predict(hybrid_cohorts.test, device=device)
+            .detach()
+            .cpu()
+            .numpy()
+            .astype(np.float64)
         )
         metrics = {
             "dataset_id": "MATR",
@@ -306,6 +318,11 @@ def _run_one(
             "training_status": result.status.value,
             "conformal_status": "NOT_APPLICABLE_TRAJECTORY_TARGET",
         }
+        write_hybrid_trajectory_plot(
+            run_directory / "plots" / "soh_trajectory.png",
+            batch=hybrid_cohorts.test,
+            predicted=test_prediction,
+        )
         _save_safe_tensor_artifact(hybrid_task.model, artifacts)
     else:  # pragma: no cover - configuration model rejects this branch
         raise ValueError(f"unsupported MATR model: {key.model_name}")
@@ -394,6 +411,23 @@ def _cycle_predictions(
             strict=True,
         )
     ]
+
+
+def _write_cycle_plot(
+    run_directory: Path,
+    batch: CycleLifeCurveBatch,
+    predicted: np.ndarray,
+    metrics: dict[str, Any],
+) -> None:
+    radius = metrics.get("conformal_residual_quantile_cycle")
+    if not isinstance(radius, (int, float)) or isinstance(radius, bool):
+        raise ValueError("cycle-life plot requires a conformal residual radius")
+    write_cycle_life_evaluation_plot(
+        run_directory / "plots" / "predicted_vs_observed.png",
+        batch=batch,
+        predicted=predicted,
+        interval_radius_cycle=float(radius),
+    )
 
 
 def _save_safe_tensor_artifact(model: torch.nn.Module, artifact_directory: Path) -> None:

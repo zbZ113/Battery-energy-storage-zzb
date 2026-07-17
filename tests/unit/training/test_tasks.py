@@ -106,7 +106,12 @@ def test_hybrid_task_uses_real_trajectory_validation_metrics() -> None:
 
     trained = task.train_epoch(1, device=torch.device("cpu"))
     validated = task.validate(1, device=torch.device("cpu"))
+    test_batch = _trajectory_batch(("test-a", "test-b"))
+    tested = task.evaluate(test_batch, device=torch.device("cpu"))
+    predicted = task.predict(test_batch, device=torch.device("cpu"))
 
     assert trained.loss >= 0
     assert set(validated.metrics) == {"mae", "monotonic_violation_rate", "rmse"}
     assert validated.metrics["monotonic_violation_rate"] == 0.0
+    assert tested.metrics["mae"] >= 0
+    assert predicted.shape == test_batch.target_soh.shape
