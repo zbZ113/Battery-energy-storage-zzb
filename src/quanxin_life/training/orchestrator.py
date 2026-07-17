@@ -45,6 +45,11 @@ from quanxin_life.training.tasks import (
     CycleLifeCurveBatch,
     HybridTrajectoryTrainingTask,
 )
+from quanxin_life.uncertainty import (
+    calibrate_cycle_life_conformal,
+    evaluate_cycle_life_interval_coverage,
+    make_cycle_life_interval,
+)
 
 
 def execute_matr_suite(
@@ -126,6 +131,7 @@ def execute_matr_suite(
                 run_directory=run_directory,
                 device=device,
                 xgboost_early_stopping_rounds=config.xgboost_early_stopping_rounds,
+                split_manifest=split,
             )
             all_metrics.append(metrics)
             _log_mlflow(
@@ -150,6 +156,7 @@ def _run_one(
     run_directory: Path,
     device: torch.device,
     xgboost_early_stopping_rounds: int,
+    split_manifest: SplitManifest,
 ) -> dict[str, Any]:
     cached = _load_completed_run(run_directory, context)
     if cached is not None:
@@ -161,14 +168,23 @@ def _run_one(
     if key.model_name == "dummy":
         dummy_model = fit_dummy_cycle_life(curve_cohorts.train)
         predicted = dummy_model.predict(curve_cohorts.test)
+        calibration_predicted = dummy_model.predict(curve_cohorts.calibration)
         _write_json_atomic(
             artifacts / "dummy.json",
             {"predicted_cycle": dummy_model.predicted_cycle},
         )
-        metrics = _cycle_metrics(curve_cohorts.test, predicted, context)
+        metrics = _cycle_metrics(
+            curve_cohorts.test,
+            predicted,
+            context,
+            calibration_batch=curve_cohorts.calibration,
+            calibration_predicted=calibration_predicted,
+            split_manifest=split_manifest,
+        )
     elif key.model_name == "variance":
         variance_model = fit_variance_cycle_life(curve_cohorts.train)
         predicted = variance_model.predict(curve_cohorts.test)
+        calibration_predicted = variance_model.predict(curve_cohorts.calibration)
         _write_json_atomic(
             artifacts / "variance.json",
             {
@@ -176,7 +192,14 @@ def _run_one(
                 "coefficient": variance_model.coefficient,
             },
         )
-        metrics = _cycle_metrics(curve_cohorts.test, predicted, context)
+        metrics = _cycle_metrics(
+            curve_cohorts.test,
+            predicted,
+            context,
+            calibration_batch=curve_cohorts.calibration,
+            calibration_predicted=calibration_predicted,
+            split_manifest=split_manifest,
+        )
     elif key.model_name == "xgboost":
         xgboost_model = train_xgboost_cycle_life(
             train_batch=curve_cohorts.train,
@@ -190,8 +213,16 @@ def _run_one(
         )
         xgboost_model.save_model(artifacts / "model.ubj")
         predicted = xgboost_model.predict(curve_cohorts.test)
+        calibration_predicted = xgboost_model.predict(curve_cohorts.calibration)
         metrics = {
-            **_cycle_metrics(curve_cohorts.test, predicted, context),
+            **_cycle_metrics(
+                curve_cohorts.test,
+                predicted,
+                context,
+                calibration_batch=curve_cohorts.calibration,
+                calibration_predicted=calibration_predicted,
+                split_manifest=split_manifest,
+            ),
             "best_iteration": xgboost_model.best_iteration,
         }
         _write_json_atomic(
@@ -221,9 +252,23 @@ def _run_one(
                 curve_cohorts.test.curve_values.to(device),
                 curve_cohorts.test.observed_mask.to(device),
             )
+            calibration_tensor = cpmlp_task.model(
+                curve_cohorts.calibration.curve_values.to(device),
+                curve_cohorts.calibration.observed_mask.to(device),
+            )
         predicted = predicted_tensor.detach().cpu().numpy().astype(np.float64)
+        calibration_predicted = (
+            calibration_tensor.detach().cpu().numpy().astype(np.float64)
+        )
         metrics = {
-            **_cycle_metrics(curve_cohorts.test, predicted, context),
+            **_cycle_metrics(
+                curve_cohorts.test,
+                predicted,
+                context,
+                calibration_batch=curve_cohorts.calibration,
+                calibration_predicted=calibration_predicted,
+                split_manifest=split_manifest,
+            ),
             "best_epoch": result.best_epoch,
             "last_epoch": result.last_epoch,
             "training_status": result.status.value,
@@ -259,6 +304,7 @@ def _run_one(
             "best_epoch": result.best_epoch,
             "last_epoch": result.last_epoch,
             "training_status": result.status.value,
+            "conformal_status": "NOT_APPLICABLE_TRAJECTORY_TARGET",
         }
         _save_safe_tensor_artifact(hybrid_task.model, artifacts)
     else:  # pragma: no cover - configuration model rejects this branch
@@ -277,8 +323,57 @@ def _cycle_metrics(
     batch: CycleLifeCurveBatch,
     predicted: np.ndarray,
     context: CheckpointContext,
+    *,
+    calibration_batch: CycleLifeCurveBatch,
+    calibration_predicted: np.ndarray,
+    split_manifest: SplitManifest,
 ) -> dict[str, Any]:
-    predictions = [
+    predictions = _cycle_predictions(batch, predicted, context)
+    calibration_predictions = _cycle_predictions(
+        calibration_batch,
+        calibration_predicted,
+        context,
+    )
+    calibration = calibrate_cycle_life_conformal(
+        calibration_predictions,
+        split_manifest=split_manifest,
+        alpha=0.1,
+    )
+    intervals = tuple(
+        make_cycle_life_interval(prediction, calibration) for prediction in predictions
+    )
+    coverage = evaluate_cycle_life_interval_coverage(
+        intervals,
+        split_manifest=split_manifest,
+    )
+    metrics = evaluate_cycle_life_predictions(predictions)
+    return {
+        "dataset_id": "MATR",
+        "target": metrics.target.value,
+        "model": context.model_name,
+        "cutoff_cycle": context.cutoff_cycle,
+        "seed": context.seed,
+        "evaluated_cell_count": metrics.evaluated_cell_count,
+        "mae": metrics.mae_cycle,
+        "rmse": metrics.rmse_cycle,
+        "mape": metrics.mape_percent,
+        "r2": metrics.r2,
+        "warnings": metrics.warnings,
+        "conformal_alpha": calibration.alpha,
+        "conformal_calibration_cell_count": calibration.calibration_cell_count,
+        "conformal_residual_quantile_cycle": calibration.residual_quantile_cycle,
+        "picp": coverage.picp,
+        "mpiw_cycle": coverage.mpiw_cycle,
+        "conformal_warnings": coverage.warnings,
+    }
+
+
+def _cycle_predictions(
+    batch: CycleLifeCurveBatch,
+    predicted: np.ndarray,
+    context: CheckpointContext,
+) -> list[CycleLifePrediction]:
+    return [
         CycleLifePrediction(
             dataset_id="MATR",
             cell_id=cell_id,
@@ -299,20 +394,6 @@ def _cycle_metrics(
             strict=True,
         )
     ]
-    metrics = evaluate_cycle_life_predictions(predictions)
-    return {
-        "dataset_id": "MATR",
-        "target": metrics.target.value,
-        "model": context.model_name,
-        "cutoff_cycle": context.cutoff_cycle,
-        "seed": context.seed,
-        "evaluated_cell_count": metrics.evaluated_cell_count,
-        "mae": metrics.mae_cycle,
-        "rmse": metrics.rmse_cycle,
-        "mape": metrics.mape_percent,
-        "r2": metrics.r2,
-        "warnings": metrics.warnings,
-    }
 
 
 def _save_safe_tensor_artifact(model: torch.nn.Module, artifact_directory: Path) -> None:
