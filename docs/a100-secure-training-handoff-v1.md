@@ -48,6 +48,8 @@ python scripts/a100_preflight.py --output preflight.json
 
 报告不会读取或输出环境变量、用户名、主机名和密钥。
 
+正式的一键脚本会在 GPU 预检前执行 `scripts/prepare_matr_training_data.py`。该步骤先核验原始 MATR 文件的来源清单与 SHA-256；缓存存在时逐电芯复验内容寻址 Parquet/JSON 和循环 500 监督制品，缓存缺失时才从已批准的 `.mat` 重建。特征制品上限固定为循环 150，未来监督轨迹仍保存在独立目录。
+
 ## 第二步：在上传前生成训练包清单
 
 ```powershell

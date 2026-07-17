@@ -30,5 +30,6 @@ def test_smoke_config_uses_one_seed_and_short_real_model_runs() -> None:
     matrix = build_run_matrix(config.suite)
 
     assert len(matrix) == 20
+    assert config.paths.conversion_report.endswith("matr_2018_04_12_cutoff150.json")
     assert {item.seed for item in matrix} == {20260712}
     assert max(model.max_epochs for model in config.suite.models) <= 10

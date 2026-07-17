@@ -14,6 +14,10 @@ def test_dataset_shell_is_one_command_and_never_parallelizes_models() -> None:
     script = Path("scripts/a100/train_dataset.sh").read_text(encoding="utf-8")
 
     assert "CUDA_VISIBLE_DEVICES=1" in script
+    assert "scripts/prepare_matr_training_data.py" in script
+    assert script.index("scripts/prepare_matr_training_data.py") < script.index(
+        "scripts/a100/preflight.sh"
+    )
     assert 'python scripts/run_training_suite.py matr "${MODE}"' in script
     assert "xargs -P" not in script
     assert " wait" not in script

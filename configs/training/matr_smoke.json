@@ -25,6 +25,7 @@
     "raw_mat": "data/2018-04-12_batchdata_updated_struct_errorcorrect.mat",
     "raw_manifest": "configs/data_manifests/matr_2018_04_12_batch_v1.json",
     "processed_root": "data/processed/MATR/2018-04-12-cutoff150",
+    "conversion_report": "reports/data_quality/matr_2018_04_12_cutoff150.json",
     "supervision_root": "data/processed/MATR/2018-04-12-supervision500",
     "supervision_report": "reports/data_quality/matr_2018_04_12_supervision500_v1.json",
     "split_manifest": "configs/data_splits/matr_2018_04_12_cell_split_v1.json",

@@ -25,5 +25,6 @@ fi
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=1
 
+python scripts/prepare_matr_training_data.py "${MODE}"
 bash scripts/a100/preflight.sh
 python scripts/run_training_suite.py matr "${MODE}"

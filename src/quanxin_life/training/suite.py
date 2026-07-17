@@ -20,6 +20,7 @@ class MatrTrainingPaths(ContractModel):
     raw_mat: str
     raw_manifest: str
     processed_root: str
+    conversion_report: str
     supervision_root: str
     supervision_report: str
     split_manifest: str
