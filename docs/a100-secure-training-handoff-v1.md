@@ -45,7 +45,7 @@ python scripts/build_a100_training_manifest.py `
 
 ## 当前明确限制
 
-- HUST 候选清单尚未获人工批准，不能创建正式训练包；
+- HUST inventory 已获人工批准，但原始 ZIP 尚未完成批准后复审，且字段尚未安全转换，因此不能创建正式训练包；
 - HUST 字段仍未映射成 Canonical Parquet；
 - CPMLP 与 Hybrid 已有 safetensors + 严格架构/特征 JSON 往返通道，但尚未用真实 HUST 训练制品验证；
 - 现在的预检和清单工具不能证明模型性能，也不代表海辰真实工业数据验证。
