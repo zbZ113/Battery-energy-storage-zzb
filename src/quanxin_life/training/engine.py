@@ -6,6 +6,7 @@ import csv
 import json
 import math
 import os
+import shutil
 import signal
 import threading
 import time
@@ -91,15 +92,19 @@ class TrainingEngine:
         run_directory: Path,
         device: torch.device,
         stop_requested: Callable[[], bool] | None = None,
+        keep_recent_checkpoints: int = 3,
     ) -> None:
         if config.name != context.model_name:
             raise ValueError("training config model does not match checkpoint context")
+        if keep_recent_checkpoints < 1:
+            raise ValueError("keep_recent_checkpoints must be positive")
         self.task = task
         self.context = context
         self.config = config
         self.run_directory = run_directory
         self.device = device
         self.stop_requested = stop_requested or (lambda: False)
+        self.keep_recent_checkpoints = keep_recent_checkpoints
 
     def run(self) -> TrainingRunResult:
         self.run_directory.mkdir(parents=True, exist_ok=True)
@@ -161,6 +166,10 @@ class TrainingEngine:
                 _write_pointer(checkpoints / "last.json", checkpoint_name)
                 if improved:
                     _write_pointer(checkpoints / "best.json", checkpoint_name)
+                _prune_checkpoints(
+                    checkpoints,
+                    keep_recent=self.keep_recent_checkpoints,
+                )
                 elapsed = time.perf_counter() - epoch_started
                 logger.record(
                     epoch,
@@ -168,6 +177,8 @@ class TrainingEngine:
                     validation=validation,
                     elapsed=elapsed,
                     learning_rate=float(self.task.optimizer.param_groups[0]["lr"]),
+                    progress=progress,
+                    device=self.device,
                 )
 
                 if (
@@ -282,7 +293,15 @@ class _RunLogger:
         validation: EpochMetrics | None,
         elapsed: float,
         learning_rate: float,
+        progress: TrainingProgress,
+        device: torch.device,
     ) -> None:
+        if device.type == "cuda":
+            allocated = int(torch.cuda.memory_allocated(device))
+            reserved = int(torch.cuda.memory_reserved(device))
+        else:
+            allocated = 0
+            reserved = 0
         base: dict[str, object] = {
             "dataset": self.context.dataset_id,
             "model": self.context.model_name,
@@ -292,6 +311,10 @@ class _RunLogger:
             "train_loss": train.loss,
             "learning_rate": learning_rate,
             "elapsed_seconds": elapsed,
+            "gpu_memory_allocated_bytes": allocated,
+            "gpu_memory_reserved_bytes": reserved,
+            "best_epoch": progress.best_epoch,
+            "early_stop_counter": progress.validations_without_improvement,
         }
         event = dict(base)
         if validation is not None:
@@ -318,7 +341,10 @@ class _RunLogger:
             f"dataset={self.context.dataset_id} model={self.context.model_name} "
             f"cutoff={self.context.cutoff_cycle} seed={self.context.seed} "
             f"epoch={epoch} train_loss={train.loss:.6g}{validation_text} "
-            f"learning_rate={learning_rate:.6g} elapsed_seconds={elapsed:.3f}"
+            f"learning_rate={learning_rate:.6g} elapsed_seconds={elapsed:.3f} "
+            f"gpu_allocated_bytes={allocated} gpu_reserved_bytes={reserved} "
+            f"best_epoch={progress.best_epoch} "
+            f"early_stop_counter={progress.validations_without_improvement}"
         )
 
 
@@ -373,6 +399,35 @@ def _read_pointer(path: Path) -> str:
     if not isinstance(value, str) or not value.startswith("epoch-"):
         raise ValueError("checkpoint pointer is invalid")
     return value
+
+
+def _prune_checkpoints(checkpoints: Path, *, keep_recent: int) -> None:
+    """Keep the best, last and most recent immutable epoch directories."""
+
+    if keep_recent < 1:
+        raise ValueError("keep_recent must be positive")
+    root = checkpoints.resolve(strict=True)
+    directories: list[tuple[int, Path]] = []
+    for path in checkpoints.glob("epoch-*"):
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError("checkpoint epoch entries must be regular directories")
+        suffix = path.name.removeprefix("epoch-")
+        if len(suffix) != 6 or not suffix.isdigit():
+            raise ValueError("checkpoint epoch directory has an invalid name")
+        directories.append((int(suffix), path))
+    directories.sort()
+    keep = {path.name for _epoch, path in directories[-keep_recent:]}
+    for pointer_name in ("last.json", "best.json"):
+        pointer = checkpoints / pointer_name
+        if pointer.is_file():
+            keep.add(_read_pointer(pointer))
+    for _epoch, path in directories:
+        if path.name in keep:
+            continue
+        resolved = path.resolve(strict=True)
+        if resolved.parent != root:
+            raise ValueError("checkpoint pruning target escapes its checkpoint root")
+        shutil.rmtree(resolved)
 
 
 def _read_json(path: Path) -> dict[str, object]:

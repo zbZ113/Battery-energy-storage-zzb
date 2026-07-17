@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import torch
@@ -89,6 +90,25 @@ def test_engine_validates_early_stops_and_writes_consistent_evidence(
     assert (tmp_path / "checkpoints" / "last.json").is_file()
     assert (tmp_path / "checkpoints" / "best.json").is_file()
     assert (tmp_path / "run_status.json").is_file()
+    retained = {
+        path.name
+        for path in (tmp_path / "checkpoints").glob("epoch-*")
+        if path.is_dir()
+    }
+    assert retained == {
+        "epoch-000002",
+        "epoch-000004",
+        "epoch-000005",
+        "epoch-000006",
+    }
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "training_log.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert events[-1]["best_epoch"] == 2
+    assert events[-1]["early_stop_counter"] == 2
+    assert events[-1]["gpu_memory_allocated_bytes"] == 0
+    assert events[-1]["gpu_memory_reserved_bytes"] == 0
 
 
 def test_engine_resumes_last_checkpoint_and_completed_run_is_skipped(

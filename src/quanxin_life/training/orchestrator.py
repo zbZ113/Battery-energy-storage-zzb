@@ -212,6 +212,7 @@ def _run_one(
             config=model_config,
             run_directory=run_directory,
             device=device,
+            keep_recent_checkpoints=3,
         ).run()
         cpmlp_task.model.eval()
         with torch.no_grad():
@@ -241,6 +242,7 @@ def _run_one(
             config=model_config,
             run_directory=run_directory,
             device=device,
+            keep_recent_checkpoints=3,
         ).run()
         test_metrics = hybrid_task.validate(
             result.best_epoch or result.last_epoch,
