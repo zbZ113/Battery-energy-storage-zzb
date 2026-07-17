@@ -310,13 +310,14 @@ def test_approval_and_rejection_routes_resume_or_stop_the_run(
         return response.json()
 
     first = create_run("approve-api-key-0001")
+    approval_now = datetime.now(UTC)
     first_approval = service.request_approval(
         str(first["run_id"]),
         step_id="features",
         approval_kind=ApprovalKind.FORMAL_DECISION,
         impact_scope="Release reviewed result",
-        now=NOW,
-        expires_at=NOW + timedelta(hours=1),
+        now=approval_now,
+        expires_at=approval_now + timedelta(hours=1),
     )
     approved = client.post(
         f"/v1/agent/runs/{first['run_id']}/approve",
@@ -337,8 +338,8 @@ def test_approval_and_rejection_routes_resume_or_stop_the_run(
         step_id="features",
         approval_kind=ApprovalKind.EXTERNAL_WRITE,
         impact_scope="Write to external system",
-        now=NOW,
-        expires_at=NOW + timedelta(hours=1),
+        now=approval_now,
+        expires_at=approval_now + timedelta(hours=1),
     )
     rejected = client.post(
         f"/v1/agent/runs/{second['run_id']}/reject",
