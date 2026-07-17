@@ -98,3 +98,41 @@ python scripts/verify_a100_training_output.py `
 ```
 
 缺文件、多文件、哈希变化、符号链接、秘密内容或 `.pkl/.pt/.pth` 等危险格式都会阻断验收。
+
+## 生成 MATR A100 训练包
+
+在本机确认 Git 工作树干净后运行：
+
+```powershell
+python scripts/build_matr_a100_package.py dist/quanxin-matr-a100.zip
+```
+
+命令只会收集 Git 已跟踪的源码与配置，并显式加入来源清单已登记的
+`2018-04-12_batchdata_updated_struct_errorcorrect.mat`、截止循环 150 的早期输入制品和循环 500
+监督制品。原始 MAT 必须同时通过路径、文件名、SHA-256、MATLAB 7.3 头和偏移 512 的 HDF5
+签名校验。任意其他 MAT、pickle、joblib、`.pt`、`.pth`、符号链接或未登记处理格式都会阻断。
+当前来源清单中的许可证字段仍为 `must_verify_before_download`；这不影响团队内部受控训练传输，
+但在对外发布数据或竞赛复现包前必须补齐 MATR 官方许可依据，不能把该字段表述为已获公开再分发授权。
+
+程序生成两个文件：
+
+```text
+dist/quanxin-matr-a100.zip
+dist/quanxin-matr-a100.sha256.json
+```
+
+ZIP 内含 `source_revision.json` 和逐文件哈希清单；外部索引绑定整个 ZIP 字节流。二者必须一起
+上传。由于已批准的原始 MATR 文件约 3.24 GB，打包与首次复验会顺序读取该文件多次，这是完整
+字节校验的预期行为。
+
+服务器收到文件后，在解压前运行：
+
+```bash
+python scripts/verify_matr_a100_package.py \
+  /path/to/quanxin-matr-a100.zip \
+  /path/to/quanxin-matr-a100.sha256.json
+```
+
+只有输出 `MATR_A100_PACKAGE_VERIFIED` 后才能解压。验证器不会调用 `extractall`，会先核验整包
+SHA-256，再核验包内清单、精确文件库存、每个文件的大小与 SHA-256，以及原始 MAT 的 HDF5
+签名。

@@ -1,5 +1,15 @@
 """Governed training environment and package utilities."""
 
+from quanxin_life.training.a100_package import (
+    A100PackageFile,
+    A100PackageFileRole,
+    MatrA100ArchiveIndex,
+    MatrA100PackageManifest,
+    build_matr_a100_archive,
+    build_matr_a100_archive_index,
+    verify_matr_a100_archive,
+    verify_matr_a100_archive_index,
+)
 from quanxin_life.training.bundle import (
     TrainingBundleFile,
     TrainingBundleManifest,
@@ -76,6 +86,8 @@ from quanxin_life.training.tasks import (
 )
 
 __all__ = [
+    "A100PackageFile",
+    "A100PackageFileRole",
     "A100TrainingRunManifest",
     "CPMLPTrainingTask",
     "CheckpointContext",
@@ -89,6 +101,8 @@ __all__ = [
     "HybridTrajectoryBatch",
     "HybridTrajectoryTrainingTask",
     "LoggingPolicy",
+    "MatrA100ArchiveIndex",
+    "MatrA100PackageManifest",
     "MatrCurveCohorts",
     "MatrHybridCohorts",
     "MatrRunConfig",
@@ -110,6 +124,8 @@ __all__ = [
     "VarianceCycleLifeModel",
     "VisibleCudaSnapshot",
     "XGBoostCycleLifeResult",
+    "build_matr_a100_archive",
+    "build_matr_a100_archive_index",
     "build_run_matrix",
     "build_training_bundle_manifest",
     "build_training_output_index",
@@ -126,6 +142,8 @@ __all__ = [
     "train_xgboost_cycle_life",
     "validate_a100_gpu1_binding",
     "validate_local_a100_binding",
+    "verify_matr_a100_archive",
+    "verify_matr_a100_archive_index",
     "verify_training_bundle_manifest",
     "verify_training_output_index",
 ]

@@ -31,3 +31,15 @@ def test_a100_environment_is_hash_locked_and_does_not_install_cuda_toolkit() -> 
     assert "--hash=sha256:" in lock
     assert "xgboost==2.1.4" in lock
     assert "\ntorch==" not in lock
+
+
+def test_a100_package_commands_bind_clean_git_and_verify_before_extracting() -> None:
+    build = Path("scripts/build_matr_a100_package.py").read_text(encoding="utf-8")
+    verify = Path("scripts/verify_matr_a100_package.py").read_text(encoding="utf-8")
+
+    assert '"git", "status", "--porcelain"' in build
+    assert '"git", "ls-files", "-z"' in build
+    assert "build_matr_a100_archive_index" in build
+    assert "verify_matr_a100_archive_index" in verify
+    assert "verify_matr_a100_archive" in verify
+    assert "extractall" not in verify
