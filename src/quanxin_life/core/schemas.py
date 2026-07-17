@@ -123,6 +123,8 @@ class LifePrediction(ContractModel):
 
     @model_validator(mode="after")
     def prediction_respects_cutoff_and_censoring(self) -> "LifePrediction":
+        if self.target is not PredictionTarget.EOL80_CYCLE:
+            raise ValueError("LifePrediction is restricted to the legacy EOL80 target")
         if self.predicted_eol_cycle < self.cutoff_cycle:
             raise ValueError("predicted_eol_cycle cannot precede cutoff_cycle")
         if self.observed_eol_cycle is not None and self.observed_eol_cycle < self.cutoff_cycle:
@@ -137,6 +139,45 @@ class LifePrediction(ContractModel):
     def derived_rul(self) -> float:
         """Derived RUL; no model is allowed to produce an independent RUL value."""
         return max(self.predicted_eol_cycle - self.cutoff_cycle, 0.0)
+
+
+class CycleLifePrediction(ContractModel):
+    """Target-aware cycle-life estimate without relabelling dataset semantics."""
+
+    dataset_id: str = Field(min_length=1)
+    cell_id: str = Field(min_length=1)
+    cutoff_cycle: int = Field(ge=0)
+    target: PredictionTarget
+    predicted_cycle: float = Field(ge=0, allow_inf_nan=False)
+    observed_cycle: int | None = Field(default=None, ge=0)
+    right_censored: bool
+    feature_version: str = Field(min_length=1)
+    split_version: str = Field(min_length=1)
+    model_version: str = Field(min_length=1)
+    data_version: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def prediction_respects_target_and_censoring(self) -> "CycleLifePrediction":
+        if self.target not in {
+            PredictionTarget.UNIFIED_EOL80_CYCLE,
+            PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE,
+        }:
+            raise ValueError("CycleLifePrediction requires an explicit non-legacy target")
+        if self.predicted_cycle < self.cutoff_cycle:
+            raise ValueError("predicted_cycle cannot precede cutoff_cycle")
+        if self.observed_cycle is not None and self.observed_cycle < self.cutoff_cycle:
+            raise ValueError("observed_cycle cannot precede cutoff_cycle")
+        if self.right_censored and self.observed_cycle is not None:
+            raise ValueError("right-censored predictions cannot contain an observed cycle")
+        if not self.right_censored and self.observed_cycle is None:
+            raise ValueError("observed_cycle is required when right_censored is false")
+        return self
+
+    @property
+    def derived_remaining_cycles(self) -> float:
+        """Remaining cycles derived from the target-aware point estimate."""
+
+        return max(self.predicted_cycle - self.cutoff_cycle, 0.0)
 
 
 class LifetimeMetrics(ContractModel):

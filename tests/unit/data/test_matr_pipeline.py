@@ -10,6 +10,7 @@ from quanxin_life.data.matr_pipeline import (
     audit_matr_eol80_labels,
     build_matr_life_strata,
     build_matr_split_evidence,
+    build_matr_supervision_artifact,
     convert_matr_batch,
 )
 from quanxin_life.data.storage import ProcessedCellManifest, verify_cell_artifacts
@@ -195,3 +196,49 @@ def test_builds_protocol_and_life_strata_without_treating_censoring_as_an_event(
     assert label_audit.unified_right_censored_count == 2
     assert all(cell.unified_eol80_cycle is None for cell in label_audit.cells)
     assert all(cell.minimum_observed_soh > 0.8 for cell in label_audit.cells)
+
+
+def test_builds_cycle_500_supervision_separately_from_early_samples(tmp_path: Path) -> None:
+    raw_path = tmp_path / "batch.mat"
+    _write_matr_file(raw_path, cell_count=2, cycle_count=8)
+    manifest = _manifest(raw_path)
+    early_root = tmp_path / "early-inputs"
+    report = convert_matr_batch(
+        raw_path=raw_path,
+        raw_manifest=manifest,
+        output_root=early_root,
+        batch_index=3,
+        batch_date=date(2018, 4, 12),
+        time_unit="minutes",
+        max_cycle_index=5,
+        created_at=datetime(2026, 7, 17, 3, 0, tzinfo=UTC),
+    )
+
+    supervision = build_matr_supervision_artifact(
+        raw_path=raw_path,
+        raw_manifest=manifest,
+        conversion_report=report,
+        output_root=tmp_path / "supervision",
+        horizon_cycle=7,
+        created_at=datetime(2026, 7, 17, 4, 0, tzinfo=UTC),
+    )
+
+    assert supervision.schema_version == "matr-supervision-v1"
+    assert supervision.horizon_cycle == 7
+    assert supervision.cell_count == 2
+    assert supervision.row_count == 14
+    assert supervision.parquet_relative_path.startswith("trajectories/")
+    assert not (early_root / supervision.parquet_relative_path).exists()
+
+    table = __import__("pyarrow.parquet", fromlist=["read_table"]).read_table(
+        tmp_path / "supervision" / supervision.parquet_relative_path
+    )
+    assert table.column_names == [
+        "dataset_id",
+        "cell_id",
+        "cycle_index",
+        "discharge_capacity_ah",
+        "reference_capacity_ah",
+        "soh",
+    ]
+    assert set(table.column("cycle_index").to_pylist()) == set(range(1, 8))

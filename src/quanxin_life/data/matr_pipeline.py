@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
+import os
 import re
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
@@ -137,6 +139,52 @@ class MatrEOL80LabelAudit(ContractModel):
             raise ValueError("cell_count must match MATR EOL80 cell evidence")
         if self.unified_event_count + self.unified_right_censored_count != self.cell_count:
             raise ValueError("MATR EOL80 event and censoring counts must cover all cells")
+        return self
+
+
+class MatrSupervisionCellEvidence(ContractModel):
+    """One cell represented in the future-only supervision artifact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cell_id: str = Field(min_length=1)
+    raw_cell_id: str = Field(min_length=1)
+    official_life_label: int | None = Field(default=None, ge=0)
+    official_life_right_censored: bool
+    reference_capacity_ah: float = Field(gt=0, allow_inf_nan=False)
+    observed_cycle_count: int = Field(gt=0)
+
+
+class MatrSupervisionArtifact(ContractModel):
+    """Content-addressed real trajectory labels kept outside early feature inputs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["matr-supervision-v1"] = "matr-supervision-v1"
+    dataset_id: Literal["MATR"] = "MATR"
+    source_report_sha256: Sha256
+    raw_sha256: Sha256
+    horizon_cycle: int = Field(ge=5)
+    cell_count: int = Field(gt=0)
+    row_count: int = Field(gt=0)
+    parquet_relative_path: str = Field(min_length=1)
+    parquet_sha256: Sha256
+    cells: tuple[MatrSupervisionCellEvidence, ...] = Field(min_length=1)
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def supervision_created_at_is_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def supervision_counts_match(self) -> MatrSupervisionArtifact:
+        if self.cell_count != len(self.cells):
+            raise ValueError("cell_count must match supervision cell evidence")
+        if self.row_count != self.cell_count * self.horizon_cycle:
+            raise ValueError("row_count must cover every cell and supervision cycle")
         return self
 
 
@@ -285,6 +333,130 @@ def audit_matr_eol80_labels(
     )
 
 
+def build_matr_supervision_artifact(
+    *,
+    raw_path: Path,
+    raw_manifest: RawFileManifest,
+    conversion_report: MatrBatchConversionReport,
+    output_root: Path,
+    horizon_cycle: int,
+    created_at: datetime,
+) -> MatrSupervisionArtifact:
+    """Write full-summary SOH labels without exposing future sample curves as features."""
+
+    if horizon_cycle < 5:
+        raise ValueError("MATR supervision horizon must include at least cycles 1 through 5")
+    if raw_manifest.sha256 != conversion_report.raw_sha256:
+        raise ValueError("MATR supervision manifest differs from the conversion report")
+    verify_raw_file(raw_path, raw_manifest)
+    try:
+        import h5py
+        import pyarrow as pa  # type: ignore[import-untyped]
+        import pyarrow.parquet as pq  # type: ignore[import-untyped]
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("MATR supervision requires the 'data' optional dependencies") from exc
+
+    root = Path(output_root)
+    if root.is_symlink():
+        raise ValueError("MATR supervision output root must not be a symbolic link")
+    trajectory_root = root / "trajectories"
+    trajectory_root.mkdir(parents=True, exist_ok=True)
+
+    dataset_ids: list[str] = []
+    cell_ids: list[str] = []
+    cycle_indices: list[int] = []
+    discharge_capacities: list[float] = []
+    reference_capacities: list[float] = []
+    soh_values: list[float] = []
+    cell_evidence: list[MatrSupervisionCellEvidence] = []
+    with h5py.File(raw_path, "r") as handle:
+        if "batch" not in handle or "summary" not in handle["batch"]:
+            raise ValueError("MATR supervision requires the batch summary references")
+        batch = handle["batch"]
+        for cell in conversion_report.cells:
+            match = re.fullmatch(
+                rf"b{conversion_report.batch_index}c(?P<index>\d+)", cell.raw_cell_id
+            )
+            if match is None:
+                raise ValueError("MATR supervision found an invalid raw_cell_id")
+            cell_index = int(match.group("index"))
+            if cell_index >= batch["summary"].shape[0]:
+                raise ValueError("MATR supervision raw_cell_id exceeds the batch size")
+            summary = handle[batch["summary"][cell_index, 0]]
+            if "QDischarge" not in summary:
+                raise ValueError("MATR supervision requires summary QDischarge")
+            capacities = _resolve_hdf5_numeric(handle, summary["QDischarge"])
+            if len(capacities) <= horizon_cycle:
+                raise ValueError(
+                    f"{cell.cell_id} does not contain the requested supervision horizon"
+                )
+            for cycle_index in range(1, horizon_cycle + 1):
+                capacity = capacities[cycle_index]
+                soh = capacity / cell.reference_capacity_ah
+                if not math.isfinite(capacity) or capacity <= 0 or not math.isfinite(soh):
+                    raise ValueError("MATR supervision found an invalid capacity or SOH value")
+                dataset_ids.append("MATR")
+                cell_ids.append(cell.cell_id)
+                cycle_indices.append(cycle_index)
+                discharge_capacities.append(capacity)
+                reference_capacities.append(cell.reference_capacity_ah)
+                soh_values.append(soh)
+            cell_evidence.append(
+                MatrSupervisionCellEvidence(
+                    cell_id=cell.cell_id,
+                    raw_cell_id=cell.raw_cell_id,
+                    official_life_label=cell.official_life_label,
+                    official_life_right_censored=cell.official_life_right_censored,
+                    reference_capacity_ah=cell.reference_capacity_ah,
+                    observed_cycle_count=len(capacities),
+                )
+            )
+
+    table = pa.Table.from_arrays(
+        (
+            pa.array(dataset_ids, type=pa.string()),
+            pa.array(cell_ids, type=pa.string()),
+            pa.array(cycle_indices, type=pa.int32()),
+            pa.array(discharge_capacities, type=pa.float64()),
+            pa.array(reference_capacities, type=pa.float64()),
+            pa.array(soh_values, type=pa.float64()),
+        ),
+        names=(
+            "dataset_id",
+            "cell_id",
+            "cycle_index",
+            "discharge_capacity_ah",
+            "reference_capacity_ah",
+            "soh",
+        ),
+    )
+    temporary = trajectory_root / f".matr-supervision-{os.getpid()}.parquet.tmp"
+    try:
+        pq.write_table(table, temporary, compression="zstd")
+        parquet_sha256 = _sha256_file(temporary)
+        target = trajectory_root / f"{parquet_sha256}.parquet"
+        if target.exists():
+            if target.is_symlink() or _sha256_file(target) != parquet_sha256:
+                raise ValueError("existing MATR supervision artifact failed verification")
+            temporary.unlink()
+        else:
+            temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    return MatrSupervisionArtifact(
+        source_report_sha256=sha256_canonical(conversion_report.model_dump(mode="json")),
+        raw_sha256=raw_manifest.sha256,
+        horizon_cycle=horizon_cycle,
+        cell_count=len(cell_evidence),
+        row_count=table.num_rows,
+        parquet_relative_path=target.relative_to(root).as_posix(),
+        parquet_sha256=parquet_sha256,
+        cells=tuple(cell_evidence),
+        created_at=created_at,
+    )
+
+
 def _resolve_hdf5_numeric(handle: Any, dataset: Any) -> list[float]:
     values = dataset[()]
     if values.dtype.kind != "O":
@@ -294,6 +466,14 @@ def _resolve_hdf5_numeric(handle: Any, dataset: Any) -> list[float]:
         referenced = handle[reference][()]
         resolved.extend(float(item) for item in referenced.reshape(-1))
     return resolved
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def convert_matr_batch(

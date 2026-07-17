@@ -9,6 +9,7 @@ from quanxin_life.core.schemas import (
     AnalysisState,
     CellMetadata,
     ConformalCalibration,
+    CycleLifePrediction,
     LifePrediction,
     LifetimeMetrics,
     PredictionInterval,
@@ -141,6 +142,42 @@ def test_life_prediction_requires_explicit_eol80_metadata() -> None:
     assert prediction.derived_rul == pytest.approx(745.5)
     assert prediction.observed_eol_cycle is None
     assert prediction.right_censored is True
+
+
+def test_cycle_life_prediction_preserves_matr_official_target_semantics() -> None:
+    prediction = CycleLifePrediction(
+        dataset_id="MATR",
+        cell_id="MATR_b3c0",
+        cutoff_cycle=150,
+        target=PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE,
+        predicted_cycle=1000.0,
+        observed_cycle=1009,
+        right_censored=False,
+        feature_version="early-cycle-v1",
+        split_version="matr-split-v1",
+        model_version="xgboost-v1",
+        data_version="matr-2018-04-12-v1",
+    )
+
+    assert prediction.target is PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE
+    assert prediction.derived_remaining_cycles == pytest.approx(850.0)
+
+
+def test_life_prediction_rejects_matr_official_label_as_eol80() -> None:
+    with pytest.raises(ValidationError, match="EOL80"):
+        LifePrediction(
+            dataset_id="MATR",
+            cell_id="MATR_b3c0",
+            cutoff_cycle=150,
+            target=PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE,
+            predicted_eol_cycle=1000.0,
+            observed_eol_cycle=1009,
+            right_censored=False,
+            feature_version="early-cycle-v1",
+            split_version="matr-split-v1",
+            model_version="xgboost-v1",
+            data_version="matr-2018-04-12-v1",
+        )
 
 
 def test_life_prediction_rejects_non_eol_target() -> None:

@@ -27,6 +27,8 @@ class PredictionTarget(StrEnum):
     """Prediction labels permitted by the battery lifetime modeling contract."""
 
     EOL80_CYCLE = "eol80_cycle"
+    UNIFIED_EOL80_CYCLE = "unified_eol80_cycle"
+    MATR_OFFICIAL_CYCLE_LIFE = "matr_official_cycle_life"
 
 
 class AgentRole(StrEnum):
