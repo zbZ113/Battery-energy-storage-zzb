@@ -341,6 +341,7 @@ def build_matr_supervision_artifact(
     output_root: Path,
     horizon_cycle: int,
     created_at: datetime,
+    selected_cell_ids: Sequence[str] | None = None,
 ) -> MatrSupervisionArtifact:
     """Write full-summary SOH labels without exposing future sample curves as features."""
 
@@ -355,6 +356,20 @@ def build_matr_supervision_artifact(
         import pyarrow.parquet as pq  # type: ignore[import-untyped]
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("MATR supervision requires the 'data' optional dependencies") from exc
+
+    selected: set[str] | None = None
+    if selected_cell_ids is not None:
+        selected_tuple = tuple(selected_cell_ids)
+        if not selected_tuple or len(set(selected_tuple)) != len(selected_tuple):
+            raise ValueError("selected supervision cell identifiers must be nonempty and unique")
+        known = {cell.cell_id for cell in conversion_report.cells}
+        selected = set(selected_tuple)
+        unknown = selected - known
+        if unknown:
+            raise ValueError(
+                "selected supervision cells are absent from conversion report: "
+                + ", ".join(sorted(unknown))
+            )
 
     root = Path(output_root)
     if root.is_symlink():
@@ -374,6 +389,8 @@ def build_matr_supervision_artifact(
             raise ValueError("MATR supervision requires the batch summary references")
         batch = handle["batch"]
         for cell in conversion_report.cells:
+            if selected is not None and cell.cell_id not in selected:
+                continue
             match = re.fullmatch(
                 rf"b{conversion_report.batch_index}c(?P<index>\d+)", cell.raw_cell_id
             )

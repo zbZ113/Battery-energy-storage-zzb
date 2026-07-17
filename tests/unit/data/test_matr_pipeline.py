@@ -242,3 +242,35 @@ def test_builds_cycle_500_supervision_separately_from_early_samples(tmp_path: Pa
         "soh",
     ]
     assert set(table.column("cycle_index").to_pylist()) == set(range(1, 8))
+
+
+def test_supervision_builder_accepts_only_an_explicit_conversion_subset(
+    tmp_path: Path,
+) -> None:
+    raw_path = tmp_path / "batch.mat"
+    _write_matr_file(raw_path, cell_count=2, cycle_count=8)
+    manifest = _manifest(raw_path)
+    report = convert_matr_batch(
+        raw_path=raw_path,
+        raw_manifest=manifest,
+        output_root=tmp_path / "early-inputs",
+        batch_index=3,
+        batch_date=date(2018, 4, 12),
+        time_unit="minutes",
+        max_cycle_index=5,
+        created_at=datetime(2026, 7, 17, 3, 0, tzinfo=UTC),
+    )
+
+    supervision = build_matr_supervision_artifact(
+        raw_path=raw_path,
+        raw_manifest=manifest,
+        conversion_report=report,
+        output_root=tmp_path / "supervision",
+        horizon_cycle=7,
+        selected_cell_ids=("MATR_b3c1",),
+        created_at=datetime(2026, 7, 17, 4, 0, tzinfo=UTC),
+    )
+
+    assert supervision.cell_count == 1
+    assert supervision.row_count == 7
+    assert tuple(cell.cell_id for cell in supervision.cells) == ("MATR_b3c1",)
