@@ -19,6 +19,13 @@ from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.data.manifest import RawFileManifest, verify_raw_file
 
 _RAW_MATR_NAME = "2018-04-12_batchdata_updated_struct_errorcorrect.mat"
+_THREE_BATCH_RAW_NAMES = frozenset(
+    {
+        "2017-05-12_batchdata_updated_struct_errorcorrect.mat",
+        "2017-06-30_batchdata_updated_struct_errorcorrect.mat",
+        _RAW_MATR_NAME,
+    }
+)
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 _FORBIDDEN_SUFFIXES = frozenset(
     {".joblib", ".key", ".pem", ".pickle", ".pkl", ".pt", ".pth"}
@@ -74,6 +81,44 @@ class MatrA100PackageManifest(ContractModel):
         raw_files = [item for item in self.files if item.role is A100PackageFileRole.RAW_MATR]
         if len(raw_files) != 1 or raw_files[0].sha256 != self.raw_matr_sha256:
             raise ValueError("package must contain exactly one bound raw MATR file")
+        return self
+
+
+class MatrThreeBatchA100PackageManifest(ContractModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["matr-a100-training-package-v2"] = (
+        "matr-a100-training-package-v2"
+    )
+    created_at: datetime
+    source_commit: str = Field(pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+    raw_matr_sha256: tuple[Sha256, Sha256, Sha256]
+    files: tuple[A100PackageFile, ...] = Field(min_length=1)
+    package_sha256: Sha256
+
+    @field_validator("created_at")
+    @classmethod
+    def created_at_is_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def file_inventory_is_unique(self) -> MatrThreeBatchA100PackageManifest:
+        paths = [item.relative_path for item in self.files]
+        if paths != sorted(paths) or len(paths) != len(set(paths)):
+            raise ValueError("package files must be unique and sorted")
+        raw_files = [
+            item for item in self.files if item.role is A100PackageFileRole.RAW_MATR
+        ]
+        if len(raw_files) != 3:
+            raise ValueError("three-batch package must contain exactly three raw MATR files")
+        if {PurePosixPath(item.relative_path).name for item in raw_files} != (
+            _THREE_BATCH_RAW_NAMES
+        ):
+            raise ValueError("three-batch package contains an unexpected raw MATR filename")
+        if tuple(item.sha256 for item in raw_files) != self.raw_matr_sha256:
+            raise ValueError("three-batch raw MATR hashes do not match the file inventory")
         return self
 
 
@@ -223,6 +268,142 @@ def build_matr_a100_archive(
     return manifest
 
 
+def build_matr_three_batch_a100_archive(
+    *,
+    project_root: Path,
+    output_archive: Path,
+    tracked_files: tuple[str, ...],
+    source_commit: str,
+    raw_inputs: tuple[tuple[str, str], ...],
+    processed_relative_paths: tuple[str, ...],
+    created_at: datetime,
+) -> MatrThreeBatchA100PackageManifest:
+    """Create an atomic ZIP64 package bound to all three approved MATR batches."""
+
+    root = _regular_directory(project_root, label="project root")
+    output = output_archive.resolve(strict=False)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.exists() or output.is_symlink():
+        raise ValueError("output archive must be a new path")
+    if len(raw_inputs) != 3:
+        raise ValueError("three-batch A100 package requires exactly three raw inputs")
+
+    entries: dict[str, tuple[A100PackageFileRole, Path | bytes]] = {}
+    raw_hash_by_path: dict[str, str] = {}
+    for raw_relative_value, raw_manifest_value in raw_inputs:
+        raw_relative = _safe_relative_path(raw_relative_value)
+        raw_name = PurePosixPath(raw_relative).name
+        if raw_name not in _THREE_BATCH_RAW_NAMES:
+            raise ValueError("raw MATR path is not one of the three approved batches")
+        raw_path = _inside(root, raw_relative)
+        raw_manifest_path = _inside(
+            root,
+            _safe_relative_path(raw_manifest_value),
+        )
+        raw_manifest = RawFileManifest.model_validate_json(
+            raw_manifest_path.read_bytes()
+        )
+        if (
+            raw_manifest.dataset_id != "MATR"
+            or raw_manifest.relative_path != raw_name
+        ):
+            raise ValueError("raw manifest is not bound to its approved MATR batch")
+        verify_raw_file(raw_path, raw_manifest)
+        _validate_matlab_v73_hdf5(raw_path)
+        _add_file(entries, raw_relative, A100PackageFileRole.RAW_MATR, raw_path)
+        raw_hash_by_path[raw_relative] = raw_manifest.sha256
+    if {PurePosixPath(path).name for path in raw_hash_by_path} != _THREE_BATCH_RAW_NAMES:
+        raise ValueError("three-batch raw input inventory is incomplete")
+
+    for relative in tracked_files:
+        normalized = _safe_relative_path(relative)
+        _add_file(
+            entries,
+            normalized,
+            A100PackageFileRole.SOURCE,
+            _inside(root, normalized),
+        )
+    for declared in processed_relative_paths:
+        normalized = _safe_relative_path(declared)
+        directory = _regular_directory(
+            _inside(root, normalized),
+            label="processed data root",
+        )
+        for path in sorted(directory.rglob("*")):
+            if path.is_symlink():
+                raise ValueError("symbolic links are forbidden in processed data")
+            if path.is_file():
+                relative = path.relative_to(root).as_posix()
+                _validate_processed_file(path)
+                _add_file(
+                    entries,
+                    relative,
+                    A100PackageFileRole.PROCESSED_DATA,
+                    path,
+                )
+
+    revision_payload = _canonical_json_bytes(
+        {
+            "schema_version": "source-revision-v1",
+            "git_commit": source_commit,
+            "git_dirty": False,
+            "created_at": created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        }
+    )
+    _add_file(
+        entries,
+        "source_revision.json",
+        A100PackageFileRole.SOURCE_REVISION,
+        revision_payload,
+    )
+    files = tuple(
+        A100PackageFile(
+            relative_path=relative,
+            role=role,
+            size_bytes=_entry_size(value),
+            sha256=_entry_sha256(value),
+        )
+        for relative, (role, value) in sorted(entries.items())
+    )
+    ordered_raw_hashes = tuple(
+        item.sha256 for item in files if item.role is A100PackageFileRole.RAW_MATR
+    )
+    if len(ordered_raw_hashes) != 3:
+        raise ValueError("three-batch package raw inventory could not be closed")
+    manifest_payload = {
+        "schema_version": "matr-a100-training-package-v2",
+        "created_at": created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+        "source_commit": source_commit,
+        "raw_matr_sha256": ordered_raw_hashes,
+        "files": [item.model_dump(mode="json") for item in files],
+    }
+    manifest = MatrThreeBatchA100PackageManifest.model_validate(
+        {
+            **manifest_payload,
+            "package_sha256": sha256_canonical(manifest_payload),
+        }
+    )
+    temporary = output.with_name(f".{output.name}.{os.getpid()}.tmp")
+    try:
+        with zipfile.ZipFile(
+            temporary,
+            mode="x",
+            compression=zipfile.ZIP_STORED,
+            allowZip64=True,
+        ) as archive:
+            for relative, (_role, value) in sorted(entries.items()):
+                _write_zip_entry(archive, relative, value)
+            archive.writestr(
+                "package_manifest.json",
+                _canonical_json_bytes(manifest.model_dump(mode="json")),
+            )
+        temporary.replace(output)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return manifest
+
+
 def verify_matr_a100_archive(archive_path: Path) -> MatrA100PackageManifest:
     """Verify exact inventory, sizes and byte hashes without extracting the ZIP."""
 
@@ -265,9 +446,53 @@ def verify_matr_a100_archive(archive_path: Path) -> MatrA100PackageManifest:
     return manifest
 
 
+def verify_matr_three_batch_a100_archive(
+    archive_path: Path,
+) -> MatrThreeBatchA100PackageManifest:
+    """Verify all three raw batches and the exact ZIP v2 inventory without extraction."""
+
+    path = archive_path.resolve(strict=True)
+    if archive_path.is_symlink() or not path.is_file():
+        raise ValueError("A100 package must be a regular non-symlinked file")
+    with zipfile.ZipFile(path, "r", allowZip64=True) as archive:
+        infos = archive.infolist()
+        names = [info.filename for info in infos]
+        if len(names) != len(set(names)):
+            raise ValueError("A100 package contains duplicate paths")
+        for info in infos:
+            _safe_relative_path(info.filename)
+            if info.is_dir() or _zip_entry_is_symlink(info):
+                raise ValueError("A100 package may contain regular files only")
+        if "package_manifest.json" not in names:
+            raise ValueError("A100 package manifest is missing")
+        manifest = MatrThreeBatchA100PackageManifest.model_validate(
+            _strict_json(archive.read("package_manifest.json"))
+        )
+        payload = manifest.model_dump(mode="json", exclude={"package_sha256"})
+        if sha256_canonical(payload) != manifest.package_sha256:
+            raise ValueError("package manifest SHA-256 does not match its contents")
+        expected = {item.relative_path: item for item in manifest.files}
+        if set(names) != {*expected, "package_manifest.json"}:
+            raise ValueError("A100 package file inventory does not match its manifest")
+        for relative, item in expected.items():
+            info = archive.getinfo(relative)
+            if info.file_size != item.size_bytes:
+                raise ValueError(f"size mismatch in A100 package: {relative}")
+            with archive.open(info, "r") as handle:
+                digest = _sha256_stream(handle)
+            if digest != item.sha256:
+                raise ValueError(f"SHA-256 mismatch in A100 package: {relative}")
+        for raw in (
+            item for item in manifest.files if item.role is A100PackageFileRole.RAW_MATR
+        ):
+            with archive.open(raw.relative_path, "r") as handle:
+                _validate_matlab_v73_hdf5_stream(handle)
+    return manifest
+
+
 def build_matr_a100_archive_index(
     archive_path: Path,
-    manifest: MatrA100PackageManifest,
+    manifest: MatrA100PackageManifest | MatrThreeBatchA100PackageManifest,
 ) -> MatrA100ArchiveIndex:
     """Bind the complete ZIP byte stream to its reviewed internal manifest."""
 

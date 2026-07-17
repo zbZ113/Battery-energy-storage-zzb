@@ -11,9 +11,11 @@ import pytest
 from quanxin_life.training.a100_package import (
     build_matr_a100_archive,
     build_matr_a100_archive_index,
+    build_matr_three_batch_a100_archive,
     filter_a100_source_paths,
     verify_matr_a100_archive,
     verify_matr_a100_archive_index,
+    verify_matr_three_batch_a100_archive,
 )
 
 RAW_NAME = "2018-04-12_batchdata_updated_struct_errorcorrect.mat"
@@ -176,3 +178,54 @@ def test_matr_a100_archive_verifier_rejects_changed_payload(tmp_path: Path) -> N
 
     with pytest.raises(ValueError, match=r"SHA-256|size"):
         verify_matr_a100_archive(changed)
+
+
+def test_three_batch_archive_binds_all_raw_mat_files(tmp_path: Path) -> None:
+    root, _ = _project(tmp_path)
+    raw_inputs: list[tuple[str, str]] = []
+    for batch_date in ("2017-05-12", "2017-06-30"):
+        name = f"{batch_date}_batchdata_updated_struct_errorcorrect.mat"
+        raw = root / "data" / name
+        digest = _write_matlab_v73(raw, payload=batch_date.encode())
+        manifest_relative = f"configs/data_manifests/matr_{batch_date}.json"
+        (root / manifest_relative).write_text(
+            json.dumps(
+                {
+                    "dataset_id": "MATR",
+                    "relative_path": name,
+                    "sha256": digest,
+                    "source_uri": "https://data.matr.io/approved",
+                    "license_name": "reviewed-for-training-package",
+                    "downloaded_at": "2026-07-17T02:22:49Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        raw_inputs.append((f"data/{name}", manifest_relative))
+    raw_inputs.append(
+        (
+            f"data/{RAW_NAME}",
+            "configs/data_manifests/matr.json",
+        )
+    )
+    output = tmp_path / "quanxin-three-batch-a100.zip"
+
+    manifest = build_matr_three_batch_a100_archive(
+        project_root=root,
+        output_archive=output,
+        tracked_files=("src/train.py",),
+        source_commit="a" * 40,
+        raw_inputs=tuple(raw_inputs),
+        processed_relative_paths=(
+            "data/processed/MATR/early",
+            "data/processed/MATR/supervision",
+        ),
+        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+    )
+
+    verified = verify_matr_three_batch_a100_archive(output)
+    assert verified.package_sha256 == manifest.package_sha256
+    assert len(verified.raw_matr_sha256) == 3
+    assert sum(
+        item.role.value == "raw-matr" for item in verified.files
+    ) == 3

@@ -5,10 +5,13 @@ from quanxin_life.training.a100_package import (
     A100PackageFileRole,
     MatrA100ArchiveIndex,
     MatrA100PackageManifest,
+    MatrThreeBatchA100PackageManifest,
     build_matr_a100_archive,
     build_matr_a100_archive_index,
+    build_matr_three_batch_a100_archive,
     verify_matr_a100_archive,
     verify_matr_a100_archive_index,
+    verify_matr_three_batch_a100_archive,
 )
 from quanxin_life.training.bundle import (
     TrainingBundleFile,
@@ -106,6 +109,7 @@ __all__ = [
     "MatrCurveCohorts",
     "MatrHybridCohorts",
     "MatrRunConfig",
+    "MatrThreeBatchA100PackageManifest",
     "MatrTrainingPaths",
     "ModelTrainingConfig",
     "PackageSnapshot",
@@ -126,6 +130,7 @@ __all__ = [
     "XGBoostCycleLifeResult",
     "build_matr_a100_archive",
     "build_matr_a100_archive_index",
+    "build_matr_three_batch_a100_archive",
     "build_run_matrix",
     "build_training_bundle_manifest",
     "build_training_output_index",
@@ -144,6 +149,7 @@ __all__ = [
     "validate_local_a100_binding",
     "verify_matr_a100_archive",
     "verify_matr_a100_archive_index",
+    "verify_matr_three_batch_a100_archive",
     "verify_training_bundle_manifest",
     "verify_training_output_index",
 ]
