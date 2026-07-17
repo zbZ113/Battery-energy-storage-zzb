@@ -19,6 +19,12 @@ from quanxin_life.training.config import (
     ModelTrainingConfig,
     TrainingSuiteConfig,
 )
+from quanxin_life.training.device import (
+    PhysicalGpuSnapshot,
+    VisibleCudaSnapshot,
+    validate_a100_gpu1_binding,
+    validate_local_a100_binding,
+)
 from quanxin_life.training.engine import (
     EpochMetrics,
     TrainingEngine,
@@ -66,6 +72,7 @@ __all__ = [
     "MatrCurveCohorts",
     "ModelTrainingConfig",
     "PackageSnapshot",
+    "PhysicalGpuSnapshot",
     "TrainingBundleFile",
     "TrainingBundleManifest",
     "TrainingCheckpointManifest",
@@ -76,6 +83,7 @@ __all__ = [
     "TrainingRunResult",
     "TrainingRunStatus",
     "TrainingSuiteConfig",
+    "VisibleCudaSnapshot",
     "build_training_bundle_manifest",
     "build_training_output_index",
     "build_training_preflight",
@@ -84,6 +92,8 @@ __all__ = [
     "load_training_checkpoint",
     "load_training_output_index",
     "save_training_checkpoint",
+    "validate_a100_gpu1_binding",
+    "validate_local_a100_binding",
     "verify_training_bundle_manifest",
     "verify_training_output_index",
 ]
