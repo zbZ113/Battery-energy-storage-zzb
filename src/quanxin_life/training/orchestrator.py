@@ -186,6 +186,7 @@ def _run_one(
             seed=key.seed,
             device="cuda" if device.type == "cuda" else "cpu",
             checkpoint_directory=run_directory / "checkpoints",
+            log_directory=run_directory,
         )
         xgboost_model.save_model(artifacts / "model.ubj")
         predicted = xgboost_model.predict(curve_cohorts.test)

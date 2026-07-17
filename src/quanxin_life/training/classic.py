@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import json
 import math
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
 import xgboost as xgb
 
-from quanxin_life.core import PredictionTarget
+from quanxin_life.core import PredictionTarget, sha256_canonical
 from quanxin_life.training.tasks import CycleLifeCurveBatch
 
 _FEATURE_NAMES = (
@@ -65,6 +71,7 @@ class XGBoostCycleLifeResult:
     feature_names: tuple[str, ...]
     best_iteration: int
     evaluation_history: dict[str, dict[str, list[float]]]
+    resumed_from_round: int | None = None
 
     def predict(self, batch: CycleLifeCurveBatch) -> np.ndarray:
         tabular = curve_batch_to_tabular(batch)
@@ -153,6 +160,9 @@ def train_xgboost_cycle_life(
     seed: int,
     device: str,
     checkpoint_directory: Path,
+    checkpoint_interval: int | None = None,
+    log_directory: Path | None = None,
+    _interrupt_after_round: int | None = None,
 ) -> XGBoostCycleLifeResult:
     if set(train_batch.cell_ids) & set(validation_batch.cell_ids):
         raise ValueError("XGBoost training and validation cohorts must be cell-disjoint")
@@ -173,8 +183,60 @@ def train_xgboost_cycle_life(
         label=validation.labels,
         feature_names=list(validation.feature_names),
     )
-    history: dict[str, dict[str, list[float]]] = {}
-    checkpoint_interval = min(50, max_rounds)
+    context_sha256 = _xgboost_context_sha256(
+        train=train,
+        validation=validation,
+        max_rounds=max_rounds,
+        early_stopping_rounds=early_stopping_rounds,
+        seed=seed,
+        device=device,
+    )
+    recovered = _load_xgboost_checkpoint(
+        checkpoint_directory,
+        expected_context_sha256=context_sha256,
+    )
+    if recovered is None:
+        initial_booster = None
+        completed_rounds = 0
+        best_iteration = -1
+        best_score: float | None = None
+        no_improvement = 0
+        history: dict[str, dict[str, list[float]]] = {}
+    else:
+        (
+            initial_booster,
+            completed_rounds,
+            best_iteration,
+            best_score,
+            no_improvement,
+            history,
+        ) = recovered
+    interval = checkpoint_interval or min(50, max_rounds)
+    if interval <= 0:
+        raise ValueError("XGBoost checkpoint interval must be positive")
+    callback = _XGBoostRecoveryCallback(
+        checkpoint_directory=checkpoint_directory,
+        context_sha256=context_sha256,
+        starting_round=completed_rounds,
+        checkpoint_interval=interval,
+        early_stopping_rounds=early_stopping_rounds,
+        best_iteration=best_iteration,
+        best_score=best_score,
+        no_improvement=no_improvement,
+        history=history,
+        log_directory=log_directory or checkpoint_directory.parent,
+        interrupt_after_round=_interrupt_after_round,
+    )
+    remaining_rounds = max_rounds - completed_rounds
+    if remaining_rounds <= 0:
+        assert initial_booster is not None
+        return XGBoostCycleLifeResult(
+            booster=initial_booster,
+            feature_names=train.feature_names,
+            best_iteration=best_iteration,
+            evaluation_history=history,
+            resumed_from_round=completed_rounds,
+        )
     booster = xgb.train(
         {
             "objective": "reg:squarederror",
@@ -187,27 +249,452 @@ def train_xgboost_cycle_life(
             "eta": 0.05,
         },
         dtrain,
-        num_boost_round=max_rounds,
+        num_boost_round=remaining_rounds,
         evals=((dtrain, "train"), (dvalidation, "validation")),
-        early_stopping_rounds=early_stopping_rounds,
-        evals_result=history,
-        verbose_eval=1,
-        callbacks=(
-            xgb.callback.TrainingCheckPoint(
-                directory=checkpoint_directory,
-                name="round",
-                as_pickle=False,
-                interval=checkpoint_interval,
-            ),
-        ),
+        verbose_eval=False,
+        callbacks=(callback,),
+        xgb_model=initial_booster,
     )
-    best_iteration = int(getattr(booster, "best_iteration", max_rounds - 1))
     return XGBoostCycleLifeResult(
         booster=booster,
         feature_names=train.feature_names,
-        best_iteration=best_iteration,
-        evaluation_history=history,
+        best_iteration=callback.best_iteration,
+        evaluation_history=callback.history,
+        resumed_from_round=completed_rounds or None,
     )
+
+
+class _XGBoostRecoveryCallback(xgb.callback.TrainingCallback):
+    def __init__(
+        self,
+        *,
+        checkpoint_directory: Path,
+        context_sha256: str,
+        starting_round: int,
+        checkpoint_interval: int,
+        early_stopping_rounds: int,
+        best_iteration: int,
+        best_score: float | None,
+        no_improvement: int,
+        history: dict[str, dict[str, list[float]]],
+        log_directory: Path,
+        interrupt_after_round: int | None,
+    ) -> None:
+        self.checkpoint_directory = checkpoint_directory
+        self.context_sha256 = context_sha256
+        self.starting_round = starting_round
+        self.checkpoint_interval = checkpoint_interval
+        self.early_stopping_rounds = early_stopping_rounds
+        self.best_iteration = best_iteration
+        self.best_score = best_score
+        self.no_improvement = no_improvement
+        self.history = history
+        self.log_directory = log_directory
+        self.interrupt_after_round = interrupt_after_round
+        self.completed_rounds = starting_round
+        self.last_saved_round = starting_round
+
+    def after_iteration(
+        self,
+        model: xgb.Booster,
+        epoch: int,
+        evals_log: dict[str, dict[str, list[float] | list[tuple[float, float]]]],
+    ) -> bool:
+        global_round = self.starting_round + epoch + 1
+        values = _append_xgboost_history(self.history, evals_log)
+        validation_mae = values["validation"]["mae"]
+        if self.best_score is None or validation_mae < self.best_score:
+            self.best_score = validation_mae
+            self.best_iteration = global_round - 1
+            self.no_improvement = 0
+        else:
+            self.no_improvement += 1
+        self.completed_rounds = global_round
+        model.set_attr(
+            best_iteration=str(self.best_iteration),
+            best_score=str(self.best_score),
+        )
+        should_stop = self.no_improvement >= self.early_stopping_rounds
+        if global_round % self.checkpoint_interval == 0 or should_stop:
+            self._save(model)
+        print(
+            f"xgboost_round={global_round} train_mae={values['train']['mae']:.6g} "
+            f"validation_mae={validation_mae:.6g} "
+            f"best_iteration={self.best_iteration} "
+            f"early_stop_counter={self.no_improvement}"
+        )
+        if (
+            self.interrupt_after_round is not None
+            and global_round >= self.interrupt_after_round
+        ):
+            if self.last_saved_round != global_round:
+                self._save(model)
+            raise RuntimeError("synthetic XGBoost interruption")
+        return should_stop
+
+    def after_training(self, model: xgb.Booster) -> xgb.Booster:
+        if self.completed_rounds > self.last_saved_round:
+            self._save(model)
+        return model
+
+    def _save(self, model: xgb.Booster) -> None:
+        _save_xgboost_checkpoint(
+            self.checkpoint_directory,
+            context_sha256=self.context_sha256,
+            completed_rounds=self.completed_rounds,
+            best_iteration=self.best_iteration,
+            best_score=self.best_score,
+            no_improvement=self.no_improvement,
+            history=self.history,
+            booster=model,
+        )
+        _write_xgboost_logs(self.log_directory, self.history)
+        self.last_saved_round = self.completed_rounds
+
+
+def _append_xgboost_history(
+    history: dict[str, dict[str, list[float]]],
+    evals_log: dict[str, dict[str, list[float] | list[tuple[float, float]]]],
+) -> dict[str, dict[str, float]]:
+    current: dict[str, dict[str, float]] = {}
+    for dataset, metrics in evals_log.items():
+        current[dataset] = {}
+        for metric_name, metric_values in metrics.items():
+            latest = metric_values[-1]
+            value = float(latest[0] if isinstance(latest, tuple) else latest)
+            if not math.isfinite(value):
+                raise ValueError("XGBoost evaluation metrics must be finite")
+            history.setdefault(dataset, {}).setdefault(metric_name, []).append(value)
+            current[dataset][metric_name] = value
+    if "validation" not in current or "mae" not in current["validation"]:
+        raise ValueError("XGBoost recovery requires validation MAE")
+    return current
+
+
+def _xgboost_context_sha256(
+    *,
+    train: CurveTabularBatch,
+    validation: CurveTabularBatch,
+    max_rounds: int,
+    early_stopping_rounds: int,
+    seed: int,
+    device: str,
+) -> str:
+    return sha256_canonical(
+        {
+            "schema_version": "xgboost-recovery-context-v1",
+            "train_cell_ids": train.cell_ids,
+            "validation_cell_ids": validation.cell_ids,
+            "feature_names": train.feature_names,
+            "train_values_sha256": hashlib.sha256(train.values.tobytes()).hexdigest(),
+            "train_labels_sha256": hashlib.sha256(train.labels.tobytes()).hexdigest(),
+            "validation_values_sha256": hashlib.sha256(
+                validation.values.tobytes()
+            ).hexdigest(),
+            "validation_labels_sha256": hashlib.sha256(
+                validation.labels.tobytes()
+            ).hexdigest(),
+            "max_rounds": max_rounds,
+            "early_stopping_rounds": early_stopping_rounds,
+            "seed": seed,
+            "device": device,
+        }
+    )
+
+
+def _save_xgboost_checkpoint(
+    checkpoint_directory: Path,
+    *,
+    context_sha256: str,
+    completed_rounds: int,
+    best_iteration: int,
+    best_score: float | None,
+    no_improvement: int,
+    history: dict[str, dict[str, list[float]]],
+    booster: xgb.Booster,
+) -> None:
+    name = f"round-{completed_rounds:06d}"
+    target = checkpoint_directory / name
+    temporary = checkpoint_directory / f".{name}.{os.getpid()}.tmp"
+    if target.exists() or temporary.exists():
+        raise ValueError("XGBoost checkpoint round path already exists")
+    temporary.mkdir()
+    try:
+        model_path = temporary / "model.ubj"
+        state_path = temporary / "state.json"
+        booster.save_model(model_path)
+        state = {
+            "schema_version": "xgboost-recovery-state-v1",
+            "context_sha256": context_sha256,
+            "completed_rounds": completed_rounds,
+            "best_iteration": best_iteration,
+            "best_score": best_score,
+            "no_improvement": no_improvement,
+            "evaluation_history": history,
+        }
+        _write_json(state_path, state)
+        manifest_payload = {
+            "schema_version": "xgboost-recovery-manifest-v1",
+            "context_sha256": context_sha256,
+            "files": [
+                _file_row(model_path),
+                _file_row(state_path),
+            ],
+        }
+        _write_json(
+            temporary / "manifest.json",
+            {
+                **manifest_payload,
+                "manifest_sha256": sha256_canonical(manifest_payload),
+            },
+        )
+        temporary.replace(target)
+        _write_json_atomic(checkpoint_directory / "last.json", {"checkpoint": name})
+        _prune_xgboost_checkpoints(checkpoint_directory, keep_recent=3)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+
+
+def _load_xgboost_checkpoint(
+    checkpoint_directory: Path,
+    *,
+    expected_context_sha256: str,
+) -> tuple[
+    xgb.Booster,
+    int,
+    int,
+    float | None,
+    int,
+    dict[str, dict[str, list[float]]],
+] | None:
+    pointer = checkpoint_directory / "last.json"
+    if not pointer.exists():
+        return None
+    pointer_payload = _read_json(pointer)
+    if set(pointer_payload) != {"checkpoint"}:
+        raise ValueError("XGBoost checkpoint pointer schema is invalid")
+    name = pointer_payload["checkpoint"]
+    if not isinstance(name, str) or not name.startswith("round-"):
+        raise ValueError("XGBoost checkpoint pointer is invalid")
+    root = checkpoint_directory / name
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("XGBoost checkpoint directory is invalid")
+    manifest = _read_json(root / "manifest.json")
+    claimed_manifest_sha256 = manifest.pop("manifest_sha256", None)
+    if claimed_manifest_sha256 != sha256_canonical(manifest):
+        raise ValueError("XGBoost checkpoint manifest SHA-256 mismatch")
+    if manifest.get("context_sha256") != expected_context_sha256:
+        raise ValueError("XGBoost checkpoint context does not match this run")
+    files = manifest.get("files")
+    if not isinstance(files, list) or len(files) != 2:
+        raise ValueError("XGBoost checkpoint file inventory is invalid")
+    expected_names = {"manifest.json"}
+    for row in files:
+        if not isinstance(row, dict) or set(row) != {
+            "relative_path",
+            "size_bytes",
+            "sha256",
+        }:
+            raise ValueError("XGBoost checkpoint file row is invalid")
+        relative = row["relative_path"]
+        if relative not in {"model.ubj", "state.json"}:
+            raise ValueError("XGBoost checkpoint contains an unapproved file")
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("XGBoost checkpoint file is missing")
+        if path.stat().st_size != row["size_bytes"]:
+            raise ValueError("XGBoost checkpoint file size mismatch")
+        if _sha256_file(path) != row["sha256"]:
+            raise ValueError("XGBoost checkpoint file SHA-256 mismatch")
+        expected_names.add(relative)
+    if {path.name for path in root.iterdir()} != expected_names:
+        raise ValueError("XGBoost checkpoint contains an unexpected file")
+    state = _read_json(root / "state.json")
+    if state.get("context_sha256") != expected_context_sha256:
+        raise ValueError("XGBoost checkpoint state context mismatch")
+    completed_rounds = _required_nonnegative_int(state, "completed_rounds")
+    best_iteration = _required_nonnegative_int(state, "best_iteration")
+    no_improvement = _required_nonnegative_int(state, "no_improvement")
+    best_score_value = state.get("best_score")
+    if best_score_value is not None and not isinstance(best_score_value, (int, float)):
+        raise ValueError("XGBoost checkpoint best score is invalid")
+    history_value = state.get("evaluation_history")
+    if not isinstance(history_value, dict):
+        raise ValueError("XGBoost checkpoint evaluation history is invalid")
+    history = _validate_xgboost_history(history_value, completed_rounds)
+    booster = xgb.Booster()
+    booster.load_model(root / "model.ubj")
+    if booster.num_boosted_rounds() != completed_rounds:
+        raise ValueError("XGBoost checkpoint round count does not match its state")
+    return (
+        booster,
+        completed_rounds,
+        best_iteration,
+        None if best_score_value is None else float(best_score_value),
+        no_improvement,
+        history,
+    )
+
+
+def _validate_xgboost_history(
+    value: dict[str, Any], completed_rounds: int
+) -> dict[str, dict[str, list[float]]]:
+    result: dict[str, dict[str, list[float]]] = {}
+    for dataset, metrics in value.items():
+        if not isinstance(dataset, str) or not isinstance(metrics, dict):
+            raise ValueError("XGBoost checkpoint history is invalid")
+        result[dataset] = {}
+        for name, values in metrics.items():
+            if not isinstance(name, str) or not isinstance(values, list):
+                raise ValueError("XGBoost checkpoint metric history is invalid")
+            normalized = [float(item) for item in values]
+            if len(normalized) != completed_rounds or not all(
+                math.isfinite(item) for item in normalized
+            ):
+                raise ValueError("XGBoost checkpoint metric history length is invalid")
+            result[dataset][name] = normalized
+    return result
+
+
+def _required_nonnegative_int(payload: dict[str, Any], key: str) -> int:
+    value = payload.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"XGBoost checkpoint {key} is invalid")
+    return value
+
+
+def _file_row(path: Path) -> dict[str, Any]:
+    return {
+        "relative_path": path.name,
+        "size_bytes": path.stat().st_size,
+        "sha256": _sha256_file(path),
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(
+        json.dumps(payload, allow_nan=False, sort_keys=True, separators=(",", ":"))
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    _write_json(temporary, payload)
+    temporary.replace(path)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("XGBoost checkpoint JSON must be a regular file")
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key is forbidden: {key}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON constant is forbidden: {value}")
+
+    payload = json.loads(
+        path.read_bytes(),
+        object_pairs_hook=unique_object,
+        parse_constant=reject_constant,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("XGBoost checkpoint JSON must contain an object")
+    return payload
+
+
+def _prune_xgboost_checkpoints(checkpoint_directory: Path, *, keep_recent: int) -> None:
+    root = checkpoint_directory.resolve(strict=True)
+    directories = sorted(
+        path
+        for path in checkpoint_directory.glob("round-*")
+        if path.is_dir() and not path.is_symlink()
+    )
+    for path in directories[:-keep_recent]:
+        resolved = path.resolve(strict=True)
+        if resolved.parent != root:
+            raise ValueError("XGBoost checkpoint pruning target escapes its root")
+        shutil.rmtree(resolved)
+
+
+def _write_xgboost_logs(
+    log_directory: Path,
+    history: dict[str, dict[str, list[float]]],
+) -> None:
+    train_mae = history.get("train", {}).get("mae", [])
+    validation_mae = history.get("validation", {}).get("mae", [])
+    if len(train_mae) != len(validation_mae):
+        raise ValueError("XGBoost train and validation histories must align")
+    log_directory.mkdir(parents=True, exist_ok=True)
+    rows = [
+        (index, train_value, validation_value)
+        for index, (train_value, validation_value) in enumerate(
+            zip(train_mae, validation_mae, strict=True),
+            start=1,
+        )
+    ]
+    jsonl = "".join(
+        json.dumps(
+            {
+                "round": round_index,
+                "train_mae": train_value,
+                "validation_mae": validation_value,
+            },
+            allow_nan=False,
+            sort_keys=True,
+        )
+        + "\n"
+        for round_index, train_value, validation_value in rows
+    )
+    _write_text_atomic(log_directory / "training_log.jsonl", jsonl)
+    _write_csv_atomic(
+        log_directory / "metrics_epoch.csv",
+        ("round", "train_mae"),
+        [(round_index, train_value) for round_index, train_value, _validation in rows],
+    )
+    _write_csv_atomic(
+        log_directory / "metrics_validation.csv",
+        ("round", "validation_mae"),
+        [
+            (round_index, validation_value)
+            for round_index, _train, validation_value in rows
+        ],
+    )
+
+
+def _write_text_atomic(path: Path, payload: str) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _write_csv_atomic(
+    path: Path,
+    fieldnames: tuple[str, ...],
+    rows: list[tuple[int, float]],
+) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(fieldnames)
+        writer.writerows(rows)
+    temporary.replace(path)
 
 
 def _require_official_target(batch: CycleLifeCurveBatch) -> None:
