@@ -74,3 +74,71 @@ def build_cell_split(
         test=tuple(sorted(assignments[SplitName.TEST.value])),
     )
 
+
+def build_stratified_cell_split(
+    dataset_id: str,
+    cell_strata: Mapping[str, str],
+    *,
+    seed: int = DEFAULT_SEED,
+    ratios: Sequence[float] = DEFAULT_RATIOS,
+) -> SplitManifest:
+    """Create exact-size cell partitions while preserving sparse strata greedily."""
+
+    if not cell_strata or any(not cell for cell in cell_strata):
+        raise ValueError("at least one non-empty cell identifier is required")
+    if any(not isinstance(stratum, str) or not stratum.strip() for stratum in cell_strata.values()):
+        raise ValueError("every cell requires a non-empty stratum")
+
+    names = tuple(member.value for member in SplitName)
+    targets = dict(zip(names, _target_counts(len(cell_strata), ratios), strict=True))
+    assignments: dict[str, list[str]] = {name: [] for name in names}
+    by_stratum: dict[str, list[str]] = {}
+    for cell_id, stratum in sorted(cell_strata.items()):
+        by_stratum.setdefault(stratum, []).append(cell_id)
+
+    generator = random.Random(seed)
+    strata = sorted(by_stratum)
+    generator.shuffle(strata)
+    for stratum in strata:
+        cells = sorted(by_stratum[stratum])
+        generator.shuffle(cells)
+        stratum_counts = {name: 0 for name in names}
+        desired = {
+            name: len(cells) * ratio for name, ratio in zip(names, ratios, strict=True)
+        }
+        tie_order = list(names)
+        generator.shuffle(tie_order)
+        tie_rank = {name: index for index, name in enumerate(tie_order)}
+
+        for cell_id in cells:
+            candidates = [
+                name for name in names if len(assignments[name]) < targets[name]
+            ]
+            if not candidates:
+                raise ValueError("split capacity was exhausted before all cells were assigned")
+
+            scored_candidates: list[tuple[tuple[float, float, int], str]] = []
+            for name in candidates:
+                before = stratum_counts[name] - desired[name]
+                after = stratum_counts[name] + 1 - desired[name]
+                marginal_error = after * after - before * before
+                remaining_share = (targets[name] - len(assignments[name])) / max(
+                    targets[name], 1
+                )
+                scored_candidates.append(
+                    ((marginal_error, -remaining_share, tie_rank[name]), name)
+                )
+
+            selected = min(scored_candidates)[1]
+            assignments[selected].append(cell_id)
+            stratum_counts[selected] += 1
+
+    return SplitManifest(
+        dataset_id=dataset_id,
+        seed=seed,
+        train=tuple(sorted(assignments[SplitName.TRAIN.value])),
+        validation=tuple(sorted(assignments[SplitName.VALIDATION.value])),
+        calibration=tuple(sorted(assignments[SplitName.CALIBRATION.value])),
+        test=tuple(sorted(assignments[SplitName.TEST.value])),
+    )
+

@@ -1,6 +1,6 @@
 """Safe adapters for externally sourced battery datasets."""
 
-from quanxin_life.data.adapters.matr import MatrCell, load_matr_batch
+from quanxin_life.data.adapters.matr import MatrCell, iter_matr_batch, load_matr_batch
 from quanxin_life.data.adapters.naumann import (
     NaumannCell,
     NaumannWorkbookLayout,
@@ -38,6 +38,7 @@ __all__ = [
     "NaumannWorkbookUnits",
     "ReviewedAxisSelection",
     "ReviewedAxisSelectionResult",
+    "iter_matr_batch",
     "load_matr_batch",
     "load_naumann_calendar_capacity",
     "load_naumann_calendar_layout",

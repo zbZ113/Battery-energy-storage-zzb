@@ -5,7 +5,7 @@ import h5py
 import numpy as np
 import pytest
 
-from quanxin_life.data.adapters.matr import load_matr_batch
+from quanxin_life.data.adapters.matr import iter_matr_batch, load_matr_batch
 from quanxin_life.data.manifest import RawFileManifest
 
 
@@ -18,6 +18,8 @@ def _write_matr_file(
     mismatched_voltage: bool = False,
     mismatched_auxiliary: bool = False,
     extra_policy_reference: bool = False,
+    cycle_count: int = 2,
+    nan_life_cell_indices: tuple[int, ...] = (),
 ) -> None:
     with h5py.File(path, "w") as handle:
         batch = handle.create_group("batch")
@@ -36,20 +38,33 @@ def _write_matr_file(
                 data=np.array([ord(char) for char in "3.6C(80%)-1C"], dtype=np.uint16),
             )
             cycle_life = handle.create_dataset(
-                f"cycle_life_{cell_index}", data=np.array([1000.0 + cell_index])
+                f"cycle_life_{cell_index}",
+                data=np.array(
+                    [float("nan") if cell_index in nan_life_cell_indices else 1000.0 + cell_index]
+                ),
             )
             policy_refs[cell_index, 0] = policy.ref
             life_refs[cell_index, 0] = cycle_life.ref
 
             summary = handle.create_group(f"summary_{cell_index}")
             if include_resistance:
-                summary.create_dataset("IR", data=np.array([[0.01, 0.02]]))
+                summary.create_dataset(
+                    "IR", data=np.array([np.linspace(0.01, 0.02, cycle_count)])
+                )
+            summary.create_dataset(
+                "QDischarge",
+                data=np.array(
+                    [[0.9 + 0.01 * cycle_index for cycle_index in range(cycle_count)]]
+                ),
+            )
             summary_refs[cell_index, 0] = summary.ref
 
             cycles = handle.create_group(f"cycles_{cell_index}")
             for field in ("t", "V", "I", "Qc", "Qd"):
-                refs = cycles.create_dataset(field, (2, 1), dtype=h5py.ref_dtype)
-                for cycle_index in range(2):
+                refs = cycles.create_dataset(
+                    field, (cycle_count, 1), dtype=h5py.ref_dtype
+                )
+                for cycle_index in range(cycle_count):
                     values = np.array([0.0, 1.0, 2.0])
                     if field == "V":
                         values = np.array([3.2, 3.3]) if mismatched_voltage else values + 3.2
@@ -63,14 +78,18 @@ def _write_matr_file(
                     refs[cycle_index, 0] = dataset.ref
 
             if include_temperature:
-                refs = cycles.create_dataset("T", (2, 1), dtype=h5py.ref_dtype)
-                for cycle_index in range(2):
+                refs = cycles.create_dataset(
+                    "T", (cycle_count, 1), dtype=h5py.ref_dtype
+                )
+                for cycle_index in range(cycle_count):
                     dataset = handle.create_dataset(
                         f"T_{cell_index}_{cycle_index}", data=np.array([25.0, 26.0, 27.0])
                     )
                     refs[cycle_index, 0] = dataset.ref
             auxiliary = cycles.create_dataset(
-                "Qdlin", (1 if mismatched_auxiliary else 2, 1), dtype=h5py.ref_dtype
+                "Qdlin",
+                (1 if mismatched_auxiliary else cycle_count, 1),
+                dtype=h5py.ref_dtype,
             )
             for cycle_index in range(auxiliary.shape[0]):
                 dataset = handle.create_dataset(
@@ -113,10 +132,13 @@ def test_loads_cells_with_provenance_and_preserves_cycle_zero(tmp_path: Path) ->
     assert metadata.protocol_description == "3.6C(80%)-1C"
     assert metadata.official_life_label == 1000
     assert metadata.official_life_label_name == "MATR_cycle_life"
-    assert metadata.adapter_version == "matr-hdf5-v1.1.0"
+    assert metadata.adapter_version == "matr-hdf5-v1.2.0"
     assert metadata.ingestion_parameters == {
         "batch_index": 3,
         "max_cycle_index": None,
+        "observed_cycle_count": 2,
+        "official_life_right_censored": False,
+        "reference_capacity_cycles": [1, 2, 3, 4, 5],
         "selected_raw_cell_ids": None,
         "skip_cycle_zero": False,
         "time_unit": "seconds",
@@ -127,6 +149,62 @@ def test_loads_cells_with_provenance_and_preserves_cycle_zero(tmp_path: Path) ->
     assert records[0].time_s == 0.0
     assert records[0].voltage_v == 3.2
     assert records[0].internal_resistance_ohm == 0.01
+    assert records[0].diagnostic is False
+    assert all(record.diagnostic for record in records if record.cycle_index == 1)
+
+
+def test_uses_fixed_post_formation_reference_capacity_window(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path, cycle_count=6)
+
+    metadata, records = load_matr_batch(
+        path,
+        _manifest(path),
+        batch_index=3,
+        time_unit="minutes",
+        max_cycle_index=5,
+    )[0]
+
+    assert metadata.reference_capacity_ah == pytest.approx(0.93)
+    assert metadata.ingestion_parameters["reference_capacity_cycles"] == [1, 2, 3, 4, 5]
+    assert records[0].diagnostic is False
+    assert all(record.diagnostic for record in records if record.cycle_index >= 1)
+
+
+def test_iterates_cells_without_materializing_the_batch_tuple(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path, cell_count=2)
+
+    cells = iter_matr_batch(
+        path,
+        _manifest(path),
+        batch_index=3,
+        time_unit="seconds",
+    )
+
+    assert iter(cells) is cells
+    first_metadata, _ = next(cells)
+    second_metadata, _ = next(cells)
+    assert (first_metadata.raw_cell_id, second_metadata.raw_cell_id) == ("b3c0", "b3c1")
+    with pytest.raises(StopIteration):
+        next(cells)
+
+
+def test_preserves_nan_official_life_as_explicit_right_censoring(tmp_path: Path) -> None:
+    path = tmp_path / "batch.mat"
+    _write_matr_file(path, cycle_count=6, nan_life_cell_indices=(0,))
+
+    metadata, _ = load_matr_batch(
+        path,
+        _manifest(path),
+        batch_index=3,
+        time_unit="minutes",
+        max_cycle_index=5,
+    )[0]
+
+    assert metadata.official_life_label is None
+    assert metadata.ingestion_parameters["official_life_right_censored"] is True
+    assert metadata.ingestion_parameters["observed_cycle_count"] == 6
 
 
 def test_selects_requested_cell_and_bounds_materialized_cycles(tmp_path: Path) -> None:

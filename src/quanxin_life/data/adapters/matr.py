@@ -1,6 +1,8 @@
 import math
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
+from datetime import date
 from pathlib import Path
+from statistics import median
 from typing import Any, Literal, TypeAlias
 
 from quanxin_life.core import CellMetadata, sha256_canonical
@@ -11,7 +13,8 @@ MatrCell: TypeAlias = tuple[CellMetadata, tuple[CycleRecord, ...]]
 
 _ALLOWED_SUFFIXES = frozenset({".mat", ".h5", ".hdf5"})
 _REQUIRED_SAMPLE_FIELDS = ("t", "V", "I", "Qc", "Qd")
-_ADAPTER_VERSION = "matr-hdf5-v1.1.0"
+_ADAPTER_VERSION = "matr-hdf5-v1.2.0"
+_REFERENCE_CAPACITY_CYCLES = (1, 2, 3, 4, 5)
 
 
 def _flatten_numeric(value: Any) -> list[float]:
@@ -55,6 +58,17 @@ def _resolve_text_reference(handle: Any, reference: Any) -> str:
     return text
 
 
+def _resolve_batch_date(handle: Any) -> date:
+    if "batch_date" not in handle:
+        raise ValueError("MATR file is missing batch_date metadata")
+    values = handle["batch_date"][()].reshape(-1)
+    text = "".join(chr(int(item)) for item in values if int(item) != 0).strip()
+    try:
+        return date.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError("MATR batch_date must use ISO YYYY-MM-DD format") from exc
+
+
 def _select_cell_indices(
     *,
     batch_index: int,
@@ -82,7 +96,7 @@ def _select_cell_indices(
     return tuple(available_indices[raw_cell_id] for raw_cell_id in selected), list(selected)
 
 
-def load_matr_batch(
+def iter_matr_batch(
     path: Path,
     manifest: RawFileManifest,
     *,
@@ -91,11 +105,15 @@ def load_matr_batch(
     skip_cycle_zero: bool = False,
     selected_raw_cell_ids: Collection[str] | None = None,
     max_cycle_index: int | None = None,
-) -> tuple[MatrCell, ...]:
-    """Load one provenance-verified MATR MATLAB v7.3/HDF5 batch.
+    expected_batch_date: date | None = None,
+) -> Iterator[MatrCell]:
+    """Yield one cell at a time from a verified MATR MATLAB v7.3/HDF5 batch.
 
     The raw ``t`` unit is intentionally explicit because published MATR readers
-    disagree about whether it is seconds or minutes.
+    disagree about whether it is seconds or minutes.  Cycle zero is retained as
+    raw evidence but is not a post-formation diagnostic cycle.  The stable SOH
+    reference is the median summary discharge capacity from cycles 1 through 5
+    when all five cycles are inside the requested observation horizon.
     """
     path = Path(path)
     if manifest.dataset_id != "MATR":
@@ -120,8 +138,14 @@ def load_matr_batch(
     except ImportError as exc:  # pragma: no cover - exercised only without the data extra
         raise RuntimeError("MATR loading requires the 'data' optional dependencies") from exc
 
-    cells: list[MatrCell] = []
     with h5py.File(path, "r") as handle:
+        resolved_batch_date: date | None = None
+        if expected_batch_date is not None:
+            resolved_batch_date = _resolve_batch_date(handle)
+            if resolved_batch_date != expected_batch_date:
+                raise ValueError(
+                    "MATR batch_date does not match the reviewed conversion configuration"
+                )
         if "batch" not in handle:
             raise ValueError("MATR file is missing the 'batch' group")
         batch = handle["batch"]
@@ -151,11 +175,17 @@ def load_matr_batch(
             life_values = _resolve_numeric_dataset(
                 handle, handle[batch["cycle_life"][cell_index, 0]]
             )
-            if len(life_values) != 1 or not math.isfinite(life_values[0]):
+            if len(life_values) != 1:
                 raise ValueError(f"{cell_id} has invalid official cycle-life label")
-            official_life = int(life_values[0])
-            if official_life < 0 or not math.isclose(life_values[0], official_life):
-                raise ValueError(f"{cell_id} has invalid official cycle-life label")
+            raw_official_life = life_values[0]
+            official_life_right_censored = math.isnan(raw_official_life)
+            official_life: int | None = None
+            if not official_life_right_censored:
+                if not math.isfinite(raw_official_life):
+                    raise ValueError(f"{cell_id} has invalid official cycle-life label")
+                official_life = int(raw_official_life)
+                if official_life < 0 or not math.isclose(raw_official_life, official_life):
+                    raise ValueError(f"{cell_id} has invalid official cycle-life label")
             missing = [field for field in _REQUIRED_SAMPLE_FIELDS if field not in cycles]
             if missing:
                 missing_fields = ", ".join(missing)
@@ -172,6 +202,9 @@ def load_matr_batch(
             resistance = _optional_summary_values(handle, summary, "IR")
             if resistance is not None and len(resistance) != cycle_count:
                 raise ValueError(f"{cell_id} has inconsistent internal-resistance cycle count")
+            summary_discharge = _optional_summary_values(handle, summary, "QDischarge")
+            if summary_discharge is None or len(summary_discharge) != cycle_count:
+                raise ValueError(f"{cell_id} has inconsistent summary discharge-capacity count")
 
             records: list[CycleRecord] = []
             bounded_cycle_count = (
@@ -215,8 +248,19 @@ def load_matr_batch(
                             internal_resistance_ohm=(
                                 resistance[cycle_index] if resistance is not None else None
                             ),
+                            diagnostic=cycle_index > 0,
                         )
                     )
+
+            reference_capacity_ah: float | None = None
+            if bounded_cycle_count > _REFERENCE_CAPACITY_CYCLES[-1]:
+                reference_values = [
+                    summary_discharge[cycle_index]
+                    for cycle_index in _REFERENCE_CAPACITY_CYCLES
+                ]
+                if any(not math.isfinite(value) or value <= 0 for value in reference_values):
+                    raise ValueError(f"{cell_id} has invalid reference-capacity window")
+                reference_capacity_ah = float(median(reference_values))
 
             metadata = CellMetadata(
                 dataset_id=manifest.dataset_id,
@@ -224,7 +268,7 @@ def load_matr_batch(
                 raw_cell_id=raw_cell_id,
                 chemistry="LFP/graphite",
                 nominal_capacity_ah=1.1,
-                reference_capacity_ah=None,
+                reference_capacity_ah=reference_capacity_ah,
                 protocol_id=f"MATR_policy_{sha256_canonical(policy)[:16]}",
                 protocol_description=policy,
                 official_life_label=official_life,
@@ -235,11 +279,45 @@ def load_matr_batch(
                 adapter_version=_ADAPTER_VERSION,
                 ingestion_parameters={
                     "batch_index": batch_index,
+                    **(
+                        {"batch_date": resolved_batch_date.isoformat()}
+                        if resolved_batch_date is not None
+                        else {}
+                    ),
                     "max_cycle_index": max_cycle_index,
+                    "observed_cycle_count": cycle_count,
+                    "official_life_right_censored": official_life_right_censored,
+                    "reference_capacity_cycles": list(_REFERENCE_CAPACITY_CYCLES),
                     "selected_raw_cell_ids": selected_ids_for_metadata,
                     "skip_cycle_zero": skip_cycle_zero,
                     "time_unit": time_unit,
                 },
             )
-            cells.append((metadata, tuple(records)))
-    return tuple(cells)
+            yield metadata, tuple(records)
+
+
+def load_matr_batch(
+    path: Path,
+    manifest: RawFileManifest,
+    *,
+    batch_index: int,
+    time_unit: Literal["seconds", "minutes"],
+    skip_cycle_zero: bool = False,
+    selected_raw_cell_ids: Collection[str] | None = None,
+    max_cycle_index: int | None = None,
+    expected_batch_date: date | None = None,
+) -> tuple[MatrCell, ...]:
+    """Materialize selected MATR cells; prefer :func:`iter_matr_batch` for full batches."""
+
+    return tuple(
+        iter_matr_batch(
+            path,
+            manifest,
+            batch_index=batch_index,
+            time_unit=time_unit,
+            skip_cycle_zero=skip_cycle_zero,
+            selected_raw_cell_ids=selected_raw_cell_ids,
+            max_cycle_index=max_cycle_index,
+            expected_batch_date=expected_batch_date,
+        )
+    )
