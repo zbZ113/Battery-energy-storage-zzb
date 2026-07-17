@@ -30,6 +30,8 @@ class CurveTensorConfig(BaseModel):
 
     cutoff_cycle: int
     voltage_grid_step_v: float = Field(default=0.01, gt=0, le=0.1)
+    voltage_min_v: float | None = Field(default=None, allow_inf_nan=False)
+    voltage_max_v: float | None = Field(default=None, allow_inf_nan=False)
     min_curve_points: int = Field(default=3, ge=2)
     feature_version: str = Field(default=CURVE_TENSOR_FEATURE_VERSION, min_length=1)
 
@@ -39,6 +41,23 @@ class CurveTensorConfig(BaseModel):
             raise ValueError(
                 f"cutoff_cycle must be one of {_SUPPORTED_CUTOFF_CYCLES}, got {self.cutoff_cycle}"
             )
+        if (self.voltage_min_v is None) != (self.voltage_max_v is None):
+            raise ValueError("voltage_min_v and voltage_max_v must be provided together")
+        if self.voltage_min_v is not None and self.voltage_max_v is not None:
+            if self.voltage_max_v <= self.voltage_min_v:
+                raise ValueError("voltage_max_v must exceed voltage_min_v")
+            point_count = (
+                int(
+                    np.floor(
+                        (self.voltage_max_v - self.voltage_min_v)
+                        / self.voltage_grid_step_v
+                        + 1e-12
+                    )
+                )
+                + 1
+            )
+            if point_count < self.min_curve_points:
+                raise ValueError("explicit voltage grid has fewer than min_curve_points")
         return self
 
 
@@ -129,11 +148,19 @@ def build_discharge_curve_tensor(
         if cycle_index not in curves:
             warnings.append(f"CURVE_UNAVAILABLE_CYCLE_{cycle_index}")
 
-    voltage_grid = _shared_voltage_grid(
-        tuple(curves.values()),
-        voltage_grid_step_v=config.voltage_grid_step_v,
-        min_curve_points=config.min_curve_points,
-    )
+    voltage_grid: np.ndarray | None
+    if config.voltage_min_v is not None and config.voltage_max_v is not None:
+        voltage_grid = _bounded_voltage_grid(
+            lower=config.voltage_min_v,
+            upper=config.voltage_max_v,
+            step=config.voltage_grid_step_v,
+        )
+    else:
+        voltage_grid = _shared_voltage_grid(
+            tuple(curves.values()),
+            voltage_grid_step_v=config.voltage_grid_step_v,
+            min_curve_points=config.min_curve_points,
+        )
     if voltage_grid is None:
         warnings.append("CURVE_TENSOR_GRID_UNAVAILABLE")
         return CurveTensor(
@@ -231,3 +258,8 @@ def _shared_voltage_grid(
     if point_count < min_curve_points:
         return None
     return lower + np.arange(point_count, dtype=np.float64) * voltage_grid_step_v
+
+
+def _bounded_voltage_grid(*, lower: float, upper: float, step: float) -> np.ndarray:
+    point_count = int(np.floor((upper - lower) / step + 1e-12)) + 1
+    return lower + np.arange(point_count, dtype=np.float64) * step

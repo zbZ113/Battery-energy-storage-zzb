@@ -88,3 +88,23 @@ def test_preserves_missing_curves_as_masked_none_rows_without_zero_fill() -> Non
     assert result.observed_mask[2] is False
     assert all(value is None for value in result.values[2])
     assert "CURVE_UNAVAILABLE_CYCLE_2" in result.warnings
+
+
+def test_explicit_voltage_bounds_produce_a_cohort_stable_grid() -> None:
+    result = build_discharge_curve_tensor(
+        _records(),
+        config=CurveTensorConfig(
+            cutoff_cycle=20,
+            voltage_grid_step_v=0.1,
+            voltage_min_v=3.1,
+            voltage_max_v=3.5,
+        ),
+    )
+
+    assert result.voltage_grid_v == pytest.approx((3.1, 3.2, 3.3, 3.4, 3.5))
+    assert result.observed_mask[1:3] == (True, True)
+
+
+def test_explicit_voltage_bounds_must_be_provided_together() -> None:
+    with pytest.raises(ValueError, match="provided together"):
+        CurveTensorConfig(cutoff_cycle=20, voltage_min_v=3.0)
