@@ -10,7 +10,7 @@ from __future__ import annotations
 import importlib
 from base64 import b64decode
 from binascii import Error as Base64DecodeError
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import Field, ValidationError
@@ -46,6 +46,17 @@ LifetimeWorkflowRunner = Callable[
     LifetimeDecisionWorkflowResult,
 ]
 CanonicalCsvRegistrar = Callable[[bytes, CanonicalCsvBatchRegistration], str]
+
+
+DOMAIN_ROUTE_TOOL_MAP: dict[str, StandardToolName] = {
+    "/v1/analyses/quality": StandardToolName.VALIDATE_BATTERY_DATA,
+    "/v1/predictions/lifetime": StandardToolName.PREDICT_CYCLE_LIFE,
+    "/v1/predictions/trajectory": StandardToolName.PREDICT_SOH_TRAJECTORY,
+    "/v1/predictions/update": StandardToolName.UPDATE_CELL_PARAMETERS,
+    "/v1/physics/check": StandardToolName.CHECK_OPERATING_CONDITION,
+    "/v1/experiments/recommend": StandardToolName.RECOMMEND_NEXT_EXPERIMENT,
+    "/v1/decisions/batch": StandardToolName.MAKE_BATCH_DECISION,
+}
 
 
 class CanonicalCsvUploadRequest(ContractModel):
@@ -195,10 +206,10 @@ def create_fastapi_app(
             )
         return {"result_id": result.result_id, "markdown": markdown}
 
-    @app.post(  # type: ignore[untyped-decorator]
-        "/v1/tools/{tool_name}", **operator_route_options
-    )
-    async def invoke_tool(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def execute_domain_tool(
+        tool_name: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         try:
             invocation = ToolInvocation(
                 tool_name=StandardToolName(tool_name), input_value=payload
@@ -225,6 +236,26 @@ def create_fastapi_app(
                 detail="domain tool execution failed",
             ) from exc
         return result.model_dump(mode="json")
+
+    @app.post(  # type: ignore[untyped-decorator]
+        "/v1/tools/{tool_name}", **operator_route_options
+    )
+    async def invoke_tool(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await execute_domain_tool(tool_name, payload)
+
+    def domain_tool_endpoint(
+        tool_name: StandardToolName,
+    ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
+        async def endpoint(payload: dict[str, Any]) -> dict[str, Any]:
+            return await execute_domain_tool(tool_name.value, payload)
+
+        endpoint.__name__ = f"invoke_{tool_name.value}"
+        return endpoint
+
+    for route_path, route_tool_name in DOMAIN_ROUTE_TOOL_MAP.items():
+        app.post(route_path, **operator_route_options)(
+            domain_tool_endpoint(route_tool_name)
+        )
 
     if lifetime_workflow_runner is not None:
 

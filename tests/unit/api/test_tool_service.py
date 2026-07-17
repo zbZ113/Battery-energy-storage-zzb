@@ -205,6 +205,39 @@ def test_fastapi_factory_uses_the_project_title(monkeypatch: pytest.MonkeyPatch)
     assert app.options["title"] == "泉芯智寿 Tool API"
 
 
+def test_fastapi_exposes_planned_domain_routes_through_shared_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from quanxin_life.api.app import DOMAIN_ROUTE_TOOL_MAP, create_fastapi_app
+    from quanxin_life.api.service import ToolInvocationService
+
+    expected_routes = {
+        "/v1/analyses/quality": StandardToolName.VALIDATE_BATTERY_DATA,
+        "/v1/predictions/lifetime": StandardToolName.PREDICT_CYCLE_LIFE,
+        "/v1/predictions/trajectory": StandardToolName.PREDICT_SOH_TRAJECTORY,
+        "/v1/predictions/update": StandardToolName.UPDATE_CELL_PARAMETERS,
+        "/v1/physics/check": StandardToolName.CHECK_OPERATING_CONDITION,
+        "/v1/experiments/recommend": StandardToolName.RECOMMEND_NEXT_EXPERIMENT,
+        "/v1/decisions/batch": StandardToolName.MAKE_BATCH_DECISION,
+    }
+    assert expected_routes == DOMAIN_ROUTE_TOOL_MAP
+
+    monkeypatch.setattr(
+        "quanxin_life.api.app.importlib.import_module",
+        lambda _: _FakeFastApiModule,
+    )
+    app = create_fastapi_app(ToolInvocationService(registry=_registry()))
+
+    for path in expected_routes:
+        assert ("POST", path) in app.routes
+
+    response = asyncio.run(
+        app.routes[("POST", "/v1/analyses/quality")]({"batch_id": "batch-A"})
+    )
+    assert response["tool_name"] == StandardToolName.VALIDATE_BATTERY_DATA.value
+    assert response["values"] == {"validated_batch": "batch-A"}
+
+
 def test_fastapi_lifetime_workflow_endpoint_delegates_without_numeric_logic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
