@@ -47,3 +47,14 @@ def test_a100_package_commands_bind_clean_git_and_verify_before_extracting() -> 
     assert "verify_matr_a100_archive_index" in verify
     assert "verify_matr_a100_archive" in verify
     assert "extractall" not in verify
+
+
+def test_three_batch_preparation_declares_each_reviewed_batch_and_real_horizon() -> None:
+    script = Path("scripts/prepare_matr_three_batch_data.py").read_text(encoding="utf-8")
+
+    assert "2017-05-12" in script
+    assert "2017-06-30" in script
+    assert "2018-04-12" in script
+    assert "horizon_cycle=500" in script
+    assert "max_cycle_index=150" in script
+    assert "selected_cell_ids=eligibility.eligible_cell_ids" in script
