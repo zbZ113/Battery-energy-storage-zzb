@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from hashlib import sha256
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
@@ -139,7 +140,7 @@ def test_docx_artifact_contains_only_the_registered_markdown_content() -> None:
         ReportArtifactFormat.DOCX,
     )
 
-    document = docx.Document(artifact.payload)
+    document = docx.Document(BytesIO(artifact.payload))
     text = "\n".join(paragraph.text for paragraph in document.paragraphs)
     header_text = "\n".join(
         paragraph.text
@@ -170,7 +171,7 @@ def test_pdf_artifact_requires_and_verifies_an_operator_owned_font() -> None:
     )
 
     artifact = exporter.export(result.result_id, ReportArtifactFormat.PDF)
-    reader = pypdf.PdfReader(artifact.payload)
+    reader = pypdf.PdfReader(BytesIO(artifact.payload))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
 
     assert artifact.media_type == "application/pdf"
