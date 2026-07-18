@@ -19,6 +19,12 @@ def test_physics_extra_pins_the_verified_pybamm_release() -> None:
     ]
 
 
+def test_mcp_extra_pins_the_verified_sdk_release() -> None:
+    pyproject = tomllib.loads(_read("pyproject.toml"))
+
+    assert pyproject["project"]["optional-dependencies"]["mcp"] == ["mcp==1.28.1"]
+
+
 def test_readme_is_user_facing_and_only_documents_real_entry_points() -> None:
     readme = _read("README.md")
 
