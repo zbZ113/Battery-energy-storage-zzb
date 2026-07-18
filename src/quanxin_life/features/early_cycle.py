@@ -62,6 +62,11 @@ class EarlyCycleFeatureConfig(BaseModel):
     cutoff_cycle: int
     voltage_grid_step_v: float = Field(default=0.01, gt=0, le=0.1)
     min_curve_points: int = Field(default=3, ge=2)
+    time_monotonic_tolerance_s: float = Field(
+        default=0.0,
+        ge=0.0,
+        allow_inf_nan=False,
+    )
     feature_version: str = Field(default=EARLY_CYCLE_FEATURE_VERSION, min_length=1)
 
     @model_validator(mode="after")
@@ -108,7 +113,10 @@ def extract_early_cycle_features(
         (record.cycle_index for record in records), cutoff_cycle=config.cutoff_cycle
     )
     prepared_records, duplicate_count = exclude_exact_duplicate_telemetry(records)
-    report = validate_cycle_records(prepared_records)
+    report = validate_cycle_records(
+        prepared_records,
+        time_monotonic_tolerance_s=config.time_monotonic_tolerance_s,
+    )
     fatal_issues = tuple(
         issue
         for issue in report.issues
@@ -135,7 +143,11 @@ def extract_early_cycle_features(
         raise ValueError("feature extraction requires at least two valid observed cycles")
 
     values: dict[str, float | None] = {name: None for name in EARLY_CYCLE_FEATURE_NAMES}
-    warnings: list[str] = []
+    warnings = [
+        issue.code
+        for issue in report.issues
+        if issue.code == "TIME_WITHIN_NUMERIC_TOLERANCE"
+    ]
     if duplicate_count:
         warnings.append("EXACT_DUPLICATE_TELEMETRY_EXCLUDED")
     if len(valid_records) != len(prepared_records):

@@ -315,7 +315,10 @@ def load_matr_hybrid_trajectory_cohorts(
         records = _read_cutoff_records(verified.parquet_path, cutoff_cycle=cutoff_cycle)
         features = extract_early_cycle_features(
             records,
-            config=EarlyCycleFeatureConfig(cutoff_cycle=cutoff_cycle),
+            config=EarlyCycleFeatureConfig(
+                cutoff_cycle=cutoff_cycle,
+                time_monotonic_tolerance_s=_MATR_TIME_MONOTONIC_TOLERANCE_S,
+            ),
         )
         values = [features.values[name] for name in _HYBRID_FEATURE_NAMES]
         if any(value is None for value in values):

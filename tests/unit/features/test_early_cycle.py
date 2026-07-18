@@ -138,6 +138,36 @@ def test_rejects_non_monotonic_time_even_when_cycle_records_are_otherwise_valid(
         )
 
 
+def test_accepts_explicit_numeric_time_tolerance_and_preserves_warning() -> None:
+    records = list(_records())
+    records[2] = records[2].model_copy(update={"time_s": 10.0 - 5e-10})
+
+    result = extract_early_cycle_features(
+        tuple(records),
+        config=EarlyCycleFeatureConfig(
+            cutoff_cycle=20,
+            time_monotonic_tolerance_s=1e-9,
+        ),
+    )
+
+    assert "TIME_WITHIN_NUMERIC_TOLERANCE" in result.warnings
+    assert result.values["capacity_first_ah"] == pytest.approx(0.4)
+
+
+def test_rejects_time_reversal_beyond_explicit_numeric_tolerance() -> None:
+    records = list(_records())
+    records[2] = records[2].model_copy(update={"time_s": 10.0 - 2e-9})
+
+    with pytest.raises(ValueError, match="NON_MONOTONIC_TIME"):
+        extract_early_cycle_features(
+            tuple(records),
+            config=EarlyCycleFeatureConfig(
+                cutoff_cycle=20,
+                time_monotonic_tolerance_s=1e-9,
+            ),
+        )
+
+
 def test_excludes_exact_duplicate_placeholder_rows_before_trend_features() -> None:
     placeholder = CycleRecord(
         dataset_id="MATR",

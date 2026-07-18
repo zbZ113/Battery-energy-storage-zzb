@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 import torch
 
+import quanxin_life.training.matr_data as matr_data_module
 from quanxin_life.core import CellMetadata, PredictionTarget
 from quanxin_life.data.matr_pipeline import (
     MatrSupervisionArtifact,
@@ -16,6 +17,10 @@ from quanxin_life.data.matr_pipeline import (
 )
 from quanxin_life.data.schemas import CycleRecord, SplitManifest
 from quanxin_life.data.storage import write_cell_artifacts
+from quanxin_life.features.early_cycle import (
+    EarlyCycleFeatureConfig,
+    EarlyCycleFeatureSet,
+)
 from quanxin_life.training.matr_data import (
     MatrCurveCohorts,
     MatrHybridCohorts,
@@ -70,6 +75,7 @@ def _write_cell(root: Path, cell_id: str, *, official_life_label: int) -> None:
 
 def test_loads_cell_disjoint_official_life_batches_from_early_parquet_only(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     processed = tmp_path / "early"
     cell_ids = ("MATR_a", "MATR_b", "MATR_c", "MATR_d")
@@ -141,6 +147,22 @@ def test_loads_cell_disjoint_official_life_batches_from_early_parquet_only(
     assert cohorts.train.curve_values.shape == (1, 21, 17)
     assert cohorts.train.observed_cycles.tolist() == [200.0]
 
+    observed_time_tolerances: list[float] = []
+    original_extract = matr_data_module.extract_early_cycle_features
+
+    def capture_early_feature_config(
+        records: tuple[CycleRecord, ...],
+        *,
+        config: EarlyCycleFeatureConfig,
+    ) -> EarlyCycleFeatureSet:
+        observed_time_tolerances.append(config.time_monotonic_tolerance_s)
+        return original_extract(records, config=config)
+
+    monkeypatch.setattr(
+        matr_data_module,
+        "extract_early_cycle_features",
+        capture_early_feature_config,
+    )
     hybrid = load_matr_hybrid_trajectory_cohorts(
         processed_root=processed,
         supervision_root=supervision_root,
@@ -153,6 +175,7 @@ def test_loads_cell_disjoint_official_life_batches_from_early_parquet_only(
     assert hybrid.train.prediction_cycles[0] == 21
     assert hybrid.train.prediction_cycles[-1] == 500
     assert hybrid.train.target_soh.shape == (1, 480)
+    assert observed_time_tolerances == pytest.approx([1e-9] * len(cell_ids))
 
 
 def test_scalar_life_loading_does_not_require_cycle500_trajectory_membership(
