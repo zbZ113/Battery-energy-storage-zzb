@@ -25,7 +25,8 @@ from quanxin_life.tools.registry import StandardToolName, ToolRegistry, ToolSche
 class ToolInvocationServiceLike(Protocol):
     """Minimal transport service surface, kept independent of the API package."""
 
-    registry: ToolRegistry
+    @property
+    def registry(self) -> ToolRegistry: ...
 
     def invoke(self, invocation: Any) -> ToolResult: ...
 
@@ -42,16 +43,29 @@ class McpHostConfig(ContractModel):
 
     server_name: str = Field(default="Quanxin Life Tools", min_length=1)
     transport: McpTransport = McpTransport.STDIO
+    host: str = Field(default="127.0.0.1", min_length=1)
+    port: int = Field(default=8001, ge=1, le=65535)
+    streamable_http_path: str = Field(default="/mcp", min_length=1)
     instructions: str = (
         "Battery engineering values are returned only by registered, audited domain tools."
     )
 
-    @field_validator("server_name", "instructions")
+    @field_validator("server_name", "host", "instructions")
     @classmethod
     def text_must_not_be_blank(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
             raise ValueError("MCP host text fields must not be blank")
+        return normalized
+
+    @field_validator("streamable_http_path")
+    @classmethod
+    def streamable_http_path_must_be_absolute(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized.startswith("/") or any(character.isspace() for character in normalized):
+            raise ValueError(
+                "streamable_http_path must be an absolute path without whitespace"
+            )
         return normalized
 
 
@@ -96,6 +110,9 @@ def create_mcp_host(
     server = fastmcp_factory(
         resolved_config.server_name,
         instructions=resolved_config.instructions,
+        host=resolved_config.host,
+        port=resolved_config.port,
+        streamable_http_path=resolved_config.streamable_http_path,
     )
 
     for schema in service.registry.list_schemas():

@@ -56,9 +56,20 @@ def _service() -> ToolInvocationService:
 
 
 class _FakeFastMCP:
-    def __init__(self, name: str, *, instructions: str | None = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        instructions: str | None = None,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        streamable_http_path: str = "/mcp",
+    ) -> None:
         self.name = name
         self.instructions = instructions
+        self.host = host
+        self.port = port
+        self.streamable_http_path = streamable_http_path
         self.tools: dict[str, tuple[str, Any]] = {}
         self.run_calls: list[str] = []
 
@@ -133,6 +144,25 @@ def test_run_uses_only_the_configured_official_transport(
     host.run()
 
     assert host.server.run_calls == [expected]
+
+
+def test_streamable_http_network_settings_reach_the_official_host() -> None:
+    from quanxin_life.tools.mcp_host import McpHostConfig, create_mcp_host
+
+    host = create_mcp_host(
+        _service(),
+        config=McpHostConfig(
+            transport="streamable-http",
+            host="127.0.0.1",
+            port=8765,
+            streamable_http_path="/quanxin-mcp",
+        ),
+        sdk_loader=_fake_sdk,
+    )
+
+    assert host.server.host == "127.0.0.1"
+    assert host.server.port == 8765
+    assert host.server.streamable_http_path == "/quanxin-mcp"
 
 
 def test_missing_sdk_is_an_explicit_unavailable_failure(monkeypatch) -> None:

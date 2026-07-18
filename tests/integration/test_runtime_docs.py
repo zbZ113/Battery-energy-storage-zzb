@@ -95,6 +95,17 @@ def test_runtime_guide_covers_windows_linux_and_operator_owned_inputs() -> None:
     assert "HUST" in guide and "pickle" in guide
 
 
+def test_runtime_guide_documents_both_real_mcp_transports() -> None:
+    guide = _read("docs/runtime-setup.md")
+
+    assert "python scripts/run_mcp_host.py --transport stdio" in guide
+    assert (
+        "python scripts/run_mcp_host.py --transport streamable-http "
+        "--host 127.0.0.1 --port 8001"
+    ) in guide
+    assert "http://127.0.0.1:8001/mcp" in guide
+
+
 def test_env_template_contains_no_secret_values() -> None:
     template = _read(".env.example")
 

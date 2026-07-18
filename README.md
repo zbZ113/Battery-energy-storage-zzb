@@ -134,7 +134,7 @@ flowchart LR
 - Gaussian Process主动试验、PyBaMM短期核验、批次决策和确定性报告工作流。
 - 强类型工具注册、角色白名单、共享审计账本和数值来源防火墙。
 - FastAPI项目、数据集、Agent运行、知识库与飞书事件接口。
-- Next.js项目门户、Agent运行页、结果页与认证流程；HTTP-only Streamlit科研工作台；可选MCP Host。
+- Next.js项目门户、Agent运行页、结果页与认证流程；HTTP-only Streamlit科研工作台；经官方客户端验收的MCP stdio与Streamable HTTP服务。
 - 飞书签名回调、幂等事件回执、租约令牌、失败重试、引用卡片和数据库绑定。
 - Python与前端质量门禁、数据库迁移检查、GitHub Actions和受控依赖配置。
 
@@ -155,7 +155,6 @@ flowchart LR
 - Naumann Cycle/Calendar真实工况实验和多种主动采集策略对比。
 - PyBaMM短期边界核验与寿命感知运行策略联动。
 - 四专业Agent、监督器、多轮规划、人工确认、会话恢复和Agent可靠性评价。
-- MCP stdio与Streamable HTTP端到端工具服务。
 - MQTT、Modbus、BMS/EMS模拟和飞书协同适配。
 - PostgreSQL、pgvector、Redis、MinIO、MLflow、Mosquitto和Celery完整服务栈。
 - 五种子消融、跨域、区间、在线更新、主动试验、Agent与端到端性能实验。
@@ -309,9 +308,15 @@ MCP为可选能力：
 
 ```bash
 python -m pip install -e ".[mcp]"
+
+# 本机子进程传输
+python scripts/run_mcp_host.py --transport stdio
+
+# 本机 Streamable HTTP，客户端地址 http://127.0.0.1:8001/mcp
+python scripts/run_mcp_host.py --transport streamable-http --host 127.0.0.1 --port 8001
 ```
 
-[`src/quanxin_life/tools/mcp_host.py`](src/quanxin_life/tools/mcp_host.py) 提供stdio与Streamable HTTP Host工厂。MCP暴露的仍是经过白名单、版本和来源校验的共享工具，不允许客户端绕过领域服务。
+[`scripts/run_mcp_host.py`](scripts/run_mcp_host.py) 提供真实stdio与Streamable HTTP入口，[`src/quanxin_life/tools/mcp_host.py`](src/quanxin_life/tools/mcp_host.py) 负责官方Host装配。MCP暴露的仍是经过白名单、版本和来源校验的共享工具，不允许客户端绕过领域服务；未鉴权HTTP端口不得直接暴露到公网。
 
 ### 工业接口
 

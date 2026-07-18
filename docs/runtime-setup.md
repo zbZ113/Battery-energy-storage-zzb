@@ -138,13 +138,50 @@ app = create_competition_fastapi_app(dependencies, batch_store=batch_store)
 
 ## MCP
 
+MCP SDK 是惰性可选依赖。安装仓库已验证的 SDK 版本：
+
+```bash
+python -m pip install -e ".[mcp]"
+```
+
+stdio 方式适合由本机 MCP 客户端作为子进程启动：
+
+```bash
+python scripts/run_mcp_host.py --transport stdio
+```
+
+Streamable HTTP 方式默认只绑定本机回环地址：
+
+```bash
+python scripts/run_mcp_host.py --transport streamable-http --host 127.0.0.1 --port 8001
+```
+
+客户端地址为：
+
+```text
+http://127.0.0.1:8001/mcp
+```
+
+如需先检查解析后的非秘密配置而不启动服务：
+
+```bash
+python scripts/run_mcp_host.py \
+  --transport streamable-http \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --streamable-http-path /mcp \
+  --print-config
+```
+
 `src/quanxin_life/tools/mcp_host.py` 提供：
 
 - `create_mcp_host(service, config=...)`
 - `run_mcp_host(service, config=...)`
 - `stdio` 与 `streamable-http` 两种传输配置
 
-MCP SDK 是惰性可选依赖，可用 `python -m pip install -e ".[mcp]"` 安装。启用前仍需锁定并验证实际 SDK 版本，再把与 FastAPI 共用的 `ToolInvocationService` 传给 Host。缺少 SDK 时 Host 会抛出显式不可用错误。仓库没有独立 MCP CLI，也不会在导入时启动 Host。
+独立入口只装配当前可安全独立运行的共享 `ToolInvocationService`，不会复制领域数值逻辑。当前会暴露数据质量、按电芯划分审计和短期物理核验工具；缺少已审核模型、策略或企业数据的工具不会以占位实现冒充可用。缺少 SDK 时 Host 会抛出显式不可用错误，导入模块不会自动启动服务。
+
+不要直接把未鉴权的 MCP HTTP 端口暴露到公网。远程部署必须由调用方在受控网络中增加认证、TLS、访问控制和审计代理，并继续复用同一工具授权边界。
 
 ## 数据路径与制品
 
