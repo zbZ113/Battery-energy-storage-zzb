@@ -163,6 +163,44 @@ PDF 不隐式下载或猜测字体。运维必须向 `ReviewedPdfFont` 提供绝
 
 DOCX/PDF 是同一份审计 Markdown 的格式视图，不构成新的模型结论。正式部署应在目标 Linux 镜像中安装字体与渲染依赖，并对代表性中文报告执行页面渲染验收。
 
+## A100 三批训练结果安全导入
+
+A100 Smoke 或 Final 完成并下载到本地后，先独立校验传输归档的 SHA-256，再解压到只读接收目录。不要直接把下载目录登记成可用模型；导入过程不加载模型权重。`A100SuiteRunImporter` 会逐文件读取普通字节并完成：
+
+- 按批准配置展开 4 个截止循环、5 个模型和 1/5 个随机种子的完整任务矩阵；
+- 逐任务复验 `completed-run-v2`、`config_resolved.json`、文件大小与 SHA-256；
+- 复验 `aggregate_metrics.json`、根级 `metrics_test.csv` 与任务矩阵一致；
+- 拒绝符号链接、路径逃逸、秘密材料以及 `.pkl/.joblib/.pt/.pth`；
+- 将完全通过的字节树原子复制到受管注册目录；
+- 使用完整输出摘要作为 `import_id`，相同上下文的重复导入返回原记录；
+- 每次解析已登记结果时重新检查文件数量和输出 SHA-256，不执行模型反序列化。
+
+Smoke 使用：
+
+```powershell
+python scripts/import_a100_suite_run.py `
+  .\server-results\smoke `
+  configs/training/matr_three_batch_smoke.json `
+  .\artifacts\a100-suite-registry `
+  --expected-source-commit <服务器 source_revision.json 中的提交> `
+  --transfer-archive .\server-results\quanxin-smoke-results.tgz `
+  --transfer-sha256 <下载归档的 SHA-256>
+```
+
+Final 使用：
+
+```powershell
+python scripts/import_a100_suite_run.py `
+  .\server-results\final `
+  configs/training/matr_three_batch_final.json `
+  .\artifacts\a100-suite-registry `
+  --expected-source-commit <正式训练固定提交> `
+  --transfer-archive .\server-results\quanxin-final-results.tgz `
+  --transfer-sha256 <下载归档的 SHA-256>
+```
+
+命令只在完整矩阵、来源提交、数据/划分/特征版本、汇总状态和所有字节同时一致时输出规范 JSON 注册记录。Smoke 永远保持 `formal_performance_claim=false`；Final 缺任务、有失败行或未标记正式时会拒绝导入。该注册只完成安全接收，后续模型加载仍须经过对应 UBJ/safetensors 制品清单和模型适配器。
+
 ## 审核知识库与混合检索
 
 知识材料必须依次完成上传、独立管理员审核、带页码分块和向量索引。文档上传者不能审批自己的材料；分块文本在读取和检索时都会复验对象大小与 SHA-256。

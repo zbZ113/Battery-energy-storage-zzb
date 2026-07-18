@@ -153,6 +153,27 @@ def test_runtime_guide_documents_ledger_bound_report_artifacts() -> None:
     assert "只能消费审计账本中已登记的" in guide
 
 
+def test_runtime_guide_documents_a100_suite_result_import() -> None:
+    guide = _read("docs/runtime-setup.md")
+
+    for required in (
+        "scripts/import_a100_suite_run.py",
+        "configs/training/matr_three_batch_smoke.json",
+        "configs/training/matr_three_batch_final.json",
+        "--expected-source-commit",
+        "--transfer-archive",
+        "--transfer-sha256",
+        "A100SuiteRunImporter",
+        "completed-run-v2",
+        "aggregate_metrics.json",
+        "metrics_test.csv",
+    ):
+        assert required in guide
+
+    assert "不加载模型权重" in guide
+    assert "重复导入" in guide
+
+
 def test_env_template_contains_no_secret_values() -> None:
     template = _read(".env.example")
 

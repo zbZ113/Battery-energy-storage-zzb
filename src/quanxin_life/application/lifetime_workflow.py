@@ -16,8 +16,8 @@ from pydantic import Field, ValidationError, field_validator, model_validator
 from quanxin_life.api.service import ToolInvocation, ToolInvocationService
 from quanxin_life.core import Decision, ToolResult
 from quanxin_life.core.schemas import ContractModel, Sha256
+from quanxin_life.reporting.contracts import AUDITED_REPORT_TOOL_VERSION
 from quanxin_life.tools.audited_report import (
-    AUDITED_REPORT_TOOL_VERSION,
     AuditedReportClaimReference,
     GenerateAuditedReportToolInput,
     NumericEvidenceReference,
