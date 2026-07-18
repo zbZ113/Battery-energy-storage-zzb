@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -8,6 +9,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def test_physics_extra_pins_the_verified_pybamm_release() -> None:
+    pyproject = tomllib.loads(_read("pyproject.toml"))
+
+    assert pyproject["project"]["optional-dependencies"]["physics"] == [
+        "pybamm==25.12.2"
+    ]
 
 
 def test_readme_is_user_facing_and_only_documents_real_entry_points() -> None:
