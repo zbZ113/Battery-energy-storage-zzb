@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `tests/integration/test_runtime_docs.py`
 
-- [ ] **Step 1: 将旧README章节断言替换为新信息架构**
+- [x] **Step 1: 将旧README章节断言替换为新信息架构**
 
 将 `test_readme_is_user_facing_and_only_documents_real_entry_points` 中的章节列表替换为：
 
@@ -61,7 +61,7 @@ assert "当前不足" not in readme
 assert "生产系统" not in readme
 ```
 
-- [ ] **Step 2: 运行契约测试并观察RED**
+- [x] **Step 2: 运行契约测试并观察RED**
 
 Run:
 
@@ -71,7 +71,7 @@ Run:
 
 Expected: FAIL，原因是当前README尚不包含新的章节标题。
 
-- [ ] **Step 3: 提交测试契约**
+- [x] **Step 3: 提交测试契约**
 
 ```powershell
 git add tests/integration/test_runtime_docs.py
@@ -83,7 +83,7 @@ git commit -m "test: define competition-focused README contract"
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: 使用UTF-8重写项目首页**
+- [x] **Step 1: 使用UTF-8重写项目首页**
 
 README必须按批准规格建立以下内容：
 
@@ -152,7 +152,7 @@ run_id/result_id引用卡片
 
 不得填写尚未由正式实验产生的MAE、覆盖率、寿命提升或产业收益数字。
 
-- [ ] **Step 2: 运行README契约测试并观察GREEN**
+- [x] **Step 2: 运行README契约测试并观察GREEN**
 
 Run:
 
@@ -162,7 +162,7 @@ Run:
 
 Expected: PASS。
 
-- [ ] **Step 3: 提交README正文**
+- [x] **Step 3: 提交README正文**
 
 ```powershell
 git add README.md
@@ -175,7 +175,7 @@ git commit -m "docs: present Quanxin Life competition platform"
 - Modify when required: `README.md`
 - Modify when required: `tests/integration/test_runtime_docs.py`
 
-- [ ] **Step 1: 校验UTF-8、占位符和本地Markdown链接**
+- [x] **Step 1: 校验UTF-8、占位符和本地Markdown链接**
 
 Run:
 
@@ -200,7 +200,7 @@ print("README_UTF8_AND_LINKS_OK")
 
 Expected: `README_UTF8_AND_LINKS_OK`。
 
-- [ ] **Step 2: 运行文档范围质量门禁**
+- [x] **Step 2: 运行文档范围质量门禁**
 
 Run:
 
@@ -212,7 +212,7 @@ git diff --check
 
 Expected: 全部退出码为0。
 
-- [ ] **Step 3: 复核README事实来源**
+- [x] **Step 3: 复核README事实来源**
 
 确认以下文件仍存在，且README命令与其保持一致：
 
@@ -228,7 +228,7 @@ src/quanxin_life/api/feishu.py
 .env.example
 ```
 
-- [ ] **Step 4: 提交校验修正**
+- [x] **Step 4: 确认无需校验修正**
 
 仅在Task 3产生修正时执行：
 
