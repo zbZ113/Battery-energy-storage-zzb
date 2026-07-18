@@ -209,12 +209,12 @@ git archive --format=zip --output "dist/quanxin-a100-smoke-hotfix.zip" HEAD src/
 
 Record its SHA-256 with `Get-FileHash`. The archive must contain no data, credentials, model artifacts, checkpoints, or `.git` metadata.
 
-- [ ] **Step 5: Provide server recovery commands**
+- [x] **Step 5: Provide server recovery commands**
 
-The server must verify the reported SHA-256, extract the archive over `/data/abd/z/AI-B`, reactivate `quanxin-a100`, and rerun:
+The server must verify the reported SHA-256, extract the archive over `/data/abd/z/AI-B`, update `source_revision.json` to the hotfix code commit, and move the existing Smoke directory to a timestamped audit backup. After reactivating `quanxin-a100`, rerun:
 
 ```bash
 bash scripts/a100/train_dataset.sh matr-three-batch smoke
 ```
 
-The existing cutoff 20 and 50 results remain in place and are reused.
+The existing cutoff 20 and 50 results remain preserved in the audit backup but are not mixed with the hotfix run. The new Smoke directory recomputes all 20 short tasks under one truthful source revision.
