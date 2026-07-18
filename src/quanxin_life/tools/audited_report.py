@@ -20,6 +20,7 @@ from quanxin_life.core import EvidenceLevel, ProvenanceRecord, ToolResult, sha25
 from quanxin_life.core.schemas import ContractModel
 from quanxin_life.reporting import ReportClaim, build_audited_markdown_report
 from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
+from quanxin_life.reporting.contracts import AUDITED_REPORT_TOOL_VERSION
 from quanxin_life.tools.registry import (
     RegisteredTool,
     StandardToolName,
@@ -27,7 +28,6 @@ from quanxin_life.tools.registry import (
     ToolRegistry,
 )
 
-AUDITED_REPORT_TOOL_VERSION = "audited-report-tool-v1"
 REPORT_DATA_VERSION = "ledger-bound-toolresults-v1"
 REPORT_FEATURE_VERSION = "audited-evidence-v1"
 Clock = Callable[[], datetime]

@@ -26,4 +26,4 @@ def test_python_ci_installs_extras_imported_by_the_full_test_suite() -> None:
 
     assert editable_install is not None
     installed_extras = {value.strip() for value in editable_install.group(1).split(",")}
-    assert {"knowledge", "llm"} <= installed_extras
+    assert {"knowledge", "llm", "reporting"} <= installed_extras

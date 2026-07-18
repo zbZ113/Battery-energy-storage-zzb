@@ -136,6 +136,33 @@ app = create_competition_fastapi_app(dependencies, batch_store=batch_store)
 
 文件系统批次存储会在每次读取时重新校验 CSV、元数据与来源哈希；JSONL 审计账本会在启动时逐条重建 `ToolResult` 并在损坏、重复或冲突时失败关闭。它们适合单进程比赛部署；多人并发或多副本服务仍应实现同契约的数据库/对象存储后端。
 
+## 可审计报告制品
+
+安装 PDF/DOCX 可选导出依赖：
+
+```bash
+python -m pip install -e ".[reporting]"
+```
+
+`AuditedReportArtifactExporter` 只能消费审计账本中已登记的 `generate_audited_report` `ToolResult`。它不会接收调用方标题、正文或数值，也不会重新计算 SOH、RUL、区间或决策阈值。支持：
+
+- JSON：完整、规范化的已登记 `ToolResult`；
+- Markdown：报告工具已经生成并登记的原始 Markdown；
+- PDF：从上述 Markdown 确定性渲染；
+- DOCX：从上述 Markdown 生成固定 `standard_business_brief` 版式。
+
+装配导出器后，管理员报告入口增加：
+
+```text
+GET /v1/reports/{result_id}/artifacts/{artifact_format}
+```
+
+其中 `artifact_format` 为 `json`、`markdown`、`pdf` 或 `docx`。响应使用附件文件名、`nosniff`、`no-store` 和 `sha256:` ETag；下载内容仍以来源 `result_id` 为审计根。
+
+PDF 不隐式下载或猜测字体。运维必须向 `ReviewedPdfFont` 提供绝对字体路径和已审核 SHA-256；每次渲染前重新校验字节。中文部署建议使用已获授权的 CJK TrueType 字体。字体缺失、哈希不符、工具版本不匹配或结果未登记时失败关闭。
+
+DOCX/PDF 是同一份审计 Markdown 的格式视图，不构成新的模型结论。正式部署应在目标 Linux 镜像中安装字体与渲染依赖，并对代表性中文报告执行页面渲染验收。
+
 ## 审核知识库与混合检索
 
 知识材料必须依次完成上传、独立管理员审核、带页码分块和向量索引。文档上传者不能审批自己的材料；分块文本在读取和检索时都会复验对象大小与 SHA-256。

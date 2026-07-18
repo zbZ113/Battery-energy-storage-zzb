@@ -89,6 +89,7 @@ def create_fastapi_app(
     knowledge_adapter: Any | None = None,
     feishu_adapter: Any | None = None,
     industrial_adapter: Any | None = None,
+    report_exporter: Any | None = None,
 ) -> Any:
     """Create the HTTP adapter without duplicating domain-tool execution logic."""
     try:
@@ -210,6 +211,49 @@ def create_fastapi_app(
                 detail="audited report was not found",
             )
         return {"result_id": result.result_id, "markdown": markdown}
+
+    if report_exporter is not None:
+
+        @app.get(  # type: ignore[untyped-decorator]
+            "/v1/reports/{result_id}/artifacts/{artifact_format}",
+            **admin_route_options,
+        )
+        async def get_audited_report_artifact(
+            result_id: str,
+            artifact_format: str,
+        ) -> Any:
+            from quanxin_life.reporting import ReportArtifactFormat
+
+            try:
+                selected_format = ReportArtifactFormat(artifact_format)
+            except ValueError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=422,
+                    detail="unsupported audited report artifact format",
+                ) from exc
+            try:
+                artifact = report_exporter.export(result_id, selected_format)
+            except RuntimeError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=503,
+                    detail="requested report renderer is not installed",
+                ) from exc
+            except ValueError as exc:
+                status_code = 404 if "not registered" in str(exc) else 409
+                raise fastapi_module.HTTPException(
+                    status_code=status_code,
+                    detail="audited report artifact is unavailable",
+                ) from exc
+            return fastapi_module.Response(
+                content=artifact.payload,
+                media_type=artifact.media_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{artifact.filename}"',
+                    "ETag": f'"sha256:{artifact.sha256}"',
+                    "X-Content-Type-Options": "nosniff",
+                    "Cache-Control": "private, no-store",
+                },
+            )
 
     async def execute_domain_tool(
         tool_name: str,

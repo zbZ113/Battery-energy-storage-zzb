@@ -134,6 +134,25 @@ def test_runtime_guide_documents_industrial_protocol_sandboxes() -> None:
     assert "不代表生产 BMS/EMS 已接入" in guide
 
 
+def test_runtime_guide_documents_ledger_bound_report_artifacts() -> None:
+    guide = _read("docs/runtime-setup.md")
+
+    for required in (
+        'python -m pip install -e ".[reporting]"',
+        "/v1/reports/{result_id}/artifacts/{artifact_format}",
+        "AuditedReportArtifactExporter",
+        "ReviewedPdfFont",
+        "JSON",
+        "Markdown",
+        "PDF",
+        "DOCX",
+        "SHA-256",
+    ):
+        assert required in guide
+
+    assert "只能消费审计账本中已登记的" in guide
+
+
 def test_env_template_contains_no_secret_values() -> None:
     template = _read(".env.example")
 

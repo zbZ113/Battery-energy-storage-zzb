@@ -328,6 +328,14 @@ python scripts/run_mcp_host.py --transport streamable-http --host 127.0.0.1 --po
 
 MQTT 主题固定为 `quanxin/v1/bms/{measurement_batch_id}`，Modbus 寄存器映射固定为 `quanxin-modbus-bms-v1`。这些能力用于无凭证条件下的协议和演示闭环，不代表生产 BMS/EMS 已接入；详细装配与边界见 [`docs/runtime-setup.md`](docs/runtime-setup.md)。
 
+### 可审计报告导出
+
+`AuditedReportArtifactExporter` 只消费审计账本中已登记的报告 `ToolResult`，可导出 JSON、Markdown、PDF 和 DOCX。PDF 字体必须由运维提供绝对路径和 SHA-256；所有下载制品带内容哈希，不允许页面或 Agent 提交新数字。装配后使用：
+
+```text
+GET /v1/reports/{result_id}/artifacts/{artifact_format}
+```
+
 ## 飞书研发协同
 
 飞书是泉芯智寿的研发决策协同出口。当前安全底座位于：
