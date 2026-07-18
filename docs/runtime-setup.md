@@ -250,6 +250,29 @@ GET /v1/experiment-runs?project_id=<project-id>&model_name=cpmlp&cutoff_cycle=10
 
 管理员可查看所有项目；成员只能查看自己拥有或获分配的项目；评委必须拥有显式 `JUDGE` 项目成员关系且只能读取，不能登记。未知导入、损坏字节、任务矩阵不完整或持久化上下文冲突都会失败关闭。
 
+### 安全模型制品目录
+
+模型制品登记与实验登记分离。管理员不能通过 HTTP 提交本地路径、对象路径、哈希、状态或模型指标，只能提交项目和预先存在于服务端安全验证源中的 `artifact_id`：
+
+```text
+POST /v1/admin/model-artifacts
+{
+  "project_id": "<active-project-id>",
+  "artifact_id": "<verified-artifact-uuid>"
+}
+```
+
+`ModelArtifactCatalogService` 在每次首次或重复登记前重新调用只读验证源。当前 `ClassicModelArtifactCatalogSource` 复用 `ModelArtifactRegistry`，支持已登记并重新核验的 XGBoost JSON/UBJ 与 Variance JSON。只有文件大小、SHA-256、格式、扩展名和版本化清单全部一致时，才把结构化元数据写入现有 `model_artifacts` 与 `model_manifests` 表。登记状态固定为 `VERIFIED`，不等于模型已激活或已进入在线服务。
+
+查询入口：
+
+```text
+GET /v1/model-artifacts?project_id=<project-id>&artifact_kind=xgboost&cutoff_cycle=50
+GET /v1/model-artifacts/{artifact_id}
+```
+
+响应只包含受管 URI、格式、版本、截止循环、特征名和哈希，不暴露绝对路径，也不复制 MAE、RMSE 等业务指标。相同制品重复登记会先复验字节并返回原记录；文件改变、持久化上下文被篡改、同一摘要绑定到另一身份或项目不可见时失败关闭。正式 A100 结果回传后，仍需先完成完整套件安全导入，再将任务产出的 UBJ/safetensors 清单映射到相应验证源；不能直接把下载目录或训练检查点登记为可服务模型。
+
 ## 审核知识库与混合检索
 
 知识材料必须依次完成上传、独立管理员审核、带页码分块和向量索引。文档上传者不能审批自己的材料；分块文本在读取和检索时都会复验对象大小与 SHA-256。
