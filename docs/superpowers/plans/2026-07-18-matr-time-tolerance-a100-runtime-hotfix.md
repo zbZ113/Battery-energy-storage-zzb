@@ -190,7 +190,7 @@ Run:
 
 Expected: all commands succeed.
 
-- [ ] **Step 3: Commit the hotfix**
+- [x] **Step 3: Commit the hotfix**
 
 Commit only the approved source, tests, Shell script, and plan updates:
 
@@ -199,7 +199,7 @@ git add src/quanxin_life/data/validation.py src/quanxin_life/features/curve_tens
 git commit -m "fix: tolerate MATR timestamp precision jitter"
 ```
 
-- [ ] **Step 4: Build the code-only server archive**
+- [x] **Step 4: Build the code-only server archive**
 
 Create a ZIP from the committed files:
 
