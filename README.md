@@ -320,7 +320,13 @@ python scripts/run_mcp_host.py --transport streamable-http --host 127.0.0.1 --po
 
 ### 工业接口
 
-集成层面向REST、MQTT、Modbus和BMS/EMS消息契约，将遥测、风险、决策和建议SOC边界映射到统一工具结果。接口模拟器与现场适配保持分离，便于在无硬件条件下完成协议和演示闭环。
+集成层提供明确标注的 REST、MQTT、Modbus BMS 协议沙箱和 EMS 决策出口。BMS 输入只接受原始容量观测与版本上下文，SOH 仍由共享工具计算；EMS 消息只解析审计账本中的 `make_batch_decision` 结果。入口统一位于：
+
+```text
+/v1/integrations/industrial/sandbox/
+```
+
+MQTT 主题固定为 `quanxin/v1/bms/{measurement_batch_id}`，Modbus 寄存器映射固定为 `quanxin-modbus-bms-v1`。这些能力用于无凭证条件下的协议和演示闭环，不代表生产 BMS/EMS 已接入；详细装配与边界见 [`docs/runtime-setup.md`](docs/runtime-setup.md)。
 
 ## 飞书研发协同
 

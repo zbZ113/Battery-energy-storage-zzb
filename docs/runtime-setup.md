@@ -166,6 +166,37 @@ HYBRID_RETRIEVAL_UNAVAILABLE_INCOMPLETE_EMBEDDINGS
 
 系统不会只检索“恰好有向量”的部分文档，也不会把知识检索结果当作SOH、RUL或其他电池数值。外部Embedding或reranker不可用时，应保留现有 `DatabaseBm25EvidenceBackend` 和降级警告。
 
+## 工业协议沙箱
+
+在没有企业 BMS/EMS 凭证、消息代理和现场设备时，只能装配明确标注的协议沙箱。`IndustrialBmsSandbox` 提供 REST、MQTT 消息信封和固定寄存器映射三种输入路径；它不接收调用方提供的 SOH，而是将经校验的容量观测交给共享 `ingest_newly_observed_soh` 工具计算。
+
+将 `create_industrial_sandbox_http_adapter` 注入 `create_fastapi_app` 后，成员或管理员可使用：
+
+```text
+POST /v1/integrations/industrial/sandbox/bms/rest
+POST /v1/integrations/industrial/sandbox/bms/mqtt
+POST /v1/integrations/industrial/sandbox/bms/modbus
+GET  /v1/integrations/industrial/sandbox/ems/decisions/{result_id}
+```
+
+浏览器写请求必须带受信 `Origin`。MQTT 路径的批准主题是：
+
+```text
+quanxin/v1/bms/{measurement_batch_id}
+```
+
+HTTP 请求仅以严格 Base64 信封模拟 MQTT 消息投递，不会自动连接外部 Broker。Modbus 路径仅接受固定版本：
+
+```text
+quanxin-modbus-bms-v1
+```
+
+其 8 个无符号 16 位寄存器依次编码循环数、放电容量 mAh、参考容量 mAh 和 UTC Unix 秒，每个字段使用高字在前的两个寄存器。重复消息按 UUID 和内容哈希幂等处理；同一 UUID 内容冲突、重复循环或批次上下文变化会被拒绝。
+
+`EmsDecisionSandboxPublisher` 只解析审计账本中已登记、版本匹配的 `make_batch_decision` `ToolResult`，输出分类决策、原因码和来源哈希，不在接口层重新计算阈值或经营数值。
+
+以上均为**协议沙箱**，不代表生产 BMS/EMS 已接入。真实部署必须由企业提供凭证、网络、安全联锁、设备协议和目标域数据，并在独立适配器中完成验收。
+
 ## MCP
 
 MCP SDK 是惰性可选依赖。安装仓库已验证的 SDK 版本：
