@@ -58,7 +58,7 @@ class CycleLifeCurveBatch:
         if absent.numel() and not torch.isnan(absent).all():
             raise ValueError("unobserved curve values must remain NaN")
         if not torch.isfinite(self.observed_cycles).all() or torch.any(
-            self.observed_cycles < self.cutoff_cycle
+            self.observed_cycles <= self.cutoff_cycle
         ):
             raise ValueError("observed cycle labels must be finite and after the cutoff")
 

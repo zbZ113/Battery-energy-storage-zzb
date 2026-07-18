@@ -73,6 +73,22 @@ class MatrOfficialLifeEvidence:
             raise ValueError("MATR official life label and censoring flag disagree")
 
 
+def is_matr_official_life_future_target(
+    evidence: MatrOfficialLifeEvidence,
+    *,
+    cutoff_cycle: int,
+) -> bool:
+    """Return whether an observed official life remains strictly after the cutoff."""
+
+    if cutoff_cycle < 0:
+        raise ValueError("cutoff_cycle must be non-negative")
+    return (
+        not evidence.official_life_right_censored
+        and evidence.official_life_label is not None
+        and evidence.official_life_label > cutoff_cycle
+    )
+
+
 def restrict_matr_split_to_cells(
     split: SplitManifest,
     selected_cell_ids: set[str],
@@ -216,9 +232,14 @@ def load_matr_cycle_life_curve_cohorts_from_evidence(
     )
     prepared: dict[str, tuple[torch.Tensor, torch.Tensor, float]] = {}
     for cell_id in sorted(split_cells):
+        label = evidence_by_cell[cell_id]
+        if not is_matr_official_life_future_target(
+            label,
+            cutoff_cycle=cutoff_cycle,
+        ):
+            continue
         manifest = manifests[cell_id]
         verified = verify_cell_artifacts(processed_root, manifest)
-        label = evidence_by_cell[cell_id]
         if verified.metadata.source_sha256 != raw_sha256:
             raise ValueError("early input and scalar evidence raw source hashes differ")
         if (
@@ -226,8 +247,6 @@ def load_matr_cycle_life_curve_cohorts_from_evidence(
             or verified.metadata.reference_capacity_ah != label.reference_capacity_ah
         ):
             raise ValueError("early metadata and scalar label evidence differ")
-        if label.official_life_right_censored:
-            continue
         if label.official_life_label is None:
             raise ValueError("observed MATR official life requires a label")
         records = _read_cutoff_records(verified.parquet_path, cutoff_cycle=cutoff_cycle)

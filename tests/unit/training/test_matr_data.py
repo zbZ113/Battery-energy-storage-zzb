@@ -217,6 +217,51 @@ def test_scalar_life_loading_does_not_require_cycle500_trajectory_membership(
     assert cohorts.test.observed_cycles.tolist() == [303.0]
 
 
+def test_scalar_life_loading_excludes_events_at_or_before_the_cutoff(
+    tmp_path: Path,
+) -> None:
+    processed = tmp_path / "early"
+    labels = {
+        "MATR_train-observed": 20,
+        "MATR_train-future": 200,
+        "MATR_validation": 201,
+        "MATR_calibration": 202,
+        "MATR_test": 203,
+    }
+    for cell_id, label in labels.items():
+        _write_cell(processed, cell_id, official_life_label=label)
+    split = SplitManifest(
+        dataset_id="MATR",
+        train=("MATR_train-observed", "MATR_train-future"),
+        validation=("MATR_validation",),
+        calibration=("MATR_calibration",),
+        test=("MATR_test",),
+    )
+    evidence = tuple(
+        MatrOfficialLifeEvidence(
+            cell_id=cell_id,
+            official_life_label=label,
+            official_life_right_censored=False,
+            reference_capacity_ah=1.05,
+        )
+        for cell_id, label in labels.items()
+    )
+
+    cohorts = load_matr_cycle_life_curve_cohorts_from_evidence(
+        processed_root=processed,
+        raw_sha256="a" * 64,
+        evidence=evidence,
+        split_manifest=split,
+        cutoff_cycle=20,
+        voltage_min_v=2.0,
+        voltage_max_v=3.6,
+        voltage_grid_step_v=0.1,
+    )
+
+    assert cohorts.train.cell_ids == ("MATR_train-future",)
+    assert cohorts.train.observed_cycles.tolist() == [200.0]
+
+
 def _curve_batch(cell_id: str, *, cutoff_cycle: int = 20) -> CycleLifeCurveBatch:
     return CycleLifeCurveBatch(
         dataset_id="MATR",

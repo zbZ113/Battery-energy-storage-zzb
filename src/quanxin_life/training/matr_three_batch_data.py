@@ -19,6 +19,7 @@ from quanxin_life.training.matr_data import (
     MatrCurveCohorts,
     MatrHybridCohorts,
     MatrOfficialLifeEvidence,
+    is_matr_official_life_future_target,
     load_matr_cycle_life_curve_cohorts_from_evidence,
     load_matr_hybrid_trajectory_cohorts,
     merge_matr_curve_cohorts,
@@ -52,6 +53,7 @@ def load_matr_three_batch_training_cohorts(
     curve_components: list[MatrCurveCohorts] = []
     hybrid_components: list[MatrHybridCohorts] = []
     component_splits: list[SplitManifest] = []
+    expected_scalar_count = 0
     for component in manifest.batches:
         conversion = MatrBatchConversionReport.model_validate_json(
             _verified_file(
@@ -101,6 +103,13 @@ def load_matr_three_batch_training_cohorts(
             )
             for cell in conversion.cells
         )
+        expected_scalar_count += sum(
+            is_matr_official_life_future_target(
+                cell,
+                cutoff_cycle=cutoff_cycle,
+            )
+            for cell in scalar_evidence
+        )
         curve_components.append(
             load_matr_cycle_life_curve_cohorts_from_evidence(
                 processed_root=_inside(root, component.processed_root),
@@ -141,8 +150,10 @@ def load_matr_three_batch_training_cohorts(
         len(getattr(hybrid, partition).cell_ids)
         for partition in ("train", "validation", "calibration", "test")
     )
-    if scalar_count != manifest.scalar_label_count:
-        raise ValueError("loaded MATR scalar count differs from the three-batch manifest")
+    if scalar_count != expected_scalar_count:
+        raise ValueError(
+            "loaded MATR scalar count differs from cutoff-eligible source evidence"
+        )
     if hybrid_count != manifest.hybrid_eligible_count:
         raise ValueError("loaded MATR Hybrid count differs from the three-batch manifest")
     return curves, hybrid

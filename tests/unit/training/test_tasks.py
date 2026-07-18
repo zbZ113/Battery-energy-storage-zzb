@@ -82,6 +82,19 @@ def test_cpmlp_task_rejects_cell_overlap_or_wrong_target() -> None:
         )
 
 
+def test_cycle_life_batch_rejects_event_at_the_observation_cutoff() -> None:
+    with pytest.raises(ValueError, match="after the cutoff"):
+        CycleLifeCurveBatch(
+            dataset_id="MATR",
+            target=PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE,
+            cell_ids=("already-observed",),
+            curve_values=torch.tensor([[[0.8], [0.7]]], dtype=torch.float32),
+            observed_mask=torch.ones((1, 2), dtype=torch.bool),
+            observed_cycles=torch.tensor([20.0], dtype=torch.float32),
+            cutoff_cycle=20,
+        )
+
+
 def _trajectory_batch(cell_ids: tuple[str, ...]) -> HybridTrajectoryBatch:
     return HybridTrajectoryBatch(
         dataset_id="MATR",
