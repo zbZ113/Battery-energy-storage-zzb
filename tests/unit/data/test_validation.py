@@ -39,6 +39,52 @@ def test_time_must_increase_within_cycle() -> None:
     assert any(issue.code == "NON_MONOTONIC_TIME" for issue in report.issues)
 
 
+def test_equal_time_is_reported_as_numeric_tolerance_warning() -> None:
+    report = validate_cycle_records(
+        (_record(1, 0, 1.0), _record(1, 1, 1.0)),
+        time_monotonic_tolerance_s=1e-9,
+    )
+
+    issues = {issue.code: issue for issue in report.issues}
+    assert "NON_MONOTONIC_TIME" not in issues
+    assert (
+        issues["TIME_WITHIN_NUMERIC_TOLERANCE"].severity
+        == DataQualitySeverity.WARNING
+    )
+
+
+def test_tiny_time_reversal_is_reported_as_numeric_tolerance_warning() -> None:
+    report = validate_cycle_records(
+        (_record(1, 0, 1.0), _record(1, 1, 1.0 - 2.6e-11)),
+        time_monotonic_tolerance_s=1e-9,
+    )
+
+    codes = {issue.code for issue in report.issues}
+    assert "NON_MONOTONIC_TIME" not in codes
+    assert "TIME_WITHIN_NUMERIC_TOLERANCE" in codes
+
+
+def test_time_reversal_beyond_numeric_tolerance_is_an_error() -> None:
+    report = validate_cycle_records(
+        (_record(1, 0, 1.0), _record(1, 1, 1.0 - 1.1e-9)),
+        time_monotonic_tolerance_s=1e-9,
+    )
+
+    issue = next(
+        issue for issue in report.issues if issue.code == "NON_MONOTONIC_TIME"
+    )
+    assert issue.severity == DataQualitySeverity.ERROR
+
+
+def test_equal_time_remains_an_error_without_explicit_tolerance() -> None:
+    report = validate_cycle_records((_record(1, 0, 1.0), _record(1, 1, 1.0)))
+
+    issue = next(
+        issue for issue in report.issues if issue.code == "NON_MONOTONIC_TIME"
+    )
+    assert issue.severity == DataQualitySeverity.ERROR
+
+
 def test_mixed_cells_are_blocked() -> None:
     report = validate_cycle_records(
         (_record(1, 0, 0.0), _record(1, 1, 1.0, cell_id="MATR_b1c1"))

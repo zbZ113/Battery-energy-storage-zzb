@@ -4,7 +4,7 @@
 
 **Goal:** Allow only numerically insignificant MATR timestamp jitter while preserving strict rejection of real time reversal, and make the approved file-backed MLflow/headless A100 runtime automatic.
 
-**Architecture:** The shared data validator owns the `1e-9 s` tolerance and emits a non-fatal warning for equal or tolerance-range reversals. The curve tensor preserves that warning without changing any telemetry value. The A100 dataset entrypoint exports the approved runtime variables before preparation, preflight, or training.
+**Architecture:** The shared data validator remains strict by default and accepts an explicit tolerance parameter. MATR passes `1e-9 s` through its versioned curve configuration and preserves the resulting warning without changing telemetry. The A100 dataset entrypoint exports the approved runtime variables before preparation, preflight, or training.
 
 **Tech Stack:** Python 3.11, Pydantic, pytest, Bash, Ruff, mypy, real MATR Parquet artifacts.
 
@@ -16,7 +16,7 @@
 - Modify: `src/quanxin_life/data/validation.py`
 - Modify: `tests/unit/data/test_validation.py`
 
-- [ ] **Step 1: Write failing validation tests**
+- [x] **Step 1: Write failing validation tests**
 
 Add tests constructing one-cell, one-cycle `CycleRecord` sequences that assert:
 
@@ -34,38 +34,38 @@ assert "NON_MONOTONIC_TIME" in {issue.code for issue in report.issues}
 
 for a reversal larger than `1e-9 s`.
 
-- [ ] **Step 2: Run tests and observe RED**
+- [x] **Step 2: Run tests and observe RED**
 
 Run:
 
 ```powershell
-.\.venv\python.exe -m pytest tests/unit/data/test_validation.py -q
+.\.venv\Scripts\python.exe -m pytest tests/unit/data/test_validation.py -q
 ```
 
 Expected: tolerance cases fail because the current validator treats every non-increase as `NON_MONOTONIC_TIME`.
 
-- [ ] **Step 3: Implement the minimal tolerance**
+- [x] **Step 3: Implement the minimal tolerance**
 
-Define:
+Add an explicit `time_monotonic_tolerance_s` parameter with a strict `0.0` default. MATR supplies:
 
 ```python
 TIME_MONOTONIC_TOLERANCE_S = 1e-9
 ```
 
-For each adjacent time pair, emit `NON_MONOTONIC_TIME` only when:
+When a positive tolerance is supplied, emit `NON_MONOTONIC_TIME` only when:
 
 ```python
 current < previous - TIME_MONOTONIC_TOLERANCE_S
 ```
 
-Otherwise, when `current <= previous`, emit warning code `TIME_WITHIN_NUMERIC_TOLERANCE`.
+Otherwise, when `current <= previous`, emit warning code `TIME_WITHIN_NUMERIC_TOLERANCE`. With the default zero tolerance, every non-increase remains an error.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
 ```powershell
-.\.venv\python.exe -m pytest tests/unit/data/test_validation.py -q
+.\.venv\Scripts\python.exe -m pytest tests/unit/data/test_validation.py -q
 .\.venv\Scripts\ruff.exe check src/quanxin_life/data/validation.py tests/unit/data/test_validation.py
 .\.venv\Scripts\mypy.exe src/quanxin_life/data/validation.py
 ```
@@ -78,7 +78,7 @@ Expected: all commands succeed.
 - Modify: `src/quanxin_life/features/curve_tensor.py`
 - Modify: `tests/unit/features/test_curve_tensor.py`
 
-- [ ] **Step 1: Write a failing curve test**
+- [x] **Step 1: Write a failing curve test**
 
 Create valid discharge records with one equal timestamp and assert:
 
@@ -88,26 +88,26 @@ assert "TIME_WITHIN_NUMERIC_TOLERANCE" in tensor.warnings
 assert any(tensor.observed_mask)
 ```
 
-- [ ] **Step 2: Run the test and observe RED**
+- [x] **Step 2: Run the test and observe RED**
 
 Run:
 
 ```powershell
-.\.venv\python.exe -m pytest tests/unit/features/test_curve_tensor.py -q
+.\.venv\Scripts\python.exe -m pytest tests/unit/features/test_curve_tensor.py -q
 ```
 
 Expected: extraction no longer blocks after Task 1, but the warning is absent from `CurveTensor.warnings`.
 
-- [ ] **Step 3: Preserve the approved warning**
+- [x] **Step 3: Preserve the approved warning**
 
 Collect `TIME_WITHIN_NUMERIC_TOLERANCE` from the validation report and add it to the existing tensor warning list. Do not change `time_s`, sample order, voltage, capacity, or interpolation.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
 ```powershell
-.\.venv\python.exe -m pytest tests/unit/features/test_curve_tensor.py -q
+.\.venv\Scripts\python.exe -m pytest tests/unit/features/test_curve_tensor.py -q
 .\.venv\Scripts\ruff.exe check src/quanxin_life/features/curve_tensor.py tests/unit/features/test_curve_tensor.py
 .\.venv\Scripts\mypy.exe src/quanxin_life/features/curve_tensor.py
 ```
@@ -120,7 +120,7 @@ Expected: all commands succeed.
 - Modify: `scripts/a100/train_dataset.sh`
 - Modify: `tests/integration/test_a100_scripts.py`
 
-- [ ] **Step 1: Write a failing shell contract test**
+- [x] **Step 1: Write a failing shell contract test**
 
 Assert the script contains:
 
@@ -134,17 +134,17 @@ CUDA_VISIBLE_DEVICES=1
 
 and that these declarations appear before `python scripts/run_training_suite.py`.
 
-- [ ] **Step 2: Run the test and observe RED**
+- [x] **Step 2: Run the test and observe RED**
 
 Run:
 
 ```powershell
-.\.venv\python.exe -m pytest tests/integration/test_a100_scripts.py -q
+.\.venv\Scripts\python.exe -m pytest tests/integration/test_a100_scripts.py -q
 ```
 
 Expected: fail because the three new runtime controls are not yet in the script.
 
-- [ ] **Step 3: Export the runtime controls**
+- [x] **Step 3: Export the runtime controls**
 
 Add before data preparation:
 
@@ -157,12 +157,12 @@ unset DISPLAY
 
 Retain the existing physical GPU 1 binding.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
 ```powershell
-.\.venv\python.exe -m pytest tests/integration/test_a100_scripts.py -q
+.\.venv\Scripts\python.exe -m pytest tests/integration/test_a100_scripts.py -q
 ```
 
 Expected: pass.
@@ -173,19 +173,19 @@ Expected: pass.
 - Verify: `data/processed/MATR/*-cutoff150`
 - Create generated artifact: `dist/quanxin-a100-smoke-hotfix.zip`
 
-- [ ] **Step 1: Run cutoff 100 and 150 cohort regression**
+- [x] **Step 1: Run real affected-cell regression**
 
-Use the registered three-batch manifest and split to call `load_matr_three_batch_training_cohorts` for cutoff 100 and 150. Assert scalar count 138 and Hybrid count 120 for each cutoff.
+Scan all three registered batches through cutoff 150, identify every nonzero cycle with equal or slightly reversed time, and run all affected cells through `validate_cycle_records` and `build_discharge_curve_tensor`. All 49 affected cells must emit the tolerance warning, emit no `NON_MONOTONIC_TIME`, and retain at least one observed curve. The complete cohort regression exceeded the local command time limit; final end-to-end cohort assembly remains part of the resumed server Smoke.
 
-- [ ] **Step 2: Run focused and full quality gates**
+- [x] **Step 2: Run focused and full quality gates**
 
 Run:
 
 ```powershell
-.\.venv\python.exe -m pytest tests/unit/data/test_validation.py tests/unit/features/test_curve_tensor.py tests/integration/test_a100_scripts.py -q
+.\.venv\Scripts\python.exe -m pytest tests/unit/data/test_validation.py tests/unit/features/test_curve_tensor.py tests/integration/test_a100_scripts.py -q
 .\.venv\Scripts\ruff.exe check src/quanxin_life/data/validation.py src/quanxin_life/features/curve_tensor.py tests/unit/data/test_validation.py tests/unit/features/test_curve_tensor.py
 .\.venv\Scripts\mypy.exe src/quanxin_life/data/validation.py src/quanxin_life/features/curve_tensor.py
-.\.venv\python.exe -m compileall -q src scripts
+.\.venv\Scripts\python.exe -m compileall -q src scripts
 ```
 
 Expected: all commands succeed.
@@ -195,7 +195,7 @@ Expected: all commands succeed.
 Commit only the approved source, tests, Shell script, and plan updates:
 
 ```bash
-git add src/quanxin_life/data/validation.py src/quanxin_life/features/curve_tensor.py scripts/a100/train_dataset.sh tests/unit/data/test_validation.py tests/unit/features/test_curve_tensor.py tests/integration/test_a100_scripts.py docs/superpowers/plans/2026-07-18-matr-time-tolerance-a100-runtime-hotfix.md
+git add src/quanxin_life/data/validation.py src/quanxin_life/features/curve_tensor.py src/quanxin_life/training/matr_data.py scripts/a100/train_dataset.sh tests/unit/data/test_validation.py tests/unit/features/test_curve_tensor.py tests/integration/test_a100_scripts.py docs/superpowers/plans/2026-07-18-matr-time-tolerance-a100-runtime-hotfix.md
 git commit -m "fix: tolerate MATR timestamp precision jitter"
 ```
 
@@ -204,7 +204,7 @@ git commit -m "fix: tolerate MATR timestamp precision jitter"
 Create a ZIP from the committed files:
 
 ```powershell
-git archive --format=zip --output "dist/quanxin-a100-smoke-hotfix.zip" HEAD src/quanxin_life/data/validation.py src/quanxin_life/features/curve_tensor.py scripts/a100/train_dataset.sh
+git archive --format=zip --output "dist/quanxin-a100-smoke-hotfix.zip" HEAD src/quanxin_life/data/validation.py src/quanxin_life/features/curve_tensor.py src/quanxin_life/training/matr_data.py scripts/a100/train_dataset.sh
 ```
 
 Record its SHA-256 with `Get-FileHash`. The archive must contain no data, credentials, model artifacts, checkpoints, or `.git` metadata.

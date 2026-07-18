@@ -133,12 +133,18 @@ def test_excludes_exact_duplicate_zero_information_telemetry_rows() -> None:
     assert result.observed_mask[1:3] == (True, True)
 
 
-def test_same_time_with_different_telemetry_remains_a_quality_error() -> None:
+def test_same_time_with_different_telemetry_is_preserved_with_warning() -> None:
     first, second, *remaining = _records()
     conflicting = second.model_copy(update={"time_s": first.time_s})
 
-    with pytest.raises(ValueError, match="NON_MONOTONIC_TIME"):
-        build_discharge_curve_tensor(
-            (first, conflicting, *remaining),
-            config=CurveTensorConfig(cutoff_cycle=20, voltage_grid_step_v=0.1),
-        )
+    result = build_discharge_curve_tensor(
+        (first, conflicting, *remaining),
+        config=CurveTensorConfig(
+            cutoff_cycle=20,
+            voltage_grid_step_v=0.1,
+            time_monotonic_tolerance_s=1e-9,
+        ),
+    )
+
+    assert "TIME_WITHIN_NUMERIC_TOLERANCE" in result.warnings
+    assert result.observed_mask[1:3] == (True, True)

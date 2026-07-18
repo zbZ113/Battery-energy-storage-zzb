@@ -34,6 +34,11 @@ class CurveTensorConfig(BaseModel):
     voltage_min_v: float | None = Field(default=None, allow_inf_nan=False)
     voltage_max_v: float | None = Field(default=None, allow_inf_nan=False)
     min_curve_points: int = Field(default=3, ge=2)
+    time_monotonic_tolerance_s: float = Field(
+        default=0.0,
+        ge=0.0,
+        allow_inf_nan=False,
+    )
     feature_version: str = Field(default=CURVE_TENSOR_FEATURE_VERSION, min_length=1)
 
     @model_validator(mode="after")
@@ -116,7 +121,10 @@ def build_discharge_curve_tensor(
         (record.cycle_index for record in records), cutoff_cycle=config.cutoff_cycle
     )
     prepared_records, duplicate_count = exclude_exact_duplicate_telemetry(records)
-    report = validate_cycle_records(prepared_records)
+    report = validate_cycle_records(
+        prepared_records,
+        time_monotonic_tolerance_s=config.time_monotonic_tolerance_s,
+    )
     fatal_issues = tuple(
         issue
         for issue in report.issues
@@ -136,7 +144,12 @@ def build_discharge_curve_tensor(
 
     cycle_indices = tuple(range(config.cutoff_cycle + 1))
     by_cycle = _group_by_cycle(valid_records)
-    warnings: list[str] = []
+    warnings = [
+        issue.code
+        for issue in report.issues
+        if issue.severity is DataQualitySeverity.WARNING
+        and issue.code == "TIME_WITHIN_NUMERIC_TOLERANCE"
+    ]
     if duplicate_count:
         warnings.append("EXACT_DUPLICATE_TELEMETRY_EXCLUDED")
     if len(valid_records) != len(prepared_records):

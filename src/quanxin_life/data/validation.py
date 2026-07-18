@@ -1,6 +1,7 @@
 from collections import defaultdict
 from collections.abc import Sequence
 from itertools import pairwise
+from math import isfinite
 
 from quanxin_life.data.schemas import (
     CycleRecord,
@@ -10,8 +11,17 @@ from quanxin_life.data.schemas import (
 )
 
 
-def validate_cycle_records(records: Sequence[CycleRecord]) -> DataQualityReport:
+def validate_cycle_records(
+    records: Sequence[CycleRecord],
+    *,
+    time_monotonic_tolerance_s: float = 0.0,
+) -> DataQualityReport:
     """Run deterministic structural checks before feature extraction or labeling."""
+    if (
+        not isfinite(time_monotonic_tolerance_s)
+        or time_monotonic_tolerance_s < 0.0
+    ):
+        raise ValueError("time_monotonic_tolerance_s must be finite and non-negative")
     if not records:
         return DataQualityReport(
             dataset_id="unknown",
@@ -66,12 +76,33 @@ def validate_cycle_records(records: Sequence[CycleRecord]) -> DataQualityReport:
     for cycle_index, cycle_records in sorted(by_cycle.items()):
         ordered = sorted(cycle_records, key=lambda record: record.sample_index)
         times = [record.time_s for record in ordered]
-        if any(current <= previous for previous, current in pairwise(times)):
+        adjacent_times = tuple(pairwise(times))
+        if any(
+            current <= previous
+            if time_monotonic_tolerance_s == 0.0
+            else current < previous - time_monotonic_tolerance_s
+            for previous, current in adjacent_times
+        ):
             issues.append(
                 DataQualityIssue(
                     code="NON_MONOTONIC_TIME",
                     severity=DataQualitySeverity.ERROR,
                     message="elapsed time must increase within a cycle",
+                    cell_id=ordered[0].cell_id,
+                    cycle_index=cycle_index,
+                )
+            )
+        elif time_monotonic_tolerance_s > 0.0 and any(
+            current <= previous for previous, current in adjacent_times
+        ):
+            issues.append(
+                DataQualityIssue(
+                    code="TIME_WITHIN_NUMERIC_TOLERANCE",
+                    severity=DataQualitySeverity.WARNING,
+                    message=(
+                        "elapsed time is non-increasing only within the approved "
+                        "numeric tolerance"
+                    ),
                     cell_id=ordered[0].cell_id,
                     cycle_index=cycle_index,
                 )

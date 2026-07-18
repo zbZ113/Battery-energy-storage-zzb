@@ -14,11 +14,22 @@ def test_dataset_shell_is_one_command_and_never_parallelizes_models() -> None:
     script = Path("scripts/a100/train_dataset.sh").read_text(encoding="utf-8")
 
     assert "CUDA_VISIBLE_DEVICES=1" in script
+    assert "MLFLOW_ALLOW_FILE_STORE=true" in script
+    assert "MPLBACKEND=Agg" in script
+    assert "PYTHONUNBUFFERED=1" in script
+    assert "unset DISPLAY" in script
     assert "scripts/prepare_matr_training_data.py" in script
     assert script.index("scripts/prepare_matr_training_data.py") < script.index(
         "scripts/a100/preflight.sh"
     )
     assert 'python scripts/run_training_suite.py "${DATASET}" "${MODE}"' in script
+    training = script.rindex(
+        'python scripts/run_training_suite.py "${DATASET}" "${MODE}"'
+    )
+    assert script.index("MLFLOW_ALLOW_FILE_STORE=true") < training
+    assert script.index("MPLBACKEND=Agg") < training
+    assert script.index("PYTHONUNBUFFERED=1") < training
+    assert script.index("unset DISPLAY") < training
     assert "xargs -P" not in script
     assert " wait" not in script
 

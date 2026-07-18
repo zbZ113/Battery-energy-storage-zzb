@@ -28,6 +28,8 @@ from quanxin_life.training.tasks import (
     HybridTrajectoryBatch,
 )
 
+_MATR_TIME_MONOTONIC_TOLERANCE_S = 1e-9
+
 _HYBRID_FEATURE_NAMES = (
     "capacity_first_ah",
     "capacity_last_ah",
@@ -210,6 +212,7 @@ def load_matr_cycle_life_curve_cohorts_from_evidence(
         voltage_grid_step_v=voltage_grid_step_v,
         voltage_min_v=voltage_min_v,
         voltage_max_v=voltage_max_v,
+        time_monotonic_tolerance_s=_MATR_TIME_MONOTONIC_TOLERANCE_S,
     )
     prepared: dict[str, tuple[torch.Tensor, torch.Tensor, float]] = {}
     for cell_id in sorted(split_cells):

@@ -24,6 +24,10 @@ fi
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=1
+export MLFLOW_ALLOW_FILE_STORE=true
+export MPLBACKEND=Agg
+export PYTHONUNBUFFERED=1
+unset DISPLAY
 
 if [[ "${DATASET}" == "matr-three-batch" ]]; then
   python scripts/prepare_matr_three_batch_data.py "${MODE}"
