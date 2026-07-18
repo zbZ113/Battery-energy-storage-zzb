@@ -14,16 +14,33 @@ def test_readme_is_user_facing_and_only_documents_real_entry_points() -> None:
     readme = _read("README.md")
 
     for section in (
-        "## 项目简介",
-        "## 核心功能",
-        "## 系统架构",
+        "## 项目价值",
+        "## AI核心能力",
+        "## 端到端系统闭环",
+        "## 技术架构",
+        "## 工程进展全景",
         "## 快速开始",
-        "## API、Streamlit 与 MCP",
-        "## 数据与安全边界",
-        "## 已实现能力",
-        "## 验证边界",
+        "## 三批MATR与A100真实训练",
+        "## 产品与协同入口",
+        "## 飞书研发协同",
+        "## 可信与可追溯",
+        "## 质量门禁",
+        "## 仓库结构",
+        "## 典型应用场景",
+        "## 文档导航",
     ):
         assert section in readme
+
+    for marker in (
+        "matr-three-batch",
+        "scripts/a100/train_dataset.sh",
+        "frontend/package.json",
+        "pnpm@10.28.1",
+        "POST /v1/integrations/feishu/events",
+        "src/quanxin_life/integrations/feishu",
+        "ToolResult",
+    ):
+        assert marker in readme
 
     assert "deploy/foundation_api.py" in readme
     assert "workbench/streamlit_app.py" in readme
@@ -32,6 +49,7 @@ def test_readme_is_user_facing_and_only_documents_real_entry_points() -> None:
     assert ".[mcp]" in readme
     assert "FileSystemVerifiedEarlyCycleBatchStore" in readme
     assert "JsonlAuditLedger" in readme
+    assert "当前不足" not in readme
     assert "生产系统" not in readme
 
 
