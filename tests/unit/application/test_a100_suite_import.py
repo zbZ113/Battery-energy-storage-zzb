@@ -259,6 +259,19 @@ def test_importer_verifies_complete_matrix_and_is_idempotent(tmp_path: Path) -> 
     resolved = importer.resolve(first.import_id)
     assert resolved.record == first
     assert resolved.output_root.is_dir()
+    tasks = importer.list_tasks(first.import_id)
+    assert len(tasks) == 20
+    assert {
+        (task.cutoff_cycle, task.model_name, task.seed) for task in tasks
+    } == {
+        (cutoff, model, seed)
+        for cutoff in config.suite.cutoffs
+        for model in MODELS
+        for seed in config.suite.seeds
+    }
+    assert all(task.source_commit == SOURCE_COMMIT for task in tasks)
+    assert all(task.target == "matr_official_cycle_life" for task in tasks)
+    assert all(task.task_relative_root.startswith("cutoff-") for task in tasks)
     (resolved.output_root / "aggregate_metrics.csv").write_text(
         "tampered\n",
         encoding="utf-8",

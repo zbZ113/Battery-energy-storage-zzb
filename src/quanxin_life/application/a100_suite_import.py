@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 from quanxin_life.core import PredictionTarget, sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
@@ -128,6 +128,48 @@ class ImportedA100SuiteRecord(ContractModel):
             or any(part in {"", ".", ".."} for part in path.parts)
         ):
             raise ValueError("registered root must be repository-relative")
+        return path.as_posix()
+
+
+class ImportedA100TaskRecord(ContractModel):
+    """Identity and immutable context for one verified suite task."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["imported-a100-task-v1"] = "imported-a100-task-v1"
+    run_id: str = Field(min_length=1, max_length=200)
+    dataset_id: Literal["MATR"] = "MATR"
+    target: Literal["matr_official_cycle_life"] = "matr_official_cycle_life"
+    model_name: str = Field(min_length=1, max_length=100)
+    cutoff_cycle: int = Field(gt=0)
+    seed: int = Field(gt=0)
+    config_sha256: Sha256
+    input_bundle_sha256: Sha256
+    source_commit: str = Field(pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+    data_version: str = Field(min_length=1)
+    split_version: str = Field(min_length=1)
+    feature_version: str = Field(min_length=1)
+    context_sha256: Sha256
+    task_relative_root: str = Field(min_length=1)
+    completed_at: datetime
+
+    @field_validator("completed_at")
+    @classmethod
+    def completed_at_is_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("completed_at must include a timezone")
+        return value.astimezone(UTC)
+
+    @field_validator("task_relative_root")
+    @classmethod
+    def task_root_is_safe(cls, value: str) -> str:
+        path = Path(value.replace("\\", "/"))
+        if (
+            path.is_absolute()
+            or path.drive
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise ValueError("task root must remain inside the suite output")
         return path.as_posix()
 
 
@@ -245,6 +287,35 @@ class A100SuiteRunImporter:
         record = _load_record(record_path)
         output_root = self._verify_registered_bytes(record)
         return RegisteredA100Suite(record=record, output_root=output_root)
+
+    def list_tasks(self, import_id: str) -> tuple[ImportedA100TaskRecord, ...]:
+        """Return the verified task matrix without reading model or metric payloads."""
+
+        registered = self.resolve(import_id)
+        records = tuple(
+            _task_record(
+                registered.output_root,
+                manifest_path,
+                suite=registered.record,
+            )
+            for manifest_path in sorted(
+                registered.output_root.glob(
+                    "cutoff-*/*/seed-*/run_manifest.json"
+                )
+            )
+        )
+        keys = {
+            (record.cutoff_cycle, record.model_name, record.seed)
+            for record in records
+        }
+        run_ids = {record.run_id for record in records}
+        if (
+            len(records) != registered.record.task_count
+            or len(keys) != len(records)
+            or len(run_ids) != len(records)
+        ):
+            raise ValueError("registered A100 task catalog is incomplete or duplicated")
+        return records
 
     def _verify_registered_bytes(self, record: ImportedA100SuiteRecord) -> Path:
         output_root = _validated_directory(
@@ -414,6 +485,78 @@ def _verify_task(
         if metrics.get(name) != expected:
             raise ValueError(f"A100 task metrics {name} does not match")
     return run_id, input_hash
+
+
+def _task_record(
+    root: Path,
+    manifest_path: Path,
+    *,
+    suite: ImportedA100SuiteRecord,
+) -> ImportedA100TaskRecord:
+    manifest = _strict_json(manifest_path)
+    if manifest.get("schema_version") != "completed-run-v2":
+        raise ValueError("registered A100 task manifest schema is unsupported")
+    cutoff, model, seed = _task_key(root, manifest_path)
+    context = {
+        "run_id": manifest.get("run_id"),
+        "dataset_id": manifest.get("dataset_id"),
+        "target": manifest.get("target"),
+        "model_name": manifest.get("model_name"),
+        "cutoff_cycle": manifest.get("cutoff_cycle"),
+        "seed": manifest.get("seed"),
+        "config_sha256": manifest.get("config_sha256"),
+        "input_bundle_sha256": manifest.get("input_bundle_sha256"),
+        "source_commit": manifest.get("source_commit"),
+        "data_version": manifest.get("data_version"),
+        "split_version": manifest.get("split_version"),
+        "feature_version": manifest.get("feature_version"),
+    }
+    expected = {
+        "dataset_id": suite.dataset_id,
+        "target": suite.target,
+        "model_name": model,
+        "cutoff_cycle": cutoff,
+        "seed": seed,
+        "config_sha256": suite.config_sha256,
+        "input_bundle_sha256": suite.input_bundle_sha256,
+        "source_commit": suite.source_commit,
+        "data_version": suite.data_version,
+        "split_version": suite.split_version,
+        "feature_version": suite.feature_version,
+    }
+    if any(context.get(name) != value for name, value in expected.items()):
+        raise ValueError("registered A100 task context does not match its suite")
+    if manifest.get("context_sha256") != sha256_canonical(context):
+        raise ValueError("registered A100 task context SHA-256 does not match")
+    if _strict_json(manifest_path.parent / "config_resolved.json") != context:
+        raise ValueError("registered A100 task resolved config does not match")
+    context_sha256 = _validate_sha256(
+        manifest.get("context_sha256"),
+        name="context_sha256",
+    )
+    try:
+        completed_at = TypeAdapter(datetime).validate_python(
+            manifest.get("completed_at")
+        )
+    except ValidationError as exc:
+        raise ValueError("registered A100 task completion time is invalid") from exc
+    return ImportedA100TaskRecord(
+        run_id=context["run_id"],
+        dataset_id=context["dataset_id"],
+        target=context["target"],
+        model_name=model,
+        cutoff_cycle=cutoff,
+        seed=seed,
+        config_sha256=context["config_sha256"],
+        input_bundle_sha256=context["input_bundle_sha256"],
+        source_commit=context["source_commit"],
+        data_version=context["data_version"],
+        split_version=context["split_version"],
+        feature_version=context["feature_version"],
+        context_sha256=context_sha256,
+        task_relative_root=manifest_path.parent.relative_to(root).as_posix(),
+        completed_at=completed_at,
+    )
 
 
 def _verify_aggregate(
@@ -714,5 +857,6 @@ def _assert_reimport_context(
 __all__ = [
     "A100SuiteRunImporter",
     "ImportedA100SuiteRecord",
+    "ImportedA100TaskRecord",
     "RegisteredA100Suite",
 ]

@@ -124,13 +124,26 @@ from quanxin_life.audit import JsonlAuditLedger
 ledger = JsonlAuditLedger("runtime/audit/tool-results.jsonl")
 dependencies = build_reviewed_competition_dependencies(audit_ledger=ledger)
 batch_store = FileSystemVerifiedEarlyCycleBatchStore("runtime/batches")
-app = create_competition_fastapi_app(dependencies, batch_store=batch_store)
+app = create_competition_fastapi_app(
+    dependencies,
+    batch_store=batch_store,
+    auth_adapter=reviewed_auth_adapter,
+    project_adapter=reviewed_project_adapter,
+    dataset_adapter=reviewed_dataset_adapter,
+    experiment_adapter=reviewed_experiment_adapter,
+    agent_run_adapter=reviewed_agent_run_adapter,
+    knowledge_adapter=reviewed_knowledge_adapter,
+)
 ```
 
 将这段装配代码放在使用方自己的运行模块后，可通过 Uvicorn 启动。完整 API 包括：
 
 - `POST /v1/batches/canonical-csv`
 - `POST /v1/workflows/lifetime-decision`
+- `POST /v1/experiments`
+- `GET /v1/experiments`
+- `GET /v1/experiments/{experiment_id}`
+- `GET /v1/experiment-runs`
 - `GET /v1/results/{result_id}`
 - `GET /v1/reports/{result_id}`
 
@@ -199,7 +212,43 @@ python scripts/import_a100_suite_run.py `
   --transfer-sha256 <下载归档的 SHA-256>
 ```
 
-命令只在完整矩阵、来源提交、数据/划分/特征版本、汇总状态和所有字节同时一致时输出规范 JSON 注册记录。Smoke 永远保持 `formal_performance_claim=false`；Final 缺任务、有失败行或未标记正式时会拒绝导入。该注册只完成安全接收，后续模型加载仍须经过对应 UBJ/safetensors 制品清单和模型适配器。
+命令只在完整矩阵、来源提交、数据/划分/特征版本、汇总状态和所有字节同时一致时输出规范 JSON 导入记录。Smoke 永远保持 `formal_performance_claim=false`；Final 缺任务、有失败行或未标记正式时会拒绝导入。该导入只完成安全接收，后续模型加载仍须经过对应 UBJ/safetensors 制品清单和模型适配器。
+
+### PostgreSQL实验登记与统一查询
+
+完成上述安全导入后，先升级数据库：
+
+```bash
+python -m alembic upgrade head
+```
+
+应用装配时，用同一个受管目录创建 `A100SuiteRunImporter`，再将其作为只读来源注入 `ExperimentRegistryService` 和 `create_experiment_http_adapter`。完整竞赛应用必须把该 adapter 与认证、项目、数据集、Agent和知识库 adapter 一起传给 `create_competition_fastapi_app`。登记过程会重新校验受管字节树，只把以下结构化身份写入PostgreSQL：
+
+- 项目、`import_id`、Smoke/Final模式和正式结论标志；
+- 数据、划分、特征、配置、输入包、输出和传输哈希；
+- 每个任务的模型、截止循环、随机种子、`run_id`、上下文哈希和审计URI。
+
+数据库不复制MAE等业务指标，不保存模型字节，也不把本地绝对路径暴露给HTTP客户端。指标、图表、日志和安全模型制品继续留在已验证的A100受管目录；后续数值展示仍必须通过正式结果工具和 `ToolResult` 证据链。
+
+受信成员或管理员在已登录浏览器中登记：
+
+```text
+POST /v1/experiments
+{
+  "project_id": "<visible-project-id>",
+  "import_id": "<import_a100_suite_run.py 输出的64位import_id>"
+}
+```
+
+同一项目和 `import_id` 重复提交会返回同一个 `experiment_id`，不会重复创建任务。只读查询：
+
+```text
+GET /v1/experiments?project_id=<project-id>&dataset_id=MATR&mode=smoke
+GET /v1/experiments/{experiment_id}
+GET /v1/experiment-runs?project_id=<project-id>&model_name=cpmlp&cutoff_cycle=100&seed=20260712
+```
+
+管理员可查看所有项目；成员只能查看自己拥有或获分配的项目；评委必须拥有显式 `JUDGE` 项目成员关系且只能读取，不能登记。未知导入、损坏字节、任务矩阵不完整或持久化上下文冲突都会失败关闭。
 
 ## 审核知识库与混合检索
 

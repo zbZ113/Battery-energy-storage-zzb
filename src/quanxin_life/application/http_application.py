@@ -8,6 +8,7 @@ from quanxin_life.api.agent_runs import AgentRunHttpAdapter
 from quanxin_life.api.app import create_fastapi_app
 from quanxin_life.api.auth import AuthHttpAdapter
 from quanxin_life.api.datasets import DatasetHttpAdapter
+from quanxin_life.api.experiments import ExperimentHttpAdapter
 from quanxin_life.api.knowledge import KnowledgeHttpAdapter
 from quanxin_life.api.projects import ProjectHttpAdapter
 from quanxin_life.api.service import ToolInvocationService
@@ -33,6 +34,7 @@ def create_competition_fastapi_app(
     auth_adapter: AuthHttpAdapter,
     project_adapter: ProjectHttpAdapter,
     dataset_adapter: DatasetHttpAdapter,
+    experiment_adapter: ExperimentHttpAdapter,
     agent_run_adapter: AgentRunHttpAdapter,
     knowledge_adapter: KnowledgeHttpAdapter,
 ) -> Any:
@@ -44,6 +46,10 @@ def create_competition_fastapi_app(
         raise ValueError("project_adapter is required for the competition HTTP application")
     if dataset_adapter is None:
         raise ValueError("dataset_adapter is required for the competition HTTP application")
+    if experiment_adapter is None:
+        raise ValueError(
+            "experiment_adapter is required for the competition HTTP application"
+        )
     if agent_run_adapter is None:
         raise ValueError("agent_run_adapter is required for the competition HTTP application")
     if knowledge_adapter is None:
@@ -79,6 +85,7 @@ def create_competition_fastapi_app(
         auth_adapter=auth_adapter,
         project_adapter=project_adapter,
         dataset_adapter=dataset_adapter,
+        experiment_adapter=experiment_adapter,
         agent_run_adapter=agent_run_adapter,
         knowledge_adapter=knowledge_adapter,
     )

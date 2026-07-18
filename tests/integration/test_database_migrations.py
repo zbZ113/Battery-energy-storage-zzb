@@ -32,6 +32,8 @@ EXPECTED_TABLES = {
     "knowledge_chunks",
     "feishu_bindings",
     "feishu_event_receipts",
+    "experiment_suites",
+    "experiment_runs",
 }
 
 
@@ -100,6 +102,31 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
         assert ("agent_step_id",) in {
             tuple(constraint["column_names"])
             for constraint in upgraded_inspector.get_unique_constraints("tool_results")
+        }
+        assert {
+            "project_id",
+            "import_id",
+            "dataset_id",
+            "target",
+            "source_commit",
+            "output_sha256",
+            "evidence_uri",
+            "created_by_user_id",
+        } <= {
+            column["name"]
+            for column in upgraded_inspector.get_columns("experiment_suites")
+        }
+        assert ("project_id", "import_id") in {
+            tuple(constraint["column_names"])
+            for constraint in upgraded_inspector.get_unique_constraints(
+                "experiment_suites"
+            )
+        }
+        assert ("suite_id", "cutoff_cycle", "model_name", "seed") in {
+            tuple(constraint["column_names"])
+            for constraint in upgraded_inspector.get_unique_constraints(
+                "experiment_runs"
+            )
         }
         assert {
             "created_by_user_id",

@@ -389,6 +389,100 @@ class ModelManifest(Base):
     )
 
 
+class ExperimentSuite(Base):
+    __tablename__ = "experiment_suites"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "import_id",
+            name="uq_experiment_suite_project_import",
+        ),
+        Index(
+            "ix_experiment_suites_project_dataset_mode",
+            "project_id",
+            "dataset_id",
+            "mode",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    import_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    target: Mapped[str] = mapped_column(String(100), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_commit: Mapped[str] = mapped_column(String(64), nullable=False)
+    config_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_bundle_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    data_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    split_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    output_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    transfer_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    formal_performance_claim: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    evidence_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ExperimentRun(Base):
+    __tablename__ = "experiment_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "suite_id",
+            "run_id",
+            name="uq_experiment_run_suite_run_id",
+        ),
+        UniqueConstraint(
+            "suite_id",
+            "cutoff_cycle",
+            "model_name",
+            "seed",
+            name="uq_experiment_run_suite_matrix",
+        ),
+        Index(
+            "ix_experiment_runs_suite_model_cutoff_seed",
+            "suite_id",
+            "model_name",
+            "cutoff_cycle",
+            "seed",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    suite_id: Mapped[str] = mapped_column(
+        ForeignKey("experiment_suites.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    target: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    cutoff_cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    seed: Mapped[int] = mapped_column(Integer, nullable=False)
+    config_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_bundle_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_commit: Mapped[str] = mapped_column(String(64), nullable=False)
+    data_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    split_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    context_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_relative_root: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class CalibrationCohort(Base):
     __tablename__ = "calibration_cohorts"
     __table_args__ = (
