@@ -136,6 +136,36 @@ app = create_competition_fastapi_app(dependencies, batch_store=batch_store)
 
 文件系统批次存储会在每次读取时重新校验 CSV、元数据与来源哈希；JSONL 审计账本会在启动时逐条重建 `ToolResult` 并在损坏、重复或冲突时失败关闭。它们适合单进程比赛部署；多人并发或多副本服务仍应实现同契约的数据库/对象存储后端。
 
+## 审核知识库与混合检索
+
+知识材料必须依次完成上传、独立管理员审核、带页码分块和向量索引。文档上传者不能审批自己的材料；分块文本在读取和检索时都会复验对象大小与 SHA-256。
+
+装配 `create_knowledge_http_adapter` 时注入 `KnowledgeEmbeddingIndexService` 后，管理员可在已审核、已分块文档上调用：
+
+```text
+POST /v1/knowledge/documents/{document_id}/embeddings
+```
+
+向量索引入口只接受版本明确、输出固定 1536 维有限向量的 `DocumentEmbeddingProvider`。相同文档和模型版本重复执行时幂等复用；部分索引、不同模型版本或文本哈希变化会拒绝覆盖。
+
+完整检索由 `DatabaseHybridEvidenceBackend` 装配：
+
+```text
+审核范围
+→ pgvector中已登记的文档向量
+→ 中文BM25召回
+→ 版本化reranker
+→ 带文档、页码、原文摘要与分项得分的证据
+```
+
+即 `pgvector + BM25 + reranker`。权重、Embedding模型、reranker和检索策略必须版本一致。审核范围中只要有任一分块缺少匹配版本向量，整次请求就降级到BM25并返回：
+
+```text
+HYBRID_RETRIEVAL_UNAVAILABLE_INCOMPLETE_EMBEDDINGS
+```
+
+系统不会只检索“恰好有向量”的部分文档，也不会把知识检索结果当作SOH、RUL或其他电池数值。外部Embedding或reranker不可用时，应保留现有 `DatabaseBm25EvidenceBackend` 和降级警告。
+
 ## MCP
 
 MCP SDK 是惰性可选依赖。安装仓库已验证的 SDK 版本：

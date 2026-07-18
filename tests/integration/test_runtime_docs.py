@@ -106,6 +106,15 @@ def test_runtime_guide_documents_both_real_mcp_transports() -> None:
     assert "http://127.0.0.1:8001/mcp" in guide
 
 
+def test_runtime_guide_documents_reviewed_hybrid_knowledge_retrieval() -> None:
+    guide = _read("docs/runtime-setup.md")
+
+    assert "POST /v1/knowledge/documents/{document_id}/embeddings" in guide
+    assert "DatabaseHybridEvidenceBackend" in guide
+    assert "HYBRID_RETRIEVAL_UNAVAILABLE_INCOMPLETE_EMBEDDINGS" in guide
+    assert "pgvector + BM25 + reranker" in guide
+
+
 def test_env_template_contains_no_secret_values() -> None:
     template = _read(".env.example")
 

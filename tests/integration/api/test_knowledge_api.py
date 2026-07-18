@@ -21,6 +21,8 @@ from quanxin_life.auth import (
 from quanxin_life.core import ProjectStatus, UserRole, UserStatus
 from quanxin_life.infrastructure.object_store import StoredObjectRef
 from quanxin_life.knowledge.documents import KnowledgeDocumentService
+from quanxin_life.knowledge.embedding_index import KnowledgeEmbeddingIndexService
+from quanxin_life.knowledge.object_loader import MinioKnowledgeTextLoader
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
 from quanxin_life.persistence.database import DatabaseConfig
 from quanxin_life.persistence.models import Project, User
@@ -56,6 +58,17 @@ class _MemoryObjectStore:
 
     def get_bytes(self, stored: StoredObjectRef) -> bytes:
         return self.payloads[stored.uri]
+
+
+class _DocumentEmbeddingProvider:
+    model_version = "knowledge-api-embedding-v1"
+    dimensions = 1_536
+
+    def embed_documents(
+        self,
+        texts: tuple[str, ...],
+    ) -> tuple[tuple[float, ...], ...]:
+        return tuple((1.0, *(0.0 for _ in range(1_535))) for _ in texts)
 
 
 @pytest.fixture
@@ -112,9 +125,15 @@ def knowledge_client(tmp_path: Path) -> tuple[TestClient, str]:
         auth_service,
         AuthCookieConfig(environment="production", allowed_origins=(ORIGIN,)),
     )
+    object_store = _MemoryObjectStore()
     knowledge_adapter = create_knowledge_http_adapter(
-        KnowledgeDocumentService(sessions, object_store=_MemoryObjectStore()),
+        KnowledgeDocumentService(sessions, object_store=object_store),
         auth_adapter=auth_adapter,
+        embedding_service=KnowledgeEmbeddingIndexService(
+            sessions,
+            text_loader=MinioKnowledgeTextLoader(object_store),
+            embedding_provider=_DocumentEmbeddingProvider(),
+        ),
     )
     app = FastAPI()
     app.include_router(auth_adapter.router)
@@ -183,6 +202,17 @@ def test_member_uploads_and_lists_then_independent_admin_approves_and_indexes(
     assert indexed.status_code == 200, indexed.text
     assert indexed.json()[0]["document_id"] == document["document_id"]
     assert indexed.json()[0]["section_label"] == "Reviewed evidence approved"
+    embedded = client.post(
+        f"/v1/knowledge/documents/{document['document_id']}/embeddings",
+        headers={"Origin": ORIGIN},
+    )
+    assert embedded.status_code == 200, embedded.text
+    assert embedded.json() == {
+        "document_id": document["document_id"],
+        "embedding_model_version": "knowledge-api-embedding-v1",
+        "chunk_count": 1,
+        "reused": False,
+    }
 
 
 def test_admin_can_reject_pending_document_and_invalid_base64_is_rejected(

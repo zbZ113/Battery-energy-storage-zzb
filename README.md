@@ -133,7 +133,7 @@ flowchart LR
 - 三批MATR单卡A100 Smoke/Final入口、验证早停、断点恢复、资源指标、JSONL/CSV/MLflow记录和安全制品。
 - Gaussian Process主动试验、PyBaMM短期核验、批次决策和确定性报告工作流。
 - 强类型工具注册、角色白名单、共享审计账本和数值来源防火墙。
-- FastAPI项目、数据集、Agent运行、知识库与飞书事件接口。
+- FastAPI项目、数据集、Agent运行、知识库与飞书事件接口；审核知识材料支持幂等向量索引、pgvector/BM25/reranker混合检索和整库显式降级。
 - Next.js项目门户、Agent运行页、结果页与认证流程；HTTP-only Streamlit科研工作台；经官方客户端验收的MCP stdio与Streamable HTTP服务。
 - 飞书签名回调、幂等事件回执、租约令牌、失败重试、引用卡片和数据库绑定。
 - Python与前端质量门禁、数据库迁移检查、GitHub Actions和受控依赖配置。

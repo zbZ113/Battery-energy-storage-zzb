@@ -25,6 +25,10 @@ from quanxin_life.knowledge.documents import (
     KnowledgeDocumentService,
     KnowledgeSourceConflictError,
 )
+from quanxin_life.knowledge.embedding_index import (
+    KnowledgeEmbeddingIndexResult,
+    KnowledgeEmbeddingIndexService,
+)
 from quanxin_life.knowledge.parsers import KnowledgeParsingError
 
 _MAX_BASE64_CHARACTERS = ((MAX_KNOWLEDGE_DOCUMENT_BYTES + 2) // 3) * 4
@@ -49,6 +53,7 @@ def create_knowledge_http_adapter(
     service: KnowledgeDocumentService,
     *,
     auth_adapter: AuthHttpAdapter,
+    embedding_service: KnowledgeEmbeddingIndexService | None = None,
 ) -> KnowledgeHttpAdapter:
     """Build upload, review, indexing and project-scoped listing routes."""
 
@@ -176,6 +181,32 @@ def create_knowledge_http_adapter(
             raise HTTPException(
                 status_code=409, detail="knowledge_document_state_conflict"
             ) from exc
+
+    if embedding_service is not None:
+
+        @router.post(
+            "/{document_id}/embeddings",
+            response_model=KnowledgeEmbeddingIndexResult,
+            dependencies=[trusted_origin],
+        )
+        def index_document_embeddings(
+            document_id: str,
+            principal: AuthPrincipal = administrator,
+        ) -> Any:
+            try:
+                return embedding_service.index_document(principal, document_id)
+            except PermissionError as exc:
+                raise HTTPException(
+                    status_code=403, detail="knowledge_embedding_not_allowed"
+                ) from exc
+            except LookupError as exc:
+                raise HTTPException(
+                    status_code=404, detail="knowledge_document_not_found"
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=409, detail="knowledge_embedding_state_conflict"
+                ) from exc
 
     return KnowledgeHttpAdapter(router=router)
 

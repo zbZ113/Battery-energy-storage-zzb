@@ -5,9 +5,16 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
+from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import KnowledgeReviewStatus, ProjectStatus, UserRole, UserStatus
-from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
+from quanxin_life.persistence import (
+    Base,
+    create_engine_from_config,
+    create_session_factory,
+    session_scope,
+)
 from quanxin_life.persistence.database import DatabaseConfig
 from quanxin_life.persistence.models import (
     KnowledgeChunk,
@@ -183,3 +190,212 @@ def test_database_bm25_backend_rejects_modified_chunk_text(tmp_path) -> None:  #
             sessions,
             text_loader=_TextLoader(payloads),
         ).search(scope=scope, query="温度", top_k=5)
+class _QueryEmbeddingProvider:
+    model_version = "embedding-reviewed-v1"
+
+    def embed_query(self, query: str) -> tuple[float, ...]:
+        assert query
+        return (1.0, *(0.0 for _ in range(1_535)))
+
+
+class _EvidenceReranker:
+    model_version = "reranker-reviewed-v1"
+
+    def score(
+        self,
+        *,
+        query: str,
+        passages: tuple[str, ...],
+    ) -> tuple[float, ...]:
+        assert query
+        return tuple(0.75 for _ in passages)
+
+
+def test_database_hybrid_backend_combines_reviewed_vector_bm25_and_reranker(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    from quanxin_life.knowledge.database_backend import (
+        DatabaseHybridEvidenceBackend,
+        DatabaseKnowledgeConfig,
+        DatabaseVerifiedKnowledgeScopeResolver,
+        HybridRetrievalPolicy,
+    )
+
+    sessions, project_id, approved_id, _, payloads = _context(tmp_path)
+    with session_scope(sessions) as session:
+        row = session.scalar(
+            select(KnowledgeChunk).where(KnowledgeChunk.document_id == approved_id)
+        )
+        assert row is not None
+        row.embedding_model_version = "embedding-reviewed-v1"
+        row.embedding = [1.0, *(0.0 for _ in range(1_535))]
+
+    config = DatabaseKnowledgeConfig(
+        knowledge_scope_id="lfp-reviewed-v1",
+        project_id=project_id,
+        corpus_version="corpus-v1",
+        index_version="hybrid-v1",
+        retrieval_policy_version="reviewed-hybrid-v1",
+    )
+    scope = DatabaseVerifiedKnowledgeScopeResolver(
+        sessions, config
+    ).resolve_verified_knowledge_scope(config.knowledge_scope_id)
+    response = DatabaseHybridEvidenceBackend(
+        sessions,
+        text_loader=_TextLoader(payloads),
+        embedding_provider=_QueryEmbeddingProvider(),
+        reranker=_EvidenceReranker(),
+        policy=HybridRetrievalPolicy(
+            policy_version="reviewed-hybrid-v1",
+            embedding_model_version="embedding-reviewed-v1",
+            reranker_model_version="reranker-reviewed-v1",
+        ),
+    ).search(scope=scope, query="temperature capacity degradation", top_k=5)
+
+    assert response.retrieval_mode == "pgvector_bm25_reranker"
+    assert response.warnings == ()
+    assert len(response.hits) == 1
+    assert response.hits[0].document_id == approved_id
+    assert response.hits[0].page_number == 3
+    assert response.hits[0].vector_score == pytest.approx(1.0)
+    assert response.hits[0].reranker_score == pytest.approx(0.75)
+    assert response.hits[0].final_score > 0.0
+
+
+def test_database_hybrid_backend_degrades_whole_scope_when_embeddings_are_incomplete(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    from quanxin_life.knowledge.database_backend import (
+        DatabaseHybridEvidenceBackend,
+        DatabaseKnowledgeConfig,
+        DatabaseVerifiedKnowledgeScopeResolver,
+        HybridRetrievalPolicy,
+    )
+
+    sessions, project_id, _, _, payloads = _context(tmp_path)
+    config = DatabaseKnowledgeConfig(
+        knowledge_scope_id="lfp-reviewed-v1",
+        project_id=project_id,
+        corpus_version="corpus-v1",
+        index_version="hybrid-v1",
+        retrieval_policy_version="reviewed-hybrid-v1",
+    )
+    scope = DatabaseVerifiedKnowledgeScopeResolver(
+        sessions, config
+    ).resolve_verified_knowledge_scope(config.knowledge_scope_id)
+    response = DatabaseHybridEvidenceBackend(
+        sessions,
+        text_loader=_TextLoader(payloads),
+        embedding_provider=_QueryEmbeddingProvider(),
+        reranker=_EvidenceReranker(),
+        policy=HybridRetrievalPolicy(
+            policy_version="reviewed-hybrid-v1",
+            embedding_model_version="embedding-reviewed-v1",
+            reranker_model_version="reranker-reviewed-v1",
+        ),
+    ).search(scope=scope, query="娓╁害", top_k=5)
+
+    assert response.retrieval_mode == "bm25_fallback"
+    assert "VECTOR_RETRIEVAL_UNAVAILABLE" in response.warnings
+    assert "HYBRID_RETRIEVAL_UNAVAILABLE_INCOMPLETE_EMBEDDINGS" in response.warnings
+
+
+class _DocumentEmbeddingProvider:
+    model_version = "embedding-reviewed-v1"
+    dimensions = 1_536
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def embed_documents(
+        self,
+        texts: tuple[str, ...],
+    ) -> tuple[tuple[float, ...], ...]:
+        self.calls += 1
+        return tuple((1.0, *(0.0 for _ in range(1_535))) for _ in texts)
+
+
+def _admin_principal() -> AuthPrincipal:
+    return AuthPrincipal(
+        user_id="knowledge-index-admin",
+        session_id="knowledge-index-session",
+        username="knowledge-index-admin@example.test",
+        role=UserRole.ADMIN,
+        must_change_password=False,
+    )
+
+
+def test_embedding_index_service_indexes_approved_chunks_and_reuses_same_version(
+    tmp_path,
+) -> None:  # type: ignore[no-untyped-def]
+    from quanxin_life.knowledge.embedding_index import KnowledgeEmbeddingIndexService
+
+    sessions, _, approved_id, _, payloads = _context(tmp_path)
+    provider = _DocumentEmbeddingProvider()
+    service = KnowledgeEmbeddingIndexService(
+        sessions,
+        text_loader=_TextLoader(payloads),
+        embedding_provider=provider,
+    )
+
+    indexed = service.index_document(_admin_principal(), approved_id)
+    reused = service.index_document(_admin_principal(), approved_id)
+
+    assert indexed.document_id == approved_id
+    assert indexed.embedding_model_version == provider.model_version
+    assert indexed.chunk_count == 1
+    assert indexed.reused is False
+    assert reused.reused is True
+    assert provider.calls == 1
+    with session_scope(sessions) as session:
+        row = session.scalar(
+            select(KnowledgeChunk).where(KnowledgeChunk.document_id == approved_id)
+        )
+        assert row is not None
+        assert row.embedding_model_version == provider.model_version
+        assert row.embedding == pytest.approx([1.0, *(0.0 for _ in range(1_535))])
+
+
+def test_embedding_index_service_rejects_unapproved_document(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from quanxin_life.knowledge.embedding_index import KnowledgeEmbeddingIndexService
+
+    sessions, _, _, pending_id, payloads = _context(tmp_path)
+    service = KnowledgeEmbeddingIndexService(
+        sessions,
+        text_loader=_TextLoader(payloads),
+        embedding_provider=_DocumentEmbeddingProvider(),
+    )
+
+    with pytest.raises(ValueError, match="approved"):
+        service.index_document(_admin_principal(), pending_id)
+
+
+def test_embedding_index_service_does_not_publish_invalid_vectors(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from quanxin_life.knowledge.embedding_index import KnowledgeEmbeddingIndexService
+
+    class _InvalidEmbeddingProvider:
+        model_version = "embedding-invalid-v1"
+        dimensions = 1_536
+
+        def embed_documents(
+            self,
+            texts: tuple[str, ...],
+        ) -> tuple[tuple[float, ...], ...]:
+            return tuple((1.0,) for _ in texts)
+
+    sessions, _, approved_id, _, payloads = _context(tmp_path)
+    service = KnowledgeEmbeddingIndexService(
+        sessions,
+        text_loader=_TextLoader(payloads),
+        embedding_provider=_InvalidEmbeddingProvider(),
+    )
+
+    with pytest.raises(ValueError, match="1536"):
+        service.index_document(_admin_principal(), approved_id)
+    with session_scope(sessions) as session:
+        row = session.scalar(
+            select(KnowledgeChunk).where(KnowledgeChunk.document_id == approved_id)
+        )
+        assert row is not None
+        assert row.embedding_model_version is None
+        assert row.embedding is None
