@@ -186,11 +186,11 @@ def _markdown_blocks(markdown: str) -> tuple[tuple[str, str], ...]:
 
 def _render_docx(markdown: str, *, result: ToolResult) -> bytes:
     try:
-        from docx import Document  # type: ignore[import-not-found]
-        from docx.enum.section import WD_SECTION_START  # type: ignore[import-not-found]
-        from docx.enum.text import WD_ALIGN_PARAGRAPH  # type: ignore[import-not-found]
-        from docx.oxml.ns import qn  # type: ignore[import-not-found]
-        from docx.shared import Inches, Pt, RGBColor  # type: ignore[import-not-found]
+        from docx import Document
+        from docx.enum.section import WD_SECTION_START
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml.ns import qn
+        from docx.shared import Inches, Pt, RGBColor
     except ModuleNotFoundError as exc:
         raise ReportExportDependencyUnavailable(
             "DOCX export requires installing the 'quanxin-life[reporting]' extra"
@@ -211,7 +211,12 @@ def _render_docx(markdown: str, *, result: ToolResult) -> bytes:
     normal = document.styles["Normal"]
     normal.font.name = "Calibri"
     normal.font.size = Pt(11)
-    normal._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+    def set_east_asia_font(element: Any) -> None:
+        element.get_or_add_rPr().get_or_add_rFonts().set(
+            qn("w:eastAsia"), "Microsoft YaHei"
+        )
+
+    set_east_asia_font(normal._element)
     normal.paragraph_format.space_before = Pt(0)
     normal.paragraph_format.space_after = Pt(6)
     normal.paragraph_format.line_spacing = 1.1
@@ -219,7 +224,7 @@ def _render_docx(markdown: str, *, result: ToolResult) -> bytes:
     heading.font.name = "Calibri"
     heading.font.size = Pt(16)
     heading.font.color.rgb = RGBColor(0x2E, 0x74, 0xB5)
-    heading._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+    set_east_asia_font(heading._element)
     heading.paragraph_format.space_before = Pt(16)
     heading.paragraph_format.space_after = Pt(8)
 
@@ -230,7 +235,7 @@ def _render_docx(markdown: str, *, result: ToolResult) -> bytes:
         run.font.name = "Calibri"
         run.font.size = Pt(9)
         run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
-        run._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+        set_east_asia_font(run._element)
 
     for kind, text in _markdown_blocks(markdown):
         if kind == "title":
@@ -241,7 +246,7 @@ def _render_docx(markdown: str, *, result: ToolResult) -> bytes:
             run.bold = True
             run.font.name = "Calibri"
             run.font.size = Pt(23)
-            run._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+            set_east_asia_font(run._element)
         elif kind == "heading":
             document.add_paragraph(text, style="Heading 1")
         elif kind == "bullet":

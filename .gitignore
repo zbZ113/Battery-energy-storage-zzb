@@ -17,6 +17,7 @@ coverage/
 data/raw/
 data/interim/
 data/processed/
+data/cache/
 # Local raw MATR payload; provenance is tracked by the reviewed manifest below.
 /data/2018-04-12_batchdata_updated_struct_errorcorrect.mat
 /data/2017-05-12_batchdata_updated_struct_errorcorrect.mat
@@ -37,3 +38,11 @@ reports/generated/
 *.log
 .DS_Store
 Thumbs.db
+
+# Local research mirror. Upstream repositories, papers, and archives are
+# intentionally kept outside this repository's Git history. The reproducible
+# catalog, downloader, and study notes remain tracked.
+/research/upstream/
+/research/papers/
+/research/archives/
+/research/.state/
