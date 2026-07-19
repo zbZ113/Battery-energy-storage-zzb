@@ -195,6 +195,37 @@ class CyclePatchConfig:
             raise ValueError("max_cycles must be fixed to 151")
 
 
+@dataclass(frozen=True, eq=False)
+class CyclePatchEncoding:
+    """Validated Transformer outputs with invalid cycle memory explicitly zeroed."""
+
+    fused: Tensor
+    cls: Tensor
+    cycle_tokens: Tensor
+    cycle_mask: Tensor
+
+    def __post_init__(self) -> None:
+        _require_tensor(self.cycle_mask, "cycle_mask", torch.bool)
+        for name in ("fused", "cls", "cycle_tokens"):
+            value = getattr(self, name)
+            if not isinstance(value, Tensor) or not value.is_floating_point():
+                raise ValueError(f"{name} must be a floating tensor")
+        if self.fused.ndim != 2 or self.cls.shape != self.fused.shape:
+            raise ValueError("fused and cls must align with shape [batch, d_model]")
+        if self.cycle_tokens.ndim != 3:
+            raise ValueError("cycle_tokens must have shape [batch, cycle, d_model]")
+        batch_size, _, d_model = self.cycle_tokens.shape
+        if self.fused.shape != (batch_size, d_model):
+            raise ValueError("cycle_tokens must align with fused batch and d_model")
+        if self.cycle_mask.shape != self.cycle_tokens.shape[:2]:
+            raise ValueError("cycle_mask must align with cycle_tokens")
+        tensors = (self.fused, self.cls, self.cycle_tokens)
+        if len({tensor.dtype for tensor in tensors}) != 1:
+            raise ValueError("encoding tensors must use one floating dtype")
+        if len({tensor.device for tensor in (*tensors, self.cycle_mask)}) != 1:
+            raise ValueError("encoding tensors and cycle_mask must share a device")
+
+
 class _PhaseMultiScale(nn.Module):
     def __init__(self, d_model: int) -> None:
         super().__init__()
@@ -304,7 +335,9 @@ class CyclePatchEncoder(nn.Module):
         self.attention_score = nn.Linear(config.d_model, 1)
         self.fusion_gate = nn.Linear(config.d_model * 2, config.d_model)
 
-    def forward(self, batch: EarlyCycleBatch) -> Tensor:
+    def _encode_tensors(
+        self, batch: EarlyCycleBatch
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         batch_size, cycle_count = batch.values.shape[:2]
         if cycle_count > self.config.max_cycles:
             raise ValueError("cycle count exceeds max_cycles")
@@ -343,13 +376,31 @@ class CyclePatchEncoder(nn.Module):
         )
         encoded = self.transformer(tokens, src_key_padding_mask=padding_mask)
         cls_encoded = encoded[:, 0]
-        cycle_encoded = encoded[:, 1:]
+        raw_cycle_encoded = encoded[:, 1:]
+        cycle_encoded = torch.where(
+            batch.cycle_mask.unsqueeze(-1),
+            raw_cycle_encoded,
+            torch.zeros_like(raw_cycle_encoded),
+        )
         scores = self.attention_score(cycle_encoded).squeeze(-1)
         scores = scores.masked_fill(~batch.cycle_mask, torch.finfo(scores.dtype).min)
         weights = torch.softmax(scores, dim=1).unsqueeze(-1)
         pooled = (cycle_encoded * weights).sum(dim=1)
         gate = torch.sigmoid(self.fusion_gate(torch.cat((cls_encoded, pooled), dim=1)))
         fused: Tensor = gate * cls_encoded + (1.0 - gate) * pooled
+        return fused, cls_encoded, cycle_encoded, batch.cycle_mask
+
+    def encode(self, batch: EarlyCycleBatch) -> CyclePatchEncoding:
+        fused, cls, cycle_tokens, cycle_mask = self._encode_tensors(batch)
+        return CyclePatchEncoding(
+            fused=fused,
+            cls=cls,
+            cycle_tokens=cycle_tokens,
+            cycle_mask=cycle_mask,
+        )
+
+    def forward(self, batch: EarlyCycleBatch) -> Tensor:
+        fused, _, _, _ = self._encode_tensors(batch)
         return fused
 
 

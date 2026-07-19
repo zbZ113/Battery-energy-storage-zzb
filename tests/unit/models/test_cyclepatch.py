@@ -11,6 +11,8 @@ from quanxin_life.features.early_cycle_sequence import (
 )
 from quanxin_life.models.cyclepatch import (
     CyclePatchConfig,
+    CyclePatchEncoder,
+    CyclePatchEncoding,
     CyclePatchLifeRegressor,
     EarlyCycleBatch,
     PhasePatchEncoder,
@@ -197,3 +199,95 @@ def test_batch_rejects_sample_without_any_valid_cycle() -> None:
 
     with pytest.raises(ValueError, match="valid cycle"):
         replace(batch, sample_mask=sample_mask, cycle_mask=cycle_mask)
+
+
+def test_encoder_token_api_preserves_forward_and_masks_cycle_memory() -> None:
+    torch.manual_seed(20260712)
+    encoder = CyclePatchEncoder(_config(), condition_count=3).eval()
+    batch = _batch()
+
+    with torch.no_grad():
+        encoding = encoder.encode(batch)
+        forward = encoder(batch)
+
+    assert isinstance(encoding, CyclePatchEncoding)
+    assert encoding.fused.shape == (2, 24)
+    assert encoding.cls.shape == (2, 24)
+    assert encoding.cycle_tokens.shape == (2, 21, 24)
+    assert torch.equal(encoding.cycle_mask, batch.cycle_mask)
+    assert torch.allclose(forward, encoding.fused)
+    assert torch.count_nonzero(encoding.cycle_tokens[~encoding.cycle_mask]) == 0
+
+
+def test_invalid_cycle_inputs_do_not_affect_any_encoding_output() -> None:
+    torch.manual_seed(20260712)
+    encoder = CyclePatchEncoder(_config(), condition_count=3).eval()
+    batch = _batch()
+    altered_values = batch.values.clone()
+    altered_values[~batch.sample_mask] = 54321.0
+    altered = replace(batch, values=altered_values)
+
+    with torch.no_grad():
+        expected = encoder.encode(batch)
+        actual = encoder.encode(altered)
+
+    assert torch.allclose(expected.fused, actual.fused)
+    assert torch.allclose(expected.cls, actual.cls)
+    assert torch.allclose(expected.cycle_tokens, actual.cycle_tokens)
+    assert torch.equal(expected.cycle_mask, actual.cycle_mask)
+
+
+def test_encoding_contract_is_zero_sync_and_does_not_clone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fused = torch.zeros(2, 24)
+    cls = torch.zeros(2, 24)
+    cycle_tokens = torch.zeros(2, 21, 24)
+    cycle_mask = torch.ones(2, 21, dtype=torch.bool)
+
+    def unexpected_sync(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("CyclePatchEncoding must not scan tensor values")
+
+    monkeypatch.setattr(torch, "isfinite", unexpected_sync)
+    monkeypatch.setattr(torch.Tensor, "item", unexpected_sync)
+    encoding = CyclePatchEncoding(
+        fused=fused,
+        cls=cls,
+        cycle_tokens=cycle_tokens,
+        cycle_mask=cycle_mask,
+    )
+
+    assert encoding.fused is fused
+    assert encoding.cls is cls
+    assert encoding.cycle_tokens is cycle_tokens
+    assert encoding.cycle_mask is cycle_mask
+
+
+def test_forward_hot_path_does_not_call_encode(monkeypatch: pytest.MonkeyPatch) -> None:
+    torch.manual_seed(20260712)
+    encoder = CyclePatchEncoder(_config(), condition_count=3).eval()
+
+    def unexpected_encode(_batch: EarlyCycleBatch) -> CyclePatchEncoding:
+        raise AssertionError("forward hot path must not construct CyclePatchEncoding")
+
+    monkeypatch.setattr(encoder, "encode", unexpected_encode)
+    with torch.no_grad():
+        fused = encoder(_batch())
+
+    assert fused.shape == (2, 24)
+    assert torch.isfinite(fused).all()
+
+
+def test_token_api_keeps_gradient_path_to_encoder_parameters() -> None:
+    torch.manual_seed(20260712)
+    encoder = CyclePatchEncoder(_config(), condition_count=3)
+    encoding = encoder.encode(_batch())
+
+    loss = (
+        encoding.fused.sum()
+        + encoding.cls.sum()
+        + encoding.cycle_tokens[encoding.cycle_mask].sum()
+    )
+    loss.backward()
+
+    assert any(parameter.grad is not None for parameter in encoder.parameters())
