@@ -1,0 +1,24 @@
+{
+  "schema_version": "advanced-matr-three-batch-run-v1",
+  "mode": "final",
+  "dataset_id": "MATR",
+  "target": "matr_official_cycle_life",
+  "physical_gpu_index": 1,
+  "precision": "fp32",
+  "seeds": [38, 39, 40, 41, 42],
+  "cutoffs": [20, 50, 100, 150],
+  "max_epochs": 500,
+  "paths": {
+    "three_batch_manifest": "reports/data_quality/matr_three_batch_manifest_v1.json",
+    "split_manifest": "configs/data_splits/matr_three_batch_cell_split_v1.json",
+    "run_root": "runs/a100/matr-three-batch/advanced/final"
+  },
+  "candidates": [
+    {"family":"cyclepatch_direct","candidate_id":"cpd-d128-l4-h8-p10","learning_rate":0.0003,"weight_decay":0.01,"d_model":128,"layers":4,"heads":8,"dropout":0.1,"huber_delta":1.0},
+    {"family":"cyclepatch_batlinet","candidate_id":"cpb-d128-p50-r10-n32-a50","learning_rate":0.0003,"weight_decay":0.01,"d_model":128,"layers":4,"heads":8,"dropout":0.1,"lambda_pair":0.5,"lambda_rank":0.1,"reference_count":32,"fusion_alpha":0.5,"huber_delta":1.0},
+    {"family":"current_hybrid","candidate_id":"current-hybrid-reference","learning_rate":0.0003,"hidden_dim":64},
+    {"family":"hybridpatch_v2","candidate_id":"hpv2-d128-q8-reg-full","learning_rate":0.0003,"weight_decay":0.01,"d_model":128,"layers":4,"heads":8,"dropout":0.1,"query_token_count":8,"query_layers":1,"decoder_hidden_dim":64,"huber_delta":1.0,"lambda_history":0.1,"lambda_smooth":0.01,"lambda_order":0.05,"lambda_residual":0.01}
+  ],
+  "selection_manifest_path": "runs/a100/matr-three-batch/advanced/selection/selection_manifest.json",
+  "expected_selection_sha256": null
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version":"advanced-candidate-search-v1",
+  "family":"hybridpatch_v2",
+  "candidates":[
+    {"family":"hybridpatch_v2","candidate_id":"hpv2-d128-q0-reg-low","learning_rate":0.0003,"weight_decay":0.01,"d_model":128,"layers":2,"heads":4,"dropout":0.05,"query_token_count":0,"query_layers":1,"decoder_hidden_dim":32,"huber_delta":1.0,"lambda_history":0.0,"lambda_smooth":0.0,"lambda_order":0.0,"lambda_residual":0.001},
+    {"family":"hybridpatch_v2","candidate_id":"hpv2-d128-q8-reg-full","learning_rate":0.0003,"weight_decay":0.01,"d_model":128,"layers":4,"heads":8,"dropout":0.1,"query_token_count":8,"query_layers":1,"decoder_hidden_dim":64,"huber_delta":1.0,"lambda_history":0.1,"lambda_smooth":0.01,"lambda_order":0.05,"lambda_residual":0.01},
+    {"family":"hybridpatch_v2","candidate_id":"hpv2-d256-q8-reg-mid","learning_rate":0.0001,"weight_decay":0.02,"d_model":256,"layers":2,"heads":8,"dropout":0.05,"query_token_count":8,"query_layers":2,"decoder_hidden_dim":64,"huber_delta":1.0,"lambda_history":0.1,"lambda_smooth":0.0,"lambda_order":0.05,"lambda_residual":0.001},
+    {"family":"hybridpatch_v2","candidate_id":"hpv2-d256-q16-reg-full","learning_rate":0.0003,"weight_decay":0.01,"d_model":256,"layers":4,"heads":8,"dropout":0.1,"query_token_count":16,"query_layers":2,"decoder_hidden_dim":128,"huber_delta":1.0,"lambda_history":0.1,"lambda_smooth":0.01,"lambda_order":0.05,"lambda_residual":0.01}
+  ]
+}

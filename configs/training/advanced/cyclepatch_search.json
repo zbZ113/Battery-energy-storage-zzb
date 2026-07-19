@@ -1,0 +1,10 @@
+{
+  "schema_version":"advanced-candidate-search-v1",
+  "family":"cyclepatch_direct",
+  "candidates":[
+    {"family":"cyclepatch_direct","candidate_id":"cpd-d128-l2-h4-p05","learning_rate":0.0003,"weight_decay":0.01,"d_model":128,"layers":2,"heads":4,"dropout":0.05,"huber_delta":1.0},
+    {"family":"cyclepatch_direct","candidate_id":"cpd-d128-l4-h8-p10","learning_rate":0.0003,"weight_decay":0.01,"d_model":128,"layers":4,"heads":8,"dropout":0.1,"huber_delta":1.0},
+    {"family":"cyclepatch_direct","candidate_id":"cpd-d256-l2-h8-p05","learning_rate":0.0001,"weight_decay":0.02,"d_model":256,"layers":2,"heads":8,"dropout":0.05,"huber_delta":1.0},
+    {"family":"cyclepatch_direct","candidate_id":"cpd-d256-l4-h8-p10","learning_rate":0.0003,"weight_decay":0.01,"d_model":256,"layers":4,"heads":8,"dropout":0.1,"huber_delta":1.0}
+  ]
+}
