@@ -36,6 +36,49 @@ class CheckpointContext(ContractModel):
     source_commit: str = Field(pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 
 
+class AdvancedCheckpointContext(CheckpointContext):
+    """Hash-bound experiment identity for governed candidate training."""
+
+    model_name: Literal[
+        "cyclepatch_direct",
+        "cyclepatch_batlinet",
+        "current_hybrid",
+        "hybridpatch_v2",
+    ]
+    run_mode: Literal["smoke", "select", "final"]
+    stage: Literal[
+        "smoke",
+        "selection_stage1",
+        "selection_stage2",
+        "selection_recheck",
+        "final",
+    ]
+    candidate_config_sha256: Sha256
+    model_architecture_sha256: Sha256
+    normalization_sha256: Sha256
+    selection_manifest_sha256: Sha256 | None = None
+    reference_library_sha256: Sha256 | None = None
+
+    @model_validator(mode="after")
+    def optional_hashes_match_run_semantics(self) -> AdvancedCheckpointContext:
+        is_batlinet = self.model_name == "cyclepatch_batlinet"
+        if is_batlinet != (self.reference_library_sha256 is not None):
+            raise ValueError("reference_library_sha256 is required only for BatLiNet")
+        approved_stages = {
+            "smoke": {"smoke"},
+            "select": {"selection_stage1", "selection_stage2", "selection_recheck"},
+            "final": {"final"},
+        }
+        if self.stage not in approved_stages[self.run_mode]:
+            raise ValueError("stage does not match run_mode")
+        if self.run_mode == "final":
+            if self.selection_manifest_sha256 is None:
+                raise ValueError("selection_manifest_sha256 is required for final runs")
+        elif self.selection_manifest_sha256 is not None:
+            raise ValueError("selection_manifest_sha256 must be absent for smoke/select runs")
+        return self
+
+
 class TrainingProgress(ContractModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -95,6 +138,41 @@ class TrainingCheckpointManifest(ContractModel):
         return self
 
 
+class AdvancedTrainingCheckpointManifest(ContractModel):
+    """Closed-world checkpoint manifest with advanced experiment provenance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["safe-training-checkpoint-v2"] = "safe-training-checkpoint-v2"
+    context: AdvancedCheckpointContext
+    progress: TrainingProgress
+    files: tuple[CheckpointFile, ...] = Field(min_length=6, max_length=6)
+    created_at: datetime
+    manifest_sha256: Sha256
+
+    @field_validator("created_at")
+    @classmethod
+    def created_at_is_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def file_inventory_is_exact(self) -> AdvancedTrainingCheckpointManifest:
+        expected = {
+            "model.safetensors",
+            "optimizer.safetensors",
+            "optimizer_state.json",
+            "scheduler_state.json",
+            "rng_state.safetensors",
+            "progress.json",
+        }
+        paths = {item.relative_path for item in self.files}
+        if len(paths) != len(self.files) or paths != expected:
+            raise ValueError("checkpoint file inventory must contain the six approved files")
+        return self
+
+
 def save_training_checkpoint(
     checkpoint_root: Path,
     *,
@@ -118,11 +196,7 @@ def save_training_checkpoint(
     _write_json(root / "optimizer_state.json", optimizer_metadata)
     _write_json(
         root / "scheduler_state.json",
-        {
-            "state": None
-            if scheduler is None
-            else _encode_non_finite_floats(scheduler.state_dict())
-        },
+        {"state": None if scheduler is None else _encode_non_finite_floats(scheduler.state_dict())},
     )
 
     rng_tensors, rng_metadata = _capture_rng_state()
@@ -238,6 +312,196 @@ def load_training_checkpoint(
     return progress
 
 
+def model_architecture_sha256(
+    model: torch.nn.Module,
+    candidate_config_sha256: str,
+) -> str:
+    """Hash architecture metadata without binding random parameter values."""
+
+    if not isinstance(model, torch.nn.Module):
+        raise ValueError("model must be a torch.nn.Module")
+    if (
+        not isinstance(candidate_config_sha256, str)
+        or len(candidate_config_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in candidate_config_sha256)
+    ):
+        raise ValueError("candidate_config_sha256 must be a lowercase SHA-256 digest")
+    parameter_requires_grad = {
+        name: parameter.requires_grad
+        for name, parameter in model.named_parameters(remove_duplicate=False)
+    }
+    state_schema = []
+    for name, tensor in sorted(model.state_dict().items()):
+        if not isinstance(tensor, torch.Tensor):
+            raise ValueError("model state_dict entries must be tensors")
+        state_schema.append(
+            {
+                "state_key": name,
+                "shape": list(tensor.shape),
+                "dtype": str(tensor.dtype),
+                "requires_grad": parameter_requires_grad.get(name),
+            }
+        )
+    return sha256_canonical(
+        {
+            "schema_version": "model-architecture-v2",
+            "candidate_config_sha256": candidate_config_sha256,
+            "model_class": f"{type(model).__module__}.{type(model).__qualname__}",
+            "state_dict": state_schema,
+        }
+    )
+
+
+def save_advanced_training_checkpoint(
+    checkpoint_root: Path,
+    *,
+    context: AdvancedCheckpointContext,
+    progress: TrainingProgress,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler
+    | torch.optim.lr_scheduler.ReduceLROnPlateau
+    | None,
+    created_at: datetime | None = None,
+) -> AdvancedTrainingCheckpointManifest:
+    """Write one new v2 checkpoint without changing the v1 byte protocol."""
+
+    _validate_advanced_model_architecture(context, model)
+    root = _validated_checkpoint_root(checkpoint_root, require_empty=True)
+    model_state = _safe_tensor_mapping(model.state_dict(), prefix="model")
+    save_file(model_state, str(root / "model.safetensors"))
+
+    optimizer_tensors, optimizer_metadata = _serialize_optimizer(model, optimizer)
+    save_file(optimizer_tensors, str(root / "optimizer.safetensors"))
+    _write_json(root / "optimizer_state.json", optimizer_metadata)
+    _write_json(
+        root / "scheduler_state.json",
+        {"state": None if scheduler is None else _encode_non_finite_floats(scheduler.state_dict())},
+    )
+
+    rng_tensors, rng_metadata = _capture_rng_state()
+    save_file(rng_tensors, str(root / "rng_state.safetensors"))
+    _write_json(
+        root / "progress.json",
+        {
+            "context": context.model_dump(mode="json"),
+            "progress": progress.model_dump(mode="json"),
+            "rng": rng_metadata,
+        },
+    )
+
+    files = tuple(
+        CheckpointFile(
+            relative_path=name,
+            size_bytes=(root / name).stat().st_size,
+            sha256=_sha256_file(root / name),
+        )
+        for name in (
+            "model.safetensors",
+            "optimizer.safetensors",
+            "optimizer_state.json",
+            "scheduler_state.json",
+            "rng_state.safetensors",
+            "progress.json",
+        )
+    )
+    timestamp = created_at or datetime.now(UTC)
+    manifest_payload = {
+        "schema_version": "safe-training-checkpoint-v2",
+        "context": context.model_dump(mode="json"),
+        "progress": progress.model_dump(mode="json"),
+        "files": [item.model_dump(mode="json") for item in files],
+        "created_at": timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+    }
+    manifest = AdvancedTrainingCheckpointManifest.model_validate(
+        {
+            **manifest_payload,
+            "manifest_sha256": sha256_canonical(manifest_payload),
+        }
+    )
+    _write_json(root / "manifest.json", manifest.model_dump(mode="json"))
+    return manifest
+
+
+def load_advanced_training_checkpoint(
+    checkpoint_root: Path,
+    manifest: AdvancedTrainingCheckpointManifest,
+    *,
+    expected_context: AdvancedCheckpointContext,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler
+    | torch.optim.lr_scheduler.ReduceLROnPlateau
+    | None,
+) -> TrainingProgress:
+    """Verify every v2 byte and restore only the exact advanced context."""
+
+    _validate_advanced_model_architecture(expected_context, model)
+    root = _validated_checkpoint_root(checkpoint_root, require_empty=False)
+    if manifest.context != expected_context:
+        raise ValueError("checkpoint context does not match the requested training run")
+    payload = manifest.model_dump(mode="json", exclude={"manifest_sha256"})
+    if sha256_canonical(payload) != manifest.manifest_sha256:
+        raise ValueError("checkpoint manifest SHA-256 does not match its contents")
+    disk_manifest = AdvancedTrainingCheckpointManifest.model_validate(
+        _read_strict_json(root / "manifest.json")
+    )
+    if disk_manifest != manifest:
+        raise ValueError("on-disk checkpoint manifest does not match the registered manifest")
+    expected_names = {item.relative_path for item in manifest.files} | {"manifest.json"}
+    actual_names = {path.name for path in root.iterdir()}
+    if actual_names != expected_names:
+        raise ValueError("checkpoint directory contains an unexpected file")
+    for item in manifest.files:
+        path = root / item.relative_path
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("checkpoint file must be a regular non-symlinked file")
+        if path.stat().st_size != item.size_bytes:
+            raise ValueError("checkpoint file size does not match the manifest")
+        if _sha256_file(path) != item.sha256:
+            raise ValueError("checkpoint file SHA-256 does not match the manifest")
+
+    model_state = load_file(str(root / "model.safetensors"), device="cpu")
+    _validate_state_against_model(model_state, model)
+    model.load_state_dict(model_state, strict=True)
+    optimizer_tensors = load_file(str(root / "optimizer.safetensors"), device="cpu")
+    optimizer_metadata = _read_strict_json(root / "optimizer_state.json")
+    _restore_optimizer(model, optimizer, optimizer_tensors, optimizer_metadata)
+    scheduler_payload = _read_strict_json(root / "scheduler_state.json")
+    scheduler_state = scheduler_payload.get("state")
+    if scheduler_state is not None:
+        if scheduler is None or not isinstance(scheduler_state, dict):
+            raise ValueError("checkpoint scheduler state is incompatible with the run")
+        decoded_scheduler_state = _decode_non_finite_floats(scheduler_state)
+        if not isinstance(decoded_scheduler_state, dict):
+            raise ValueError("checkpoint scheduler state is incompatible with the run")
+        scheduler.load_state_dict(decoded_scheduler_state)
+    elif scheduler is not None:
+        raise ValueError("checkpoint is missing the requested scheduler state")
+
+    progress_payload = _read_strict_json(root / "progress.json")
+    if progress_payload.get("context") != expected_context.model_dump(mode="json"):
+        raise ValueError("checkpoint progress context does not match the requested run")
+    restored_progress = TrainingProgress.model_validate(progress_payload.get("progress"))
+    if restored_progress != manifest.progress:
+        raise ValueError("checkpoint progress does not match the manifest")
+    rng_metadata = progress_payload.get("rng")
+    if not isinstance(rng_metadata, dict):
+        raise ValueError("checkpoint RNG metadata is invalid")
+    rng_tensors = load_file(str(root / "rng_state.safetensors"), device="cpu")
+    _restore_rng_state(rng_tensors, rng_metadata)
+    return restored_progress
+
+
+def _validate_advanced_model_architecture(
+    context: AdvancedCheckpointContext,
+    model: torch.nn.Module,
+) -> None:
+    observed = model_architecture_sha256(model, context.candidate_config_sha256)
+    if observed != context.model_architecture_sha256:
+        raise ValueError("model_architecture_sha256 does not match the requested model")
+
+
 def _serialize_optimizer(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -335,9 +599,7 @@ def _restore_optimizer(
     optimizer.load_state_dict({"state": restored_state, "param_groups": restored_groups})
 
 
-def _safe_tensor_mapping(
-    state: dict[str, torch.Tensor], *, prefix: str
-) -> dict[str, torch.Tensor]:
+def _safe_tensor_mapping(state: dict[str, torch.Tensor], *, prefix: str) -> dict[str, torch.Tensor]:
     safe: dict[str, torch.Tensor] = {}
     for name, value in state.items():
         tensor = value.detach().to(device="cpu").contiguous()
@@ -349,9 +611,7 @@ def _safe_tensor_mapping(
     return safe
 
 
-def _validate_state_against_model(
-    state: dict[str, torch.Tensor], model: torch.nn.Module
-) -> None:
+def _validate_state_against_model(state: dict[str, torch.Tensor], model: torch.nn.Module) -> None:
     expected = model.state_dict()
     if set(state) != set(expected):
         raise ValueError("checkpoint model keys do not match the requested architecture")
