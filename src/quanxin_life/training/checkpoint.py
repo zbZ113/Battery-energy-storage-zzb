@@ -48,8 +48,7 @@ class AdvancedCheckpointContext(CheckpointContext):
     run_mode: Literal["smoke", "select", "final"]
     stage: Literal[
         "smoke",
-        "selection_stage1",
-        "selection_stage2",
+        "selection_candidate",
         "selection_recheck",
         "final",
     ]
@@ -66,7 +65,7 @@ class AdvancedCheckpointContext(CheckpointContext):
             raise ValueError("reference_library_sha256 is required only for BatLiNet")
         approved_stages = {
             "smoke": {"smoke"},
-            "select": {"selection_stage1", "selection_stage2", "selection_recheck"},
+            "select": {"selection_candidate", "selection_recheck"},
             "final": {"final"},
         }
         if self.stage not in approved_stages[self.run_mode]:

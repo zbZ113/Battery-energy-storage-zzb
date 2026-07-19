@@ -46,7 +46,7 @@ def _advanced_context(
     candidate_hash = "d" * 64
     default_stage = {
         "smoke": "smoke",
-        "select": "selection_stage1",
+        "select": "selection_candidate",
         "final": "final",
     }[run_mode]
     payload = {
@@ -337,8 +337,7 @@ def test_advanced_context_accepts_only_closed_model_families(model_name: str) ->
     ("run_mode", "stage"),
     [
         ("smoke", "smoke"),
-        ("select", "selection_stage1"),
-        ("select", "selection_stage2"),
+        ("select", "selection_candidate"),
         ("select", "selection_recheck"),
         ("final", "final"),
     ],
@@ -354,9 +353,11 @@ def test_advanced_context_accepts_only_approved_mode_stage_combinations(
     ("run_mode", "stage"),
     [
         ("smoke", "final"),
-        ("smoke", "selection_stage1"),
+        ("smoke", "selection_candidate"),
         ("select", "smoke"),
         ("select", "final"),
+        ("select", "selection_stage1"),
+        ("select", "selection_stage2"),
         ("final", "smoke"),
         ("final", "selection_recheck"),
     ],
@@ -384,6 +385,44 @@ def test_model_architecture_hash_ignores_weights_but_binds_shape_and_candidate()
     assert len(first_hash) == 64
     with pytest.raises(ValueError, match="candidate_config_sha256"):
         model_architecture_sha256(first, "not-a-hash")
+
+
+def test_selection_candidate_checkpoint_resumes_epoch_30_toward_epoch_90(
+    tmp_path: Path,
+) -> None:
+    model, optimizer, scheduler = _trained_components()
+    context = _advanced_context(run_mode="select", stage="selection_candidate")
+    progress = TrainingProgress(
+        epoch=30,
+        global_step=30,
+        best_epoch=25,
+        best_metric=10.0,
+        validations_without_improvement=1,
+    )
+    manifest = save_advanced_training_checkpoint(
+        tmp_path,
+        context=context,
+        progress=progress,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
+
+    restored_model = torch.nn.Linear(2, 1)
+    restored_optimizer = torch.optim.AdamW(restored_model.parameters(), lr=0.5)
+    restored_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(restored_optimizer, patience=1)
+    restored = load_advanced_training_checkpoint(
+        tmp_path,
+        manifest,
+        expected_context=_advanced_context(run_mode="select", stage="selection_candidate"),
+        model=restored_model,
+        optimizer=restored_optimizer,
+        scheduler=restored_scheduler,
+    )
+
+    assert restored.epoch == 30
+    assert restored.epoch < 90
+    assert manifest.context.stage == "selection_candidate"
 
 
 class _ArchitectureTwinA(torch.nn.Module):
