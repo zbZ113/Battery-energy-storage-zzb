@@ -22,10 +22,14 @@ from pydantic import ConfigDict, Field
 from quanxin_life.core import sha256_canonical
 from quanxin_life.core.schemas import ContractModel
 from quanxin_life.training.checkpoint import (
+    AdvancedCheckpointContext,
+    AdvancedTrainingCheckpointManifest,
     CheckpointContext,
     TrainingCheckpointManifest,
     TrainingProgress,
+    load_advanced_training_checkpoint,
     load_training_checkpoint,
+    save_advanced_training_checkpoint,
     save_training_checkpoint,
 )
 from quanxin_life.training.config import ModelTrainingConfig
@@ -42,6 +46,7 @@ class TrainingRunStatus(StrEnum):
     COMPLETED = "COMPLETED"
     EARLY_STOPPED = "EARLY_STOPPED"
     INTERRUPTED = "INTERRUPTED"
+    PAUSED_STAGE = "PAUSED_STAGE"
     SKIPPED_COMPLETED = "SKIPPED_COMPLETED"
 
 
@@ -65,6 +70,7 @@ Scheduler = (
     torch.optim.lr_scheduler.LRScheduler
     | torch.optim.lr_scheduler.ReduceLROnPlateau
 )
+TrainingContext = CheckpointContext | AdvancedCheckpointContext
 
 
 class TrainingTask(Protocol):
@@ -89,7 +95,7 @@ class TrainingEngine:
         self,
         *,
         task: TrainingTask,
-        context: CheckpointContext,
+        context: TrainingContext,
         config: ModelTrainingConfig,
         run_directory: Path,
         device: torch.device,
@@ -108,7 +114,15 @@ class TrainingEngine:
         self.stop_requested = stop_requested or (lambda: False)
         self.keep_recent_checkpoints = keep_recent_checkpoints
 
-    def run(self) -> TrainingRunResult:
+    def run(self, *, epoch_limit: int | None = None) -> TrainingRunResult:
+        if epoch_limit is not None and (
+            isinstance(epoch_limit, bool)
+            or not isinstance(epoch_limit, int)
+            or epoch_limit < 1
+            or epoch_limit > self.config.max_epochs
+        ):
+            raise ValueError("epoch_limit must be between 1 and max_epochs")
+        effective_epoch_limit = epoch_limit or self.config.max_epochs
         self.run_directory.mkdir(parents=True, exist_ok=True)
         checkpoints = self.run_directory / "checkpoints"
         checkpoints.mkdir(exist_ok=True)
@@ -132,9 +146,13 @@ class TrainingEngine:
         logger = _RunLogger(self.run_directory, self.context)
         signal_flag = _SignalFlag()
         signal_flag.install()
-        status = TrainingRunStatus.COMPLETED
+        status = (
+            TrainingRunStatus.PAUSED_STAGE
+            if effective_epoch_limit < self.config.max_epochs
+            else TrainingRunStatus.COMPLETED
+        )
         try:
-            for epoch in range(start_epoch, self.config.max_epochs + 1):
+            for epoch in range(start_epoch, effective_epoch_limit + 1):
                 epoch_started = time.perf_counter()
                 train = self.task.train_epoch(epoch, device=self.device)
                 _validate_metrics(train)
@@ -255,9 +273,20 @@ class TrainingEngine:
     def _restore_pointer(self, checkpoints: Path, pointer_name: str) -> TrainingProgress:
         checkpoint_name = _read_pointer(checkpoints / pointer_name)
         checkpoint_root = checkpoints / checkpoint_name
-        manifest = TrainingCheckpointManifest.model_validate(
-            _read_json(checkpoint_root / "manifest.json")
-        )
+        manifest_payload = _read_json(checkpoint_root / "manifest.json")
+        if isinstance(self.context, AdvancedCheckpointContext):
+            advanced_manifest = AdvancedTrainingCheckpointManifest.model_validate(
+                manifest_payload
+            )
+            return load_advanced_training_checkpoint(
+                checkpoint_root,
+                advanced_manifest,
+                expected_context=self.context,
+                model=self.task.model,
+                optimizer=self.task.optimizer,
+                scheduler=self.task.scheduler,
+            )
+        manifest = TrainingCheckpointManifest.model_validate(manifest_payload)
         return load_training_checkpoint(
             checkpoint_root,
             manifest,
@@ -275,14 +304,24 @@ class TrainingEngine:
             raise ValueError("checkpoint epoch path already exists")
         temporary.mkdir()
         try:
-            save_training_checkpoint(
-                temporary,
-                context=self.context,
-                progress=progress,
-                model=self.task.model,
-                optimizer=self.task.optimizer,
-                scheduler=self.task.scheduler,
-            )
+            if isinstance(self.context, AdvancedCheckpointContext):
+                save_advanced_training_checkpoint(
+                    temporary,
+                    context=self.context,
+                    progress=progress,
+                    model=self.task.model,
+                    optimizer=self.task.optimizer,
+                    scheduler=self.task.scheduler,
+                )
+            else:
+                save_training_checkpoint(
+                    temporary,
+                    context=self.context,
+                    progress=progress,
+                    model=self.task.model,
+                    optimizer=self.task.optimizer,
+                    scheduler=self.task.scheduler,
+                )
             temporary.replace(target)
         except Exception:
             if temporary.exists():
@@ -294,7 +333,7 @@ class TrainingEngine:
 
 
 class _RunLogger:
-    def __init__(self, run_directory: Path, context: CheckpointContext) -> None:
+    def __init__(self, run_directory: Path, context: TrainingContext) -> None:
         self.run_directory = run_directory
         self.context = context
 
