@@ -182,12 +182,25 @@ def test_select_executes_stage1_stage2_and_full_recheck_without_final_loader(
             )
         }
     )
-    registered = SimpleNamespace(manifest=object(), split=object())
+    registered = SimpleNamespace(
+        manifest=SimpleNamespace(
+            batches=(SimpleNamespace(raw_sha256="d" * 64),),
+            combined_split_sha256="e" * 64,
+        ),
+        split=SimpleNamespace(validation=("MATR_validation",)),
+        input_bundle_sha256="a" * 64,
+        source_commit="b" * 40,
+    )
     loaded: list[int] = []
+    synthetic_selection_data = SimpleNamespace(
+        scalar_normalizer=SimpleNamespace(statistics_sha256="f" * 64),
+        hybrid_normalizer=SimpleNamespace(statistics_sha256="0" * 64),
+    )
     monkeypatch.setattr(
         advanced_orchestrator,
         "load_advanced_matr_selection_data",
-        lambda **kwargs: loaded.append(int(kwargs["cutoff_cycle"])) or object(),
+        lambda **kwargs: loaded.append(int(kwargs["cutoff_cycle"]))
+        or synthetic_selection_data,
     )
     monkeypatch.setattr(
         advanced_orchestrator,
@@ -208,6 +221,30 @@ def test_select_executes_stage1_stage2_and_full_recheck_without_final_loader(
         advanced_orchestrator,
         "_validation_metric",
         lambda _path: (float(len(runs)), float(len(runs)), 0.0),
+    )
+    monkeypatch.setattr(
+        advanced_orchestrator,
+        "_build_baseline_evidence",
+        lambda **_kwargs: (),
+    )
+    synthetic_manifest = SimpleNamespace(
+        model_dump=lambda mode: {},
+        selection=SimpleNamespace(selected_candidates=()),
+    )
+    monkeypatch.setattr(
+        advanced_orchestrator,
+        "build_advanced_model_selection_manifest",
+        lambda **_kwargs: synthetic_manifest,
+    )
+    monkeypatch.setattr(
+        advanced_orchestrator,
+        "_write_resolved_final_config",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        advanced_orchestrator,
+        "_sha256_file",
+        lambda _path: "c" * 64,
     )
 
     result = advanced_orchestrator._execute_selection(

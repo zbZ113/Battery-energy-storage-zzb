@@ -40,17 +40,25 @@ fi
 
 bash scripts/a100/preflight.sh
 mkdir -p logs/a100
-
-case "${MODE}" in
-  smoke) SEEDS=(38) ;;
-  select) SEEDS=(38 39 40) ;;
-  final) SEEDS=(38 39 40 41 42) ;;
-esac
+python scripts/prepare_advanced_matr_data.py "${MODE}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_file="${A100_ADVANCED_LOG:-logs/a100/advanced-${MODE}-${timestamp}.log}"
 touch "${log_file}"
 echo "advanced run dataset=${DATASET} mode=${MODE} log=${log_file}" | tee -a "${log_file}"
+
+if [[ "${MODE}" == "select" ]]; then
+  SEEDS=(38 39 40)
+  export PYTHONHASHSEED=38
+  python scripts/run_advanced_model_suite.py "${DATASET}" "${MODE}" 2>&1 | tee -a "${log_file}"
+  echo "advanced run completed: ${log_file}" | tee -a "${log_file}"
+  exit 0
+fi
+
+case "${MODE}" in
+  smoke) SEEDS=(38) ;;
+  final) SEEDS=(38 39 40 41 42) ;;
+esac
 
 for seed in "${SEEDS[@]}"; do
   export PYTHONHASHSEED="${seed}"

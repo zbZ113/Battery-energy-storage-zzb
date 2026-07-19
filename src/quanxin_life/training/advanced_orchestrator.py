@@ -37,7 +37,10 @@ from quanxin_life.training.advanced_data import (
     load_advanced_matr_selection_data,
 )
 from quanxin_life.training.advanced_selection import (
+    AdvancedModelSelectionManifest,
     AdvancedValidationEvidence,
+    BaselineValidationEvidence,
+    build_advanced_model_selection_manifest,
     select_stage1_candidates,
     select_stage2_finalists,
 )
@@ -52,6 +55,7 @@ from quanxin_life.training.engine import TrainingEngine
 
 AdvancedMode = Literal["smoke", "select", "final"]
 SelectionStage = Literal["selection_stage1", "selection_stage2", "selection_recheck"]
+ADVANCED_FEATURE_VERSION = "cyclepatch-multichannel-v1"
 
 
 def plan_advanced_run(
@@ -131,7 +135,7 @@ def execute_advanced_matr_three_batch_suite(
                     manifest=registered.manifest,
                     combined_split=registered.split,
                     cutoff_cycle=key.cutoff_cycle,
-                    feature_version="cyclepatch-v2",
+                    feature_version=ADVANCED_FEATURE_VERSION,
                 )
     elif config.mode == "select":
         if seed is not None:
@@ -151,7 +155,7 @@ def execute_advanced_matr_three_batch_suite(
                 manifest=registered.manifest,
                 combined_split=registered.split,
                 cutoff_cycle=cutoff,
-                feature_version="cyclepatch-v2",
+                feature_version=ADVANCED_FEATURE_VERSION,
             )
             for cutoff in config.cutoffs
         }
@@ -211,7 +215,7 @@ def _run_key(
         input_bundle_sha256=registered.input_bundle_sha256,
         data_version=registered.data_version,
         split_version=registered.split_version,
-        feature_version="cyclepatch-v2",
+        feature_version=ADVANCED_FEATURE_VERSION,
         source_commit=registered.source_commit,
         run_mode=config.mode,
         stage=(
@@ -274,8 +278,11 @@ def _validation_metric(run_directory: Path) -> tuple[float, float, float]:
         rows = list(csv.DictReader(handle))
     if not rows:
         raise ValueError("validation evidence is empty")
-    row = rows[-1]
-    mae = float(row.get("mae", row.get("validation_loss", "nan")))
+    def row_mae(row: dict[str, str]) -> float:
+        return float(row.get("mae", row.get("validation_loss", "nan")))
+
+    row = min(rows, key=row_mae)
+    mae = row_mae(row)
     rmse = float(row.get("rmse", mae))
     violation = float(row.get("monotonic_violation_rate", 0.0))
     if not all(math.isfinite(value) for value in (mae, rmse, violation)):
@@ -293,6 +300,7 @@ def _execute_selection(
 ) -> dict[str, object]:
     """Execute stage1, stage2 and 12-run recheck without touching held-out data."""
 
+    run_root.mkdir(parents=True, exist_ok=True)
     stage1_keys = build_advanced_run_matrix(
         config, selection_stage="selection_stage1", repository_root=root
     )
@@ -301,7 +309,7 @@ def _execute_selection(
         manifest=registered.manifest,
         combined_split=registered.split,
         cutoff_cycle=100,
-        feature_version="cyclepatch-v2",
+        feature_version=ADVANCED_FEATURE_VERSION,
     )
     stage1_rows: list[AdvancedValidationEvidence] = []
     for key in stage1_keys:
@@ -369,14 +377,16 @@ def _execute_selection(
             )
         )
     stage2_evidence = tuple(stage2_rows)
-    finalists = select_stage2_finalists(stage2_evidence)
-    finalist_ids = tuple(candidate_id for ids in finalists.values() for candidate_id in ids)
+    finalist_groups = select_stage2_finalists(stage2_evidence)
+    finalist_id_values = tuple(
+        candidate_id for ids in finalist_groups.values() for candidate_id in ids
+    )
     recheck_rows: list[AdvancedValidationEvidence] = []
     data_cache: dict[int, AdvancedSelectionMatrData] = {100: data100}
     for key in build_advanced_run_matrix(
         config,
         selection_stage="selection_recheck",
-        candidate_ids=finalist_ids,
+        candidate_ids=finalist_id_values,
         repository_root=root,
     ):
         if key.cutoff_cycle not in data_cache:
@@ -385,7 +395,7 @@ def _execute_selection(
                 manifest=registered.manifest,
                 combined_split=registered.split,
                 cutoff_cycle=key.cutoff_cycle,
-                feature_version="cyclepatch-v2",
+                feature_version=ADVANCED_FEATURE_VERSION,
             )
         row = _run_key(
             root=root,
@@ -417,15 +427,179 @@ def _execute_selection(
         "stage1_evidence": [item.model_dump(mode="json") for item in stage1_evidence],
         "stage1_survivors": survivors,
         "stage2_evidence": [item.model_dump(mode="json") for item in stage2_evidence],
-        "stage2_finalists": finalists,
+        "stage2_finalists": finalist_groups,
         "recheck_evidence": [item.model_dump(mode="json") for item in recheck_rows],
     }
+    finalist_candidates = tuple(
+        candidate
+        for candidate in config.candidates
+        if candidate.candidate_id in finalist_id_values
+    )
+    baseline_evidence = _build_baseline_evidence(
+        config=config,
+        data_cache=data_cache,
+        recheck_rows=tuple(recheck_rows),
+    )
+    manifest = build_advanced_model_selection_manifest(
+        stage1_evidence=stage1_evidence,
+        stage2_evidence=stage2_evidence,
+        finalists=finalist_candidates,
+        recheck_evidence=tuple(recheck_rows),
+        baselines=baseline_evidence,
+        input_bundle_sha256=registered.input_bundle_sha256,
+        data_sha256=sha256_canonical(
+            [batch.raw_sha256 for batch in registered.manifest.batches]
+        ),
+        split_sha256=registered.manifest.combined_split_sha256,
+        feature_sha256=sha256_canonical(
+            {
+                "feature_version": ADVANCED_FEATURE_VERSION,
+                "cutoffs": list(config.cutoffs),
+            }
+        ),
+        normalization_sha256=sha256_canonical(
+            {
+                str(cutoff): {
+                    "scalar": data.scalar_normalizer.statistics_sha256,
+                    "hybrid": data.hybrid_normalizer.statistics_sha256,
+                }
+                for cutoff, data in sorted(data_cache.items())
+            }
+        ),
+        source_commit=registered.source_commit,
+        validation_cell_sha256=sha256_canonical(list(registered.split.validation)),
+    )
     _write_json(run_root / "selection_trace.json", trace)
+    _write_json(run_root / "selection_manifest.json", manifest.model_dump(mode="json"))
+    _write_resolved_final_config(root, manifest, run_root)
     return {
         "mode": "select",
         **trace,
+        "selection_manifest_sha256": _sha256_file(run_root / "selection_manifest.json"),
+        "final_config_path": (
+            run_root / "final_config_resolved.json"
+        ).relative_to(root).as_posix(),
         "run_count": len(stage1_rows) + len(stage2_rows) + len(recheck_rows),
     }
+
+
+def _build_baseline_evidence(
+    *,
+    config: AdvancedMatrThreeBatchRunConfig,
+    data_cache: dict[int, AdvancedSelectionMatrData],
+    recheck_rows: tuple[AdvancedValidationEvidence, ...],
+) -> tuple[BaselineValidationEvidence, ...]:
+    """Build the 12-axis XGBoost baseline and reuse current-Hybrid validation rows."""
+
+    hybrid_rows = tuple(
+        row for row in recheck_rows if row.family == "current_hybrid" and row.status == "completed"
+    )
+    if len(hybrid_rows) != 12:
+        raise ValueError("current Hybrid baseline requires a complete 12-run grid")
+    xgb_rows: list[BaselineValidationEvidence] = []
+    for cutoff in config.selection_policy.recheck_cutoffs:
+        data = data_cache[cutoff]
+        train_x = _baseline_features(data.scalar_train)
+        validation_x = _baseline_features(data.scalar_validation)
+        train_y = data.scalar_train.raw_labels.detach().cpu().numpy()
+        validation_y = data.scalar_validation.raw_labels.detach().cpu().numpy()
+        for seed in config.selection_policy.recheck_seeds:
+            prediction = _fit_xgboost_baseline(
+                train_x,
+                train_y,
+                validation_x,
+                validation_y,
+                seed=seed,
+            )
+            error = prediction - validation_y
+            xgb_rows.append(
+                BaselineValidationEvidence(
+                    baseline="xgboost",
+                    cutoff_cycle=cutoff,
+                    seed=seed,
+                    validation_mae=float(abs(error).mean()),
+                    validation_rmse=float((error**2).mean() ** 0.5),
+                )
+            )
+    return tuple(
+        sorted(
+            (*xgb_rows, *(BaselineValidationEvidence(
+                baseline="current_hybrid",
+                cutoff_cycle=row.cutoff_cycle,
+                seed=row.seed,
+                validation_mae=cast(float, row.validation_mae),
+                validation_rmse=cast(float, row.validation_rmse),
+                monotonic_violation_rate=row.monotonic_violation_rate,
+            ) for row in hybrid_rows)),
+            key=lambda row: (row.baseline, row.cutoff_cycle, row.seed),
+        )
+    )
+
+
+def _baseline_features(batch: Any) -> Any:
+    values = batch.early_batch.values.detach().cpu()
+    mask = batch.early_batch.sample_mask.detach().cpu().unsqueeze(-1)
+    safe = torch.where(mask, values, torch.zeros_like(values))
+    counts = mask.to(values.dtype).sum(dim=(1, 2, 3)).clamp_min(1.0)
+    pooled = safe.sum(dim=(1, 2, 3)) / counts
+    condition = batch.early_batch.condition_values.detach().cpu()
+    condition_mask = batch.early_batch.condition_mask.detach().cpu()
+    condition = torch.where(condition_mask, condition, torch.zeros_like(condition))
+    return torch.cat((pooled, condition), dim=1).numpy()
+
+
+def _fit_xgboost_baseline(
+    train_x: Any,
+    train_y: Any,
+    validation_x: Any,
+    validation_y: Any,
+    *,
+    seed: int,
+) -> Any:
+    try:
+        import xgboost as xgb
+    except ImportError as exc:  # pragma: no cover - guarded by the A100 lock file
+        raise RuntimeError("xgboost is required for advanced selection baselines") from exc
+    train_matrix = xgb.DMatrix(train_x, label=train_y)
+    validation_matrix = xgb.DMatrix(validation_x, label=validation_y)
+    booster = xgb.train(
+        {
+            "objective": "reg:squarederror",
+            "eval_metric": "mae",
+            "max_depth": 3,
+            "eta": 0.03,
+            "subsample": 0.9,
+            "colsample_bytree": 0.9,
+            "seed": seed,
+            "nthread": 1,
+            "tree_method": "hist",
+        },
+        train_matrix,
+        num_boost_round=2000,
+        evals=[(validation_matrix, "validation")],
+        early_stopping_rounds=100,
+        verbose_eval=False,
+    )
+    best_iteration = int(booster.best_iteration)
+    return booster.predict(validation_matrix, iteration_range=(0, best_iteration + 1))
+
+
+def _write_resolved_final_config(
+    root: Path,
+    manifest: AdvancedModelSelectionManifest,
+    run_root: Path,
+) -> None:
+    template_path = root / "configs" / "training" / "advanced" / "final.json"
+    template = AdvancedMatrThreeBatchRunConfig.model_validate_json(template_path.read_bytes())
+    manifest_path = run_root / "selection_manifest.json"
+    resolved = template.model_copy(
+        update={
+            "candidates": manifest.selection.selected_candidates,
+            "expected_selection_sha256": _sha256_file(manifest_path),
+            "selection_manifest_path": manifest_path.relative_to(root).as_posix(),
+        }
+    )
+    _write_json(run_root / "final_config_resolved.json", resolved.model_dump(mode="json"))
 
 
 def _candidate_for_key(
@@ -670,13 +844,25 @@ def _write_json(path: Path, payload: Mapping[str, object]) -> None:
 
 
 def _load_mode_config(root: Path, mode: AdvancedMode) -> AdvancedMatrThreeBatchRunConfig:
-    path = (
+    resolved_final = (
         root
-        / "configs"
-        / "training"
+        / "runs"
+        / "a100"
+        / "matr-three-batch"
         / "advanced"
-        / ("selection.json" if mode == "select" else f"{mode}.json")
+        / "selection"
+        / "final_config_resolved.json"
     )
+    if mode == "final" and resolved_final.is_file() and not resolved_final.is_symlink():
+        path = resolved_final
+    else:
+        path = (
+            root
+            / "configs"
+            / "training"
+            / "advanced"
+            / ("selection.json" if mode == "select" else f"{mode}.json")
+        )
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"advanced {mode} configuration is unavailable")
     config = AdvancedMatrThreeBatchRunConfig.model_validate_json(path.read_bytes())

@@ -28,7 +28,21 @@ FINAL_NOT_BOUND_EXIT = 43
 
 
 def _load_config(mode: str) -> AdvancedMatrThreeBatchRunConfig:
-    path = REPO_ROOT / "configs" / "training" / "advanced" / f"{mode}.json"
+    resolved_final = (
+        REPO_ROOT
+        / "runs"
+        / "a100"
+        / "matr-three-batch"
+        / "advanced"
+        / "selection"
+        / "final_config_resolved.json"
+    )
+    config_name = "selection.json" if mode == "select" else f"{mode}.json"
+    path = (
+        resolved_final
+        if mode == "final" and resolved_final.is_file() and not resolved_final.is_symlink()
+        else REPO_ROOT / "configs" / "training" / "advanced" / config_name
+    )
     return AdvancedMatrThreeBatchRunConfig.model_validate_json(path.read_bytes())
 
 
