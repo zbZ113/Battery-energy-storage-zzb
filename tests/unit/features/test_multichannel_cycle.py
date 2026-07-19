@@ -66,6 +66,8 @@ def test_config_fixes_supported_cutoffs_and_grid() -> None:
         replace(_config(), min_phase_points=2)
     with pytest.raises(ValueError, match="capacity_monotonic_tolerance_ah"):
         replace(_config(), capacity_monotonic_tolerance_ah=-1.0)
+    with pytest.raises(ValueError, match="relative_capacity_jitter_tolerance"):
+        replace(_config(), relative_capacity_jitter_tolerance=-1.0)
     with pytest.raises(ValueError, match="max_phase_segments"):
         replace(_config(), max_phase_segments=0)
 
@@ -255,6 +257,42 @@ def test_micro_capacity_regression_is_snapped_and_aggregated_stably() -> None:
     assert forward.input_hash == reverse.input_hash
 
 
+def test_b3c37_scale_relative_capacity_jitter_remains_one_phase_segment() -> None:
+    capacities = (
+        0.0,
+        0.5,
+        1.03,
+        1.03 - 2.8e-6,
+        1.05,
+        1.05 - 2.7e-5,
+        1.06,
+        1.06 - 1.2e-5,
+        1.07,
+        1.07 - 5.0e-6,
+        1.08,
+    )
+    records = tuple(
+        _record(
+            cycle=16,
+            sample=index,
+            current=1.0,
+            capacity=capacity,
+            voltage=3.0 + 0.8 * capacity,
+            cell_id="MATR_b3c37",
+        )
+        for index, capacity in enumerate(capacities)
+    )
+
+    sequence = build_early_cycle_sequence(
+        records, config=_config(), data_version="matr-three-batch-v1"
+    )
+
+    assert sequence.sample_mask[16, 0].all()
+    assert sequence.values[16, 0, (0, -1), 2].tolist() == pytest.approx(
+        [0.0, 1.08]
+    )
+
+
 def test_phase_with_more_than_four_capacity_segments_is_rejected() -> None:
     records = tuple(
         _record(
@@ -360,3 +398,11 @@ def test_builder_accepts_only_time_regression_within_configured_tolerance() -> N
 def test_config_rejects_invalid_time_monotonic_tolerance(tolerance: float) -> None:
     with pytest.raises(ValueError, match="time_monotonic_tolerance_s"):
         replace(_config(), time_monotonic_tolerance_s=tolerance)
+
+
+@pytest.mark.parametrize("tolerance", [-1.0, float("nan"), float("inf")])
+def test_config_rejects_invalid_relative_capacity_jitter_tolerance(
+    tolerance: float,
+) -> None:
+    with pytest.raises(ValueError, match="relative_capacity_jitter_tolerance"):
+        replace(_config(), relative_capacity_jitter_tolerance=tolerance)

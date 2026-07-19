@@ -40,6 +40,7 @@ class MultichannelCycleConfig:
     min_phase_points: int = 3
     time_monotonic_tolerance_s: float = 1e-9
     capacity_monotonic_tolerance_ah: float = 1e-6
+    relative_capacity_jitter_tolerance: float = 5e-5
     max_phase_segments: int = 4
 
     def __post_init__(self) -> None:
@@ -66,6 +67,13 @@ class MultichannelCycleConfig:
         ):
             raise ValueError(
                 "capacity_monotonic_tolerance_ah must be finite and non-negative"
+            )
+        if (
+            not isfinite(self.relative_capacity_jitter_tolerance)
+            or self.relative_capacity_jitter_tolerance < 0
+        ):
+            raise ValueError(
+                "relative_capacity_jitter_tolerance must be finite and non-negative"
             )
         if self.max_phase_segments < 1:
             raise ValueError("max_phase_segments must be at least 1")
@@ -128,6 +136,7 @@ def build_early_cycle_sequence(
             samples=config.samples_per_phase,
             min_points=config.min_phase_points,
             capacity_tolerance=config.capacity_monotonic_tolerance_ah,
+            relative_capacity_tolerance=config.relative_capacity_jitter_tolerance,
             max_segments=config.max_phase_segments,
         )
         discharge = _resample_phase(
@@ -136,6 +145,7 @@ def build_early_cycle_sequence(
             samples=config.samples_per_phase,
             min_points=config.min_phase_points,
             capacity_tolerance=config.capacity_monotonic_tolerance_ah,
+            relative_capacity_tolerance=config.relative_capacity_jitter_tolerance,
             max_segments=config.max_phase_segments,
         )
         for phase_index, phase_values in enumerate((charge, discharge)):
@@ -173,6 +183,7 @@ def _resample_phase(
     samples: int,
     min_points: int,
     capacity_tolerance: float,
+    relative_capacity_tolerance: float,
     max_segments: int,
 ) -> torch.Tensor | None:
     raw_phase_records: list[tuple[float, CycleRecord]] = []
@@ -194,7 +205,12 @@ def _resample_phase(
             segments.append([(capacity, record)])
             continue
         previous_capacity = segments[-1][-1][0]
-        if capacity < previous_capacity - capacity_tolerance:
+        jitter_tolerance = max(
+            capacity_tolerance,
+            relative_capacity_tolerance
+            * max(abs(previous_capacity), abs(capacity)),
+        )
+        if capacity < previous_capacity - jitter_tolerance:
             segments.append([(capacity, record)])
         else:
             snapped_capacity = previous_capacity if capacity < previous_capacity else capacity
