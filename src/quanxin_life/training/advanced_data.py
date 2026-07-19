@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -37,6 +38,10 @@ from quanxin_life.models.cyclepatch import stack_early_cycle_sequences
 from quanxin_life.models.hybridpatch_v2 import (
     HybridPatchV2Inputs,
     HybridPatchV2Targets,
+)
+from quanxin_life.training.advanced_cache import (
+    EarlyCycleSequenceCache,
+    EarlySequenceCacheContext,
 )
 from quanxin_life.training.advanced_tasks import (
     AdvancedCycleLifeBatch,
@@ -180,6 +185,9 @@ def _load_advanced_matr_data(
     if SplitManifest.model_validate_json(combined_path.read_bytes()) != combined_split:
         raise ValueError("combined split differs from the registered manifest")
     config = MultichannelCycleConfig(cutoff_cycle=cutoff_cycle, feature_version=feature_version)
+    sequence_cache = EarlyCycleSequenceCache(
+        root / "data" / "cache" / "advanced_sequences"
+    )
     scalar_by_cell: dict[str, ScalarSequence] = {}
     hybrid_by_cell: dict[str, HybridSequence] = {}
     masked_cycle_entries: list[MaskedCycleAuditEntry] = []
@@ -230,6 +238,7 @@ def _load_advanced_matr_data(
                 config=config,
                 data_version=manifest.data_version,
                 audit_entries=masked_cycle_entries,
+                cache=sequence_cache,
             )
         for cell_id in scalar_cells:
             label = evidence[cell_id].official_life_label
@@ -549,6 +558,7 @@ def _load_early_sequence(
     config: MultichannelCycleConfig,
     data_version: str,
     audit_entries: list[MaskedCycleAuditEntry] | None = None,
+    cache: EarlyCycleSequenceCache | None = None,
 ) -> EarlyCycleSequence:
     """Load only cutoff-bounded rows before invoking the label-free builder."""
 
@@ -575,14 +585,21 @@ def _load_early_sequence(
         raise ValueError("processed cell metadata differs from registered MATR evidence")
     if not math.isfinite(reference_capacity_ah) or reference_capacity_ah <= 0:
         raise ValueError("reference_capacity_ah must be finite and positive")
-    table = pq.read_table(
+    context = EarlySequenceCacheContext.from_multichannel_config(
+        source_parquet_sha256=manifest.parquet_sha256,
+        dataset_id=manifest.dataset_id,
+        cell_id=manifest.cell_id,
+        data_version=data_version,
+        config=config,
+    )
+    capacity_table = pq.read_table(
         verified.parquet_path,
+        columns=["cycle_index", "charge_capacity_ah", "discharge_capacity_ah"],
         filters=[("cycle_index", "<=", config.cutoff_cycle)],
     )
-    records = tuple(CycleRecord.model_validate(row) for row in table.to_pylist())
-    if not records or any(record.cycle_index > config.cutoff_cycle for record in records):
-        raise ValueError("early MATR input must contain only cutoff-bounded rows")
-    masked_cycles = _capacity_outlier_cycles(records, reference_capacity_ah)
+    masked_cycles = _capacity_outlier_cycles_from_rows(
+        capacity_table.to_pylist(), reference_capacity_ah
+    )
     if audit_entries is not None:
         audit_entries.extend(
             MaskedCycleAuditEntry(
@@ -592,32 +609,65 @@ def _load_early_sequence(
             )
             for cycle in masked_cycles
         )
-    filtered_records = tuple(
-        record for record in records if record.cycle_index not in masked_cycles
-    )
-    return build_early_cycle_sequence(
-        filtered_records,
-        config=config,
-        data_version=data_version,
-    )
+
+    def build() -> EarlyCycleSequence:
+        table = pq.read_table(
+            verified.parquet_path,
+            filters=[("cycle_index", "<=", config.cutoff_cycle)],
+        )
+        records = tuple(CycleRecord.model_validate(row) for row in table.to_pylist())
+        if not records or any(
+            record.cycle_index > config.cutoff_cycle for record in records
+        ):
+            raise ValueError("early MATR input must contain only cutoff-bounded rows")
+        filtered_records = tuple(
+            record for record in records if record.cycle_index not in masked_cycles
+        )
+        return build_early_cycle_sequence(
+            filtered_records,
+            config=config,
+            data_version=data_version,
+        )
+
+    return cache.get_or_build(context, build) if cache is not None else build()
 
 
 def _capacity_outlier_cycles(
     records: tuple[CycleRecord, ...], reference_capacity_ah: float
 ) -> frozenset[int]:
+    return _capacity_outlier_cycles_from_rows(
+        (
+            {
+                "cycle_index": record.cycle_index,
+                "charge_capacity_ah": record.charge_capacity_ah,
+                "discharge_capacity_ah": record.discharge_capacity_ah,
+            }
+            for record in records
+        ),
+        reference_capacity_ah,
+    )
+
+
+def _capacity_outlier_cycles_from_rows(
+    rows: Iterable[dict[str, object]],
+    reference_capacity_ah: float,
+) -> frozenset[int]:
     masked: set[int] = set()
-    for record in records:
-        capacities = (
-            record.charge_capacity_ah,
-            record.discharge_capacity_ah,
-        )
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("capacity audit rows must be mappings")
+        capacities = (row.get("charge_capacity_ah"), row.get("discharge_capacity_ah"))
         if any(
-            capacity is not None
+            isinstance(capacity, (int, float))
+            and not isinstance(capacity, bool)
             and math.isfinite(capacity)
             and capacity / reference_capacity_ah > 1.5
             for capacity in capacities
         ):
-            masked.add(record.cycle_index)
+            cycle = row.get("cycle_index")
+            if isinstance(cycle, bool) or not isinstance(cycle, int) or cycle < 0:
+                raise ValueError("capacity audit cycle_index must be non-negative")
+            masked.add(cycle)
     return frozenset(masked)
 
 
