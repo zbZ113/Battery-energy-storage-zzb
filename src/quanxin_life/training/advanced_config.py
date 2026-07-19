@@ -6,14 +6,23 @@ import hashlib
 import json
 import math
 import re
+import statistics
+from collections import defaultdict
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal, cast
 
 from pydantic import ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 from quanxin_life.core import PredictionTarget
 from quanxin_life.core.hashing import sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
+
+if TYPE_CHECKING:
+    from quanxin_life.training.advanced_selection import (
+        AdvancedModelSelectionManifest,
+        AdvancedValidationEvidence,
+        BaselineValidationEvidence,
+    )
 
 AdvancedFamily = Literal[
     "cyclepatch_direct",
@@ -484,7 +493,7 @@ def _validate_final_selection_binding(
     payload = path.read_bytes()
     if hashlib.sha256(payload).hexdigest() != config.expected_selection_sha256:
         raise ValueError("selection manifest file SHA-256 does not match final config")
-    manifest = AdvancedSelectionManifest.model_validate(_strict_json_object(payload))
+    manifest = _load_outer_selection_manifest(payload)
     configured = {
         candidate.family: candidate.model_dump(mode="json")
         for candidate in config.candidates
@@ -495,6 +504,185 @@ def _validate_final_selection_binding(
     }
     if configured != selected:
         raise ValueError("final candidates do not exactly match the selection manifest")
+
+
+def _load_outer_selection_manifest(payload: bytes) -> AdvancedSelectionManifest:
+    """Validate the complete outer selection evidence document before binding candidates."""
+
+    from quanxin_life.training.advanced_selection import AdvancedModelSelectionManifest
+
+    manifest = AdvancedModelSelectionManifest.model_validate(
+        _strict_json_object(payload)
+    )
+    _validate_outer_selection_consistency(manifest)
+    return manifest.selection
+
+
+def _validate_outer_selection_consistency(
+    manifest: AdvancedModelSelectionManifest,
+) -> None:
+    trace = manifest.selection_trace
+    stage2_rows = {
+        (row.family, row.candidate_id): row for row in trace.stage2_evidence
+    }
+    finalist_keys = {
+        (family, candidate_id)
+        for family, candidate_ids in trace.stage2_finalists.items()
+        for candidate_id in candidate_ids
+    }
+    recheck: dict[tuple[AdvancedFamily, str], list[AdvancedValidationEvidence]] = (
+        defaultdict(list)
+    )
+    for row in trace.recheck_evidence:
+        recheck[(row.family, row.candidate_id)].append(row)
+    if set(recheck) != finalist_keys:
+        raise ValueError("recheck evidence must cover exactly the stage2 finalists")
+    approved_axes = {
+        (cutoff, seed)
+        for cutoff in (20, 50, 100, 150)
+        for seed in (38, 39, 40)
+    }
+    for key in finalist_keys:
+        rows = recheck[key]
+        axes = {(row.cutoff_cycle, row.seed) for row in rows}
+        if len(rows) != 12 or axes != approved_axes:
+            raise ValueError("every stage2 finalist requires a complete 12-run recheck grid")
+        stage2 = stage2_rows[key]
+        if any(row.candidate_config_sha256 != stage2.candidate_config_sha256 for row in rows):
+            raise ValueError("recheck evidence configuration differs from stage2 evidence")
+
+    selected = {candidate.family: candidate for candidate in manifest.selection.selected_candidates}
+    for family, candidate in selected.items():
+        candidates = [key for key in finalist_keys if key[0] == family]
+        winner = min(candidates, key=lambda key: _outer_recheck_rank(recheck[key]))
+        if winner[1] != candidate.candidate_id:
+            raise ValueError("nested selection candidate is not the recorded recheck winner")
+        rows = recheck[(family, candidate.candidate_id)]
+        if any(row.status != "completed" for row in rows):
+            raise ValueError("nested selection candidate must have 12 completed recheck runs")
+        if any(row.candidate_config_sha256 != candidate.config_sha256 for row in rows):
+            raise ValueError(
+                "nested selection candidate configuration differs from recheck evidence"
+            )
+
+    expected_results = {
+        (
+            row.family,
+            row.candidate_id,
+            row.candidate_config_sha256,
+            row.cutoff_cycle,
+            row.seed,
+            cast(float, row.validation_mae),
+        )
+        for family, candidate in selected.items()
+        for row in recheck[(family, candidate.candidate_id)]
+    }
+    recorded_results = {
+        (
+            row.family,
+            row.candidate_id,
+            row.candidate_config_sha256,
+            row.cutoff_cycle,
+            row.seed,
+            row.validation_mae,
+        )
+        for row in manifest.selection.validation_results
+    }
+    if recorded_results != expected_results:
+        raise ValueError("nested selection results differ from the full recheck trace")
+    _validate_outer_provisional_eligibility(manifest, recheck, selected)
+
+
+def _outer_recheck_rank(
+    rows: list[AdvancedValidationEvidence],
+) -> tuple[object, ...]:
+    completed = [row for row in rows if row.status == "completed"]
+    failed_count = len(rows) - len(completed)
+    if not completed:
+        return (failed_count, math.inf, math.inf, math.inf, rows[0].candidate_id)
+    maes = [cast(float, row.validation_mae) for row in completed]
+    cutoff_means = [
+        statistics.fmean(
+            cast(float, row.validation_mae)
+            for row in completed
+            if row.cutoff_cycle == cutoff
+        )
+        for cutoff in (20, 50, 100, 150)
+        if any(row.cutoff_cycle == cutoff for row in completed)
+    ]
+    degradation = max(cutoff_means) - min(cutoff_means) if cutoff_means else math.inf
+    stability = statistics.pstdev(maes) if len(maes) > 1 else 0.0
+    return (failed_count, statistics.fmean(maes), degradation, stability, rows[0].candidate_id)
+
+
+def _validate_outer_provisional_eligibility(
+    manifest: AdvancedModelSelectionManifest,
+    recheck: dict[tuple[AdvancedFamily, str], list[AdvancedValidationEvidence]],
+    selected: dict[AdvancedFamily, AdvancedCandidate],
+) -> None:
+    baselines: dict[str, list[BaselineValidationEvidence]] = defaultdict(list)
+    for row in manifest.baseline_evidence:
+        baselines[row.baseline].append(row)
+    recorded = {row.family: row for row in manifest.provisional_eligibility}
+    checks: tuple[
+        tuple[
+            Literal["cyclepatch_batlinet", "hybridpatch_v2"],
+            Literal["xgboost", "current_hybrid"],
+        ],
+        ...,
+    ] = (
+        ("cyclepatch_batlinet", "xgboost"),
+        ("hybridpatch_v2", "current_hybrid"),
+    )
+    for family, baseline_name in checks:
+        candidate = selected[family]
+        candidate_rows = recheck[(family, candidate.candidate_id)]
+        baseline_rows = baselines[baseline_name]
+        reasons = _provisional_reason_codes(family, candidate_rows, baseline_rows)
+        decision = recorded[family]
+        if (
+            decision.candidate_id != candidate.candidate_id
+            or decision.baseline != baseline_name
+            or decision.eligible_for_final != (not reasons)
+            or decision.reason_codes != reasons
+        ):
+            raise ValueError("provisional eligibility does not match selection evidence")
+
+
+def _provisional_reason_codes(
+    family: str,
+    candidate: list[AdvancedValidationEvidence],
+    baseline: list[BaselineValidationEvidence],
+) -> tuple[str, ...]:
+    candidate_mae = statistics.fmean(cast(float, row.validation_mae) for row in candidate)
+    baseline_mae = statistics.fmean(row.validation_mae for row in baseline)
+    reasons: list[str] = []
+    if candidate_mae > baseline_mae * 0.98:
+        reasons.append("MEAN_MAE_IMPROVEMENT_BELOW_2_PERCENT")
+    if family == "cyclepatch_batlinet":
+        for cutoff in (20, 50, 100, 150):
+            candidate_cutoff = statistics.fmean(
+                cast(float, row.validation_mae)
+                for row in candidate
+                if row.cutoff_cycle == cutoff
+            )
+            baseline_cutoff = statistics.fmean(
+                row.validation_mae
+                for row in baseline
+                if row.cutoff_cycle == cutoff
+            )
+            if candidate_cutoff > baseline_cutoff * 1.10:
+                reasons.append(f"CUTOFF_{cutoff}_MAE_DEGRADATION_ABOVE_10_PERCENT")
+    else:
+        candidate_rmse = statistics.fmean(
+            cast(float, row.validation_rmse) for row in candidate
+        )
+        baseline_rmse = statistics.fmean(row.validation_rmse for row in baseline)
+        if candidate_rmse > baseline_rmse:
+            reasons.append("RMSE_WORSE_THAN_CURRENT_HYBRID")
+        if any(row.monotonic_violation_rate != 0.0 for row in candidate):
+            reasons.append("MONOTONIC_VIOLATION_NONZERO")
+    return tuple(reasons)
 
 
 def _strict_json_object(payload: bytes) -> dict[str, object]:

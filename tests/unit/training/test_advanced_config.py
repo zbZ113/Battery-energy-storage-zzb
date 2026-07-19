@@ -124,6 +124,88 @@ def _manifest_payload() -> dict[str, object]:
     return {**payload, "manifest_sha256": sha256_canonical(payload)}
 
 
+def _outer_manifest_payload() -> dict[str, object]:
+    selection = _manifest_payload()
+    selected = selection["selected_candidates"]
+    assert isinstance(selected, list)
+    stage1 = []
+    stage2 = []
+    recheck = []
+    survivors: dict[str, list[str]] = {}
+    for candidate in selected:
+        assert isinstance(candidate, dict)
+        family = str(candidate["family"])
+        candidate_id = str(candidate["candidate_id"])
+        config_hash = sha256_canonical(candidate)
+        survivors[family] = [candidate_id]
+        common = {
+            "family": family,
+            "candidate_id": candidate_id,
+            "candidate_config_sha256": config_hash,
+            "cutoff_cycle": 100,
+            "seed": 38,
+            "status": "completed",
+            "validation_mae": 80.0,
+            "validation_rmse": 81.0,
+            "monotonic_violation_rate": 0.0 if "hybrid" in family else None,
+        }
+        stage1.append({**common, "stage": "selection_stage1"})
+        stage2.append({**common, "stage": "selection_stage2"})
+        for cutoff in (20, 50, 100, 150):
+            for seed in (38, 39, 40):
+                recheck.append(
+                    {
+                        **common,
+                        "stage": "selection_recheck",
+                        "cutoff_cycle": cutoff,
+                        "seed": seed,
+                    }
+                )
+    baselines = [
+        {
+            "baseline": baseline,
+            "cutoff_cycle": cutoff,
+            "seed": seed,
+            "validation_mae": 82.0,
+            "validation_rmse": 83.0,
+            "monotonic_violation_rate": 0.0 if baseline == "current_hybrid" else None,
+        }
+        for baseline in ("xgboost", "current_hybrid")
+        for cutoff in (20, 50, 100, 150)
+        for seed in (38, 39, 40)
+    ]
+    provisional = [
+        {
+            "family": "cyclepatch_batlinet",
+            "candidate_id": "cyclepatch_batlinet-selected",
+            "baseline": "xgboost",
+            "eligible_for_final": True,
+            "reason_codes": [],
+        },
+        {
+            "family": "hybridpatch_v2",
+            "candidate_id": "hybridpatch_v2-selected",
+            "baseline": "current_hybrid",
+            "eligible_for_final": True,
+            "reason_codes": [],
+        },
+    ]
+    payload: dict[str, object] = {
+        "schema_version": "advanced-model-selection-v1",
+        "selection": selection,
+        "selection_trace": {
+            "stage1_evidence": stage1,
+            "stage1_survivors": survivors,
+            "stage2_evidence": stage2,
+            "stage2_finalists": survivors,
+            "recheck_evidence": recheck,
+        },
+        "baseline_evidence": baselines,
+        "provisional_eligibility": provisional,
+    }
+    return {**payload, "manifest_sha256": sha256_canonical(payload)}
+
+
 def test_candidate_is_frozen_strict_hashed_and_path_safe() -> None:
     candidate = CyclePatchDirectCandidate.model_validate(
         _candidate_payload("cyclepatch_direct", "cp-direct-01")
@@ -392,9 +474,9 @@ def test_final_matrix_fails_closed_until_actual_selection_is_bound(
     with pytest.raises(ValueError, match=r"selection|template|SHA"):
         build_advanced_run_matrix(final, repository_root=tmp_path)
 
-    manifest_payload = _manifest_payload()
+    outer_payload = _outer_manifest_payload()
     manifest_bytes = (
-        json.dumps(manifest_payload, ensure_ascii=False, sort_keys=True) + "\n"
+        json.dumps(outer_payload, ensure_ascii=False, sort_keys=True) + "\n"
     ).encode()
     manifest_path = tmp_path / "selection" / "manifest.json"
     manifest_path.parent.mkdir()
@@ -405,7 +487,7 @@ def test_final_matrix_fails_closed_until_actual_selection_is_bound(
             "expected_selection_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
             "candidates": tuple(
                 AdvancedSelectionManifest.model_validate(
-                    manifest_payload
+                    outer_payload["selection"]  # type: ignore[arg-type]
                 ).selected_candidates
             ),
         }
@@ -419,4 +501,137 @@ def test_final_matrix_fails_closed_until_actual_selection_is_bound(
 
     manifest_path.write_bytes(manifest_bytes + b" ")
     with pytest.raises(ValueError, match=r"SHA-256|selection"):
+        build_advanced_run_matrix(resolved, repository_root=tmp_path)
+
+
+def test_final_matrix_rejects_inner_only_selection_manifest(tmp_path: Path) -> None:
+    final = AdvancedMatrThreeBatchRunConfig.model_validate_json(
+        (CONFIG_ROOT / "final.json").read_bytes()
+    )
+    inner = _manifest_payload()
+    manifest_bytes = (
+        json.dumps(inner, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode()
+    path = tmp_path / "selection" / "manifest.json"
+    path.parent.mkdir()
+    path.write_bytes(manifest_bytes)
+    resolved = final.model_copy(
+        update={
+            "selection_manifest_path": "selection/manifest.json",
+            "expected_selection_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "candidates": tuple(
+                AdvancedSelectionManifest.model_validate(inner).selected_candidates
+            ),
+        }
+    )
+    with pytest.raises(ValueError, match=r"outer|complete|schema"):
+        build_advanced_run_matrix(resolved, repository_root=tmp_path)
+
+
+@pytest.mark.parametrize("field", ["selection_trace", "baseline_evidence"])
+def test_final_matrix_rejects_outer_evidence_tampering_with_same_nested_selection(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    final = AdvancedMatrThreeBatchRunConfig.model_validate_json(
+        (CONFIG_ROOT / "final.json").read_bytes()
+    )
+    outer = _outer_manifest_payload()
+    tampered = json.loads(json.dumps(outer))
+    if field == "baseline_evidence":
+        tampered[field][0]["validation_mae"] = 999.0
+    else:
+        tampered[field]["stage1_evidence"][0]["validation_mae"] = 999.0
+    manifest_bytes = (
+        json.dumps(tampered, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode()
+    path = tmp_path / "selection" / "manifest.json"
+    path.parent.mkdir()
+    path.write_bytes(manifest_bytes)
+    resolved = final.model_copy(
+        update={
+            "selection_manifest_path": "selection/manifest.json",
+            "expected_selection_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "candidates": tuple(
+                AdvancedSelectionManifest.model_validate(outer["selection"]).selected_candidates  # type: ignore[arg-type]
+            ),
+        }
+    )
+    with pytest.raises(ValueError, match=r"outer|manifest_sha256|evidence"):
+        build_advanced_run_matrix(resolved, repository_root=tmp_path)
+
+
+def _write_resolved_outer_final(
+    tmp_path: Path,
+    outer_payload: dict[str, object],
+) -> AdvancedMatrThreeBatchRunConfig:
+    final = AdvancedMatrThreeBatchRunConfig.model_validate_json(
+        (CONFIG_ROOT / "final.json").read_bytes()
+    )
+    manifest_bytes = (
+        json.dumps(outer_payload, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode()
+    path = tmp_path / "selection" / "manifest.json"
+    path.parent.mkdir(exist_ok=True)
+    path.write_bytes(manifest_bytes)
+    selection = AdvancedSelectionManifest.model_validate(outer_payload["selection"])  # type: ignore[arg-type]
+    return final.model_copy(
+        update={
+            "selection_manifest_path": "selection/manifest.json",
+            "expected_selection_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "candidates": selection.selected_candidates,
+        }
+    )
+
+
+def test_final_matrix_rejects_self_hashed_pseudo_trace(tmp_path: Path) -> None:
+    outer = _outer_manifest_payload()
+    tampered = json.loads(json.dumps(outer))
+    tampered["selection_trace"]["recheck_evidence"][0]["validation_mae"] = 999.0  # type: ignore[index]
+    payload = {
+        key: value for key, value in tampered.items() if key != "manifest_sha256"
+    }
+    tampered["manifest_sha256"] = sha256_canonical(payload)
+    resolved = _write_resolved_outer_final(tmp_path, tampered)
+
+    with pytest.raises(ValueError, match=r"nested selection results|recheck"):
+        build_advanced_run_matrix(resolved, repository_root=tmp_path)
+
+
+def test_final_matrix_rejects_self_hashed_incomplete_baseline_grid(tmp_path: Path) -> None:
+    outer = _outer_manifest_payload()
+    tampered = json.loads(json.dumps(outer))
+    tampered["baseline_evidence"].pop()  # type: ignore[union-attr]
+    payload = {
+        key: value for key, value in tampered.items() if key != "manifest_sha256"
+    }
+    tampered["manifest_sha256"] = sha256_canonical(payload)
+    resolved = _write_resolved_outer_final(tmp_path, tampered)
+
+    with pytest.raises(ValueError, match=r"24|baseline|grid"):
+        build_advanced_run_matrix(resolved, repository_root=tmp_path)
+
+
+@pytest.mark.parametrize("mutation", ["candidate", "baseline", "reason"])
+def test_final_matrix_rejects_self_hashed_inconsistent_provisional_eligibility(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    outer = _outer_manifest_payload()
+    tampered = json.loads(json.dumps(outer))
+    row = tampered["provisional_eligibility"][0]  # type: ignore[index]
+    if mutation == "candidate":
+        row["candidate_id"] = "not-the-selected-candidate"
+    elif mutation == "baseline":
+        row["baseline"] = "current_hybrid"
+    else:
+        row["eligible_for_final"] = False
+        row["reason_codes"] = ["MANUALLY_CHANGED"]
+    payload = {
+        key: value for key, value in tampered.items() if key != "manifest_sha256"
+    }
+    tampered["manifest_sha256"] = sha256_canonical(payload)
+    resolved = _write_resolved_outer_final(tmp_path, tampered)
+
+    with pytest.raises(ValueError, match=r"provisional eligibility|selection evidence"):
         build_advanced_run_matrix(resolved, repository_root=tmp_path)
