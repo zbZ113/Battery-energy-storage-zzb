@@ -30,12 +30,18 @@ from quanxin_life.data.matr_pipeline import (
 )
 from quanxin_life.data.schemas import CycleRecord, SplitManifest
 from quanxin_life.data.storage import write_cell_artifacts
-from quanxin_life.features.early_cycle_sequence import EarlyCycleSequence
+from quanxin_life.features.early_cycle_sequence import (
+    EarlyCycleNormalizer,
+    EarlyCycleSequence,
+)
 from quanxin_life.features.multichannel_cycle import MultichannelCycleConfig
 from quanxin_life.training.advanced_data import (
     AdvancedFinalMatrData,
     AdvancedSelectionMatrData,
+    MaskedCycleAudit,
+    MaskedCycleAuditEntry,
     _assemble_advanced_matr_data,
+    _build_hybrid_batch,
     _load_early_sequence,
     _load_supervision_rows,
     _validate_component_contract,
@@ -223,6 +229,7 @@ def test_selection_and_final_data_types_keep_heldout_partitions_closed() -> None
         "hybrid_train",
         "hybrid_validation",
         "hybrid_normalizer",
+        "masked_cycle_audit",
     }
     assert final_fields == selection_fields | {
         "scalar_calibration",
@@ -240,6 +247,28 @@ def test_selection_and_final_data_types_keep_heldout_partitions_closed() -> None
     }
     assert set(signature(load_advanced_matr_selection_data).parameters) == expected_parameters
     assert set(signature(load_advanced_matr_final_data).parameters) == expected_parameters
+
+
+def test_masked_cycle_audit_binds_cell_cycle_reason_and_is_order_stable() -> None:
+    entries = (
+        MaskedCycleAuditEntry(
+            cell_id="MATR_b1c18",
+            cycle_index=39,
+            reason="history_soh_out_of_range",
+        ),
+        MaskedCycleAuditEntry(
+            cell_id="MATR_b1c18",
+            cycle_index=39,
+            reason="early_capacity_ratio_above_1_5",
+        ),
+    )
+
+    forward = MaskedCycleAudit(entries=entries)
+    reverse = MaskedCycleAudit(entries=tuple(reversed(entries)))
+
+    assert forward.entries == reverse.entries
+    assert forward.audit_sha256 == reverse.audit_sha256
+    assert forward.masked_cycle_count == 1
 
 
 def _records(cell_id: str) -> tuple[CycleRecord, ...]:
@@ -312,6 +341,7 @@ def test_early_sequence_loader_never_passes_future_rows_to_feature_builder(
     sequence = _load_early_sequence(
         processed_root=tmp_path,
         evidence=evidence,
+        reference_capacity_ah=evidence.reference_capacity_ah,
         raw_sha256=raw_sha,
         config=MultichannelCycleConfig(cutoff_cycle=20, feature_version="advanced-v1"),
         data_version="matr-three-batch-v1",
@@ -320,6 +350,75 @@ def test_early_sequence_loader_never_passes_future_rows_to_feature_builder(
     assert sequence.cutoff_cycle == 20
     assert sequence.values.shape == (21, 2, 150, 3)
     assert bool(sequence.cycle_mask[20])
+
+
+def test_early_sequence_loader_masks_capacity_outlier_cycle_and_records_audit(
+    tmp_path: Path,
+) -> None:
+    raw_sha = "a" * 64
+    metadata = CellMetadata(
+        dataset_id="MATR",
+        cell_id="MATR_b1c18",
+        raw_cell_id="b1c18",
+        chemistry="LFP/graphite",
+        nominal_capacity_ah=1.1,
+        reference_capacity_ah=1.0674137,
+        official_life_label=100,
+        official_life_label_name="cycle_life",
+        source_uri="https://example.invalid/matr",
+        source_sha256=raw_sha,
+        schema_version="battery-cell-v1",
+    )
+    records = list(_records(metadata.cell_id))
+    records.extend(
+        CycleRecord(
+            dataset_id="MATR",
+            cell_id=metadata.cell_id,
+            cycle_index=39,
+            sample_index=sample,
+            time_s=3900.0 + sample,
+            voltage_v=3.0 + sample * 0.1,
+            current_a=1.0,
+            temperature_c=25.0,
+            charge_capacity_ah=2.8840845 if sample == 1 else 0.1 + sample * 0.1,
+        )
+        for sample in range(3)
+    )
+    manifest = write_cell_artifacts(tmp_path, metadata, tuple(records))
+    evidence = MatrCellConversionEvidence(
+        cell_id=metadata.cell_id,
+        raw_cell_id="b1c18",
+        official_life_label=100,
+        official_life_right_censored=False,
+        protocol_id="p1",
+        reference_capacity_ah=metadata.reference_capacity_ah,
+        row_count=manifest.row_count,
+        cycle_count=40,
+        quality_issue_counts={},
+        manifest_relative_path=manifest.manifest_relative_path,
+        parquet_sha256=manifest.parquet_sha256,
+        metadata_sha256=manifest.metadata_sha256,
+    )
+    audit_entries: list[MaskedCycleAuditEntry] = []
+
+    sequence = _load_early_sequence(
+        processed_root=tmp_path,
+        evidence=evidence,
+        reference_capacity_ah=metadata.reference_capacity_ah,
+        raw_sha256=raw_sha,
+        config=MultichannelCycleConfig(cutoff_cycle=50, feature_version="advanced-v1"),
+        data_version="matr-three-batch-v1",
+        audit_entries=audit_entries,
+    )
+
+    assert not sequence.cycle_mask[39]
+    assert not sequence.sample_mask[39].any()
+    assert any(
+        getattr(item, "cell_id", None) == metadata.cell_id
+        and getattr(item, "cycle_index", None) == 39
+        and "capacity" in getattr(item, "reason", "")
+        for item in audit_entries
+    )
 
 
 def test_selection_supervision_reader_filters_heldout_rows_before_validation(
@@ -479,6 +578,67 @@ def _sequence(cell_id: str, value: float) -> EarlyCycleSequence:
         condition_values=torch.tensor([value]),
         condition_mask=torch.tensor([True]),
     )
+
+
+def _sequence_with_cutoff(cell_id: str, cutoff: int) -> EarlyCycleSequence:
+    values = torch.full((cutoff + 1, 2, 150, 3), float("nan"), dtype=torch.float32)
+    sample_mask = torch.zeros((cutoff + 1, 2, 150), dtype=torch.bool)
+    for cycle in range(1, cutoff + 1):
+        values[cycle, :, :, :] = 1.0
+        sample_mask[cycle] = True
+    return EarlyCycleSequence(
+        dataset_id="MATR",
+        cell_id=cell_id,
+        cutoff_cycle=cutoff,
+        data_version="matr-three-batch-v1",
+        feature_version="advanced-v1",
+        cycle_indices=tuple(range(cutoff + 1)),
+        values=values,
+        cycle_mask=sample_mask.any(dim=(1, 2)),
+        sample_mask=sample_mask,
+        condition_names=("temperature_c",),
+        condition_values=torch.tensor([25.0]),
+        condition_mask=torch.tensor([True]),
+    )
+
+
+def test_hybrid_batch_masks_out_of_range_future_and_history_soh_with_audit() -> None:
+    trajectory = {cycle: 0.9 for cycle in range(1, 501)}
+    trajectory[39] = 2.7019
+    for cutoff, target_index in ((20, 18), (50, None)):
+        audit_entries: list[MaskedCycleAuditEntry] = []
+        batch = _build_hybrid_batch(
+            ((_sequence_with_cutoff("MATR_b1c18", cutoff), trajectory),),
+            normalizer=EarlyCycleNormalizer.fit(
+                (_sequence_with_cutoff("MATR_b1c18", cutoff),),
+                training_cell_ids=frozenset({"MATR_b1c18"}),
+            ),
+            audit_entries=audit_entries,
+        )
+        if target_index is not None:
+            assert not batch.targets.target_mask[0, target_index]
+            assert torch.isnan(batch.targets.target_soh[0, target_index])
+        else:
+            assert not batch.targets.history_mask[0, 39]
+            assert torch.isnan(batch.targets.history_soh[0, 39])
+        assert any(
+            getattr(item, "cell_id", None) == "MATR_b1c18"
+            and getattr(item, "cycle_index", None) == 39
+            and "soh" in getattr(item, "reason", "")
+            for item in audit_entries
+        )
+
+
+def test_hybrid_batch_rejects_cell_without_any_valid_history_or_target() -> None:
+    invalid = {cycle: 2.0 for cycle in range(1, 501)}
+    with pytest.raises(ValueError, match="no valid history/target supervision"):
+        _build_hybrid_batch(
+            ((_sequence_with_cutoff("MATR_bad", 20), invalid),),
+            normalizer=EarlyCycleNormalizer.fit(
+                (_sequence_with_cutoff("MATR_bad", 20),),
+                training_cell_ids=frozenset({"MATR_bad"}),
+            ),
+        )
 
 
 def test_selection_assembly_fits_each_normalizer_to_its_exact_training_cells() -> None:

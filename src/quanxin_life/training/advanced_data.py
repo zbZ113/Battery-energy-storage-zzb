@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
@@ -44,6 +44,55 @@ from quanxin_life.training.advanced_tasks import (
 )
 
 
+@dataclass(frozen=True, order=True)
+class MaskedCycleAuditEntry:
+    """One explicitly excluded real cycle and the scientific exclusion reason."""
+
+    cell_id: str
+    cycle_index: int
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.cell_id.strip() or not self.reason.strip():
+            raise ValueError("masked cycle audit identifiers must be non-empty")
+        if self.cycle_index < 0:
+            raise ValueError("masked cycle audit cycle_index must be non-negative")
+
+
+@dataclass(frozen=True)
+class MaskedCycleAudit:
+    """Canonical, hash-bound record of all cycles excluded during data assembly."""
+
+    entries: tuple[MaskedCycleAuditEntry, ...] = ()
+    masked_cycle_count: int = field(init=False)
+    audit_sha256: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        entries = tuple(sorted(self.entries))
+        if len(set(entries)) != len(entries):
+            raise ValueError("masked cycle audit entries must be unique")
+        object.__setattr__(self, "entries", entries)
+        object.__setattr__(
+            self,
+            "masked_cycle_count",
+            len({(entry.cell_id, entry.cycle_index) for entry in entries}),
+        )
+        object.__setattr__(
+            self,
+            "audit_sha256",
+            sha256_canonical(
+                [
+                    {
+                        "cell_id": entry.cell_id,
+                        "cycle_index": entry.cycle_index,
+                        "reason": entry.reason,
+                    }
+                    for entry in entries
+                ]
+            ),
+        )
+
+
 @dataclass(frozen=True)
 class AdvancedSelectionMatrData:
     """Selection data exposes only train and validation supervision."""
@@ -55,6 +104,7 @@ class AdvancedSelectionMatrData:
     hybrid_train: AdvancedTrajectoryBatch
     hybrid_validation: AdvancedTrajectoryBatch
     hybrid_normalizer: EarlyCycleNormalizer
+    masked_cycle_audit: MaskedCycleAudit
 
 
 @dataclass(frozen=True)
@@ -132,6 +182,7 @@ def _load_advanced_matr_data(
     config = MultichannelCycleConfig(cutoff_cycle=cutoff_cycle, feature_version=feature_version)
     scalar_by_cell: dict[str, ScalarSequence] = {}
     hybrid_by_cell: dict[str, HybridSequence] = {}
+    masked_cycle_entries: list[MaskedCycleAuditEntry] = []
     component_splits: list[SplitManifest] = []
     for component in manifest.batches:
         conversion = MatrBatchConversionReport.model_validate_json(
@@ -169,16 +220,17 @@ def _load_advanced_matr_data(
         hybrid_cells = tuple(cell_id for cell_id in allowed if cell_id in eligible)
         sequence_cells = tuple(dict.fromkeys((*scalar_cells, *hybrid_cells)))
         processed_root = _inside(root, component.processed_root)
-        sequences = {
-            cell_id: _load_early_sequence(
+        sequences: dict[str, EarlyCycleSequence] = {}
+        for cell_id in sequence_cells:
+            sequences[cell_id] = _load_early_sequence(
                 processed_root=processed_root,
                 evidence=evidence[cell_id],
+                reference_capacity_ah=evidence[cell_id].reference_capacity_ah,
                 raw_sha256=component.raw_sha256,
                 config=config,
                 data_version=manifest.data_version,
+                audit_entries=masked_cycle_entries,
             )
-            for cell_id in sequence_cells
-        }
         for cell_id in scalar_cells:
             label = evidence[cell_id].official_life_label
             if label is None:
@@ -222,6 +274,7 @@ def _load_advanced_matr_data(
         source_split=combined_split,
         scalar_sequences=scalar_partitions,
         hybrid_sequences=hybrid_partitions,
+        masked_cycle_entries=tuple(masked_cycle_entries),
         final=len(partitions) == 4,
     )
 
@@ -232,6 +285,7 @@ def _assemble_advanced_matr_data(
     scalar_sequences: dict[str, tuple[ScalarSequence, ...]],
     hybrid_sequences: dict[str, tuple[HybridSequence, ...]],
     final: bool,
+    masked_cycle_entries: tuple[MaskedCycleAuditEntry, ...] = (),
 ) -> AdvancedSelectionMatrData | AdvancedFinalMatrData:
     """Fit task-local train normalizers and construct closed partition batches."""
 
@@ -260,10 +314,16 @@ def _assemble_advanced_matr_data(
         partition: _build_scalar_batch(entries, scalar_normalizer)
         for partition, entries in scalar_sequences.items()
     }
+    audit_entries = list(masked_cycle_entries)
     hybrid_batches = {
-        partition: _build_hybrid_batch(entries, hybrid_normalizer)
+        partition: _build_hybrid_batch(
+            entries,
+            hybrid_normalizer,
+            audit_entries=audit_entries,
+        )
         for partition, entries in hybrid_sequences.items()
     }
+    masked_cycle_audit = MaskedCycleAudit(entries=tuple(audit_entries))
     if not final:
         return AdvancedSelectionMatrData(
             source_split=source_split,
@@ -273,6 +333,7 @@ def _assemble_advanced_matr_data(
             hybrid_train=hybrid_batches["train"],
             hybrid_validation=hybrid_batches["validation"],
             hybrid_normalizer=hybrid_normalizer,
+            masked_cycle_audit=masked_cycle_audit,
         )
     return AdvancedFinalMatrData(
         source_split=source_split,
@@ -282,6 +343,7 @@ def _assemble_advanced_matr_data(
         hybrid_train=hybrid_batches["train"],
         hybrid_validation=hybrid_batches["validation"],
         hybrid_normalizer=hybrid_normalizer,
+        masked_cycle_audit=masked_cycle_audit,
         scalar_calibration=scalar_batches["calibration"],
         scalar_test=scalar_batches["test"],
         hybrid_calibration=hybrid_batches["calibration"],
@@ -302,7 +364,10 @@ def _build_scalar_batch(
 
 
 def _build_hybrid_batch(
-    entries: tuple[HybridSequence, ...], normalizer: EarlyCycleNormalizer
+    entries: tuple[HybridSequence, ...],
+    normalizer: EarlyCycleNormalizer,
+    *,
+    audit_entries: list[MaskedCycleAuditEntry] | None = None,
 ) -> AdvancedTrajectoryBatch:
     if not entries:
         raise ValueError("every requested Hybrid partition requires eligible cells")
@@ -311,21 +376,61 @@ def _build_hybrid_batch(
     cutoff = int(early.cycle_mask.shape[1] - 1)
     prediction_cycles = torch.arange(cutoff + 1, 501, dtype=torch.int64)
     history = torch.full(early.cycle_mask.shape, float("nan"), dtype=torch.float32)
-    history_mask = early.cycle_mask.clone()
-    history_mask[:, 0] = False
-    target = torch.empty((len(entries), 500 - cutoff), dtype=torch.float32)
+    history_mask = torch.zeros_like(early.cycle_mask)
+    target = torch.full(
+        (len(entries), 500 - cutoff), float("nan"), dtype=torch.float32
+    )
+    target_mask = torch.zeros_like(target, dtype=torch.bool)
     initial = torch.empty(len(entries), dtype=torch.float32)
     for row, (_sequence, trajectory) in enumerate(entries):
         if set(trajectory) != set(range(1, 501)):
             raise ValueError("Hybrid supervision must contain every real cycle 1 through 500")
-        initial[row] = trajectory[cutoff]
+        initial_value = float(trajectory[cutoff])
         for cycle in range(1, cutoff + 1):
-            if history_mask[row, cycle]:
-                history[row, cycle] = trajectory[cycle]
-        target[row] = torch.tensor(
-            [trajectory[cycle] for cycle in range(cutoff + 1, 501)],
-            dtype=torch.float32,
-        )
+            soh = float(trajectory[cycle])
+            if not bool(early.cycle_mask[row, cycle]):
+                continue
+            if _is_valid_soh(soh):
+                history[row, cycle] = soh
+                history_mask[row, cycle] = True
+            elif audit_entries is not None:
+                audit_entries.append(
+                    MaskedCycleAuditEntry(
+                        cell_id=_sequence.cell_id,
+                        cycle_index=cycle,
+                        reason="history_soh_out_of_range",
+                    )
+                )
+        for index, cycle in enumerate(range(cutoff + 1, 501)):
+            soh = float(trajectory[cycle])
+            if _is_valid_soh(soh):
+                target[row, index] = soh
+                target_mask[row, index] = True
+            elif audit_entries is not None:
+                audit_entries.append(
+                    MaskedCycleAuditEntry(
+                        cell_id=_sequence.cell_id,
+                        cycle_index=cycle,
+                        reason="target_soh_out_of_range",
+                    )
+                )
+        has_history = bool(history_mask[row].any().item())
+        has_target = bool(target_mask[row].any().item())
+        if not has_history and not has_target:
+            raise ValueError(
+                f"Hybrid partition cell {_sequence.cell_id} has no valid "
+                "history/target supervision"
+            )
+        if not _is_valid_soh(initial_value):
+            raise ValueError(
+                f"Hybrid initial SOH is invalid for cell {_sequence.cell_id} "
+                f"at cycle {cutoff}"
+            )
+        initial[row] = initial_value
+        if not has_target:
+            raise ValueError(
+                f"Hybrid partition cell {_sequence.cell_id} has no valid target supervision"
+            )
     return AdvancedTrajectoryBatch(
         inputs=HybridPatchV2Inputs(
             early_batch=early,
@@ -336,9 +441,13 @@ def _build_hybrid_batch(
             history_soh=history,
             history_mask=history_mask,
             target_soh=target,
-            target_mask=torch.ones_like(target, dtype=torch.bool),
+            target_mask=target_mask,
         ),
     )
+
+
+def _is_valid_soh(value: float) -> bool:
+    return math.isfinite(value) and 0.0 < value <= 1.5
 
 
 def _validate_component_contract(
@@ -435,9 +544,11 @@ def _load_early_sequence(
     *,
     processed_root: Path,
     evidence: MatrCellConversionEvidence,
+    reference_capacity_ah: float,
     raw_sha256: str,
     config: MultichannelCycleConfig,
     data_version: str,
+    audit_entries: list[MaskedCycleAuditEntry] | None = None,
 ) -> EarlyCycleSequence:
     """Load only cutoff-bounded rows before invoking the label-free builder."""
 
@@ -459,8 +570,11 @@ def _load_early_sequence(
         verified.metadata.source_sha256 != raw_sha256
         or verified.metadata.official_life_label != evidence.official_life_label
         or verified.metadata.reference_capacity_ah != evidence.reference_capacity_ah
+        or reference_capacity_ah != evidence.reference_capacity_ah
     ):
         raise ValueError("processed cell metadata differs from registered MATR evidence")
+    if not math.isfinite(reference_capacity_ah) or reference_capacity_ah <= 0:
+        raise ValueError("reference_capacity_ah must be finite and positive")
     table = pq.read_table(
         verified.parquet_path,
         filters=[("cycle_index", "<=", config.cutoff_cycle)],
@@ -468,7 +582,43 @@ def _load_early_sequence(
     records = tuple(CycleRecord.model_validate(row) for row in table.to_pylist())
     if not records or any(record.cycle_index > config.cutoff_cycle for record in records):
         raise ValueError("early MATR input must contain only cutoff-bounded rows")
-    return build_early_cycle_sequence(records, config=config, data_version=data_version)
+    masked_cycles = _capacity_outlier_cycles(records, reference_capacity_ah)
+    if audit_entries is not None:
+        audit_entries.extend(
+            MaskedCycleAuditEntry(
+                cell_id=evidence.cell_id,
+                cycle_index=cycle,
+                reason="early_capacity_ratio_above_1_5",
+            )
+            for cycle in masked_cycles
+        )
+    filtered_records = tuple(
+        record for record in records if record.cycle_index not in masked_cycles
+    )
+    return build_early_cycle_sequence(
+        filtered_records,
+        config=config,
+        data_version=data_version,
+    )
+
+
+def _capacity_outlier_cycles(
+    records: tuple[CycleRecord, ...], reference_capacity_ah: float
+) -> frozenset[int]:
+    masked: set[int] = set()
+    for record in records:
+        capacities = (
+            record.charge_capacity_ah,
+            record.discharge_capacity_ah,
+        )
+        if any(
+            capacity is not None
+            and math.isfinite(capacity)
+            and capacity / reference_capacity_ah > 1.5
+            for capacity in capacities
+        ):
+            masked.add(record.cycle_index)
+    return frozenset(masked)
 
 
 def _load_supervision_rows(
