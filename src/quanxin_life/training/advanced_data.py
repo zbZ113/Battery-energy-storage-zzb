@@ -379,8 +379,14 @@ def _validate_component_contract(
             for cell_id in eligible
         )
         or any(
-            excluded_by_cell[cell_id].observed_cycle_count
-            != conversion_by_cell[cell_id].cycle_count
+            supervision_by_cell[cell_id].observed_cycle_count
+            <= eligibility.horizon_cycle
+            for cell_id in eligible
+        )
+        or any(
+            not 0
+            < excluded_by_cell[cell_id].observed_cycle_count
+            <= eligibility.horizon_cycle
             for cell_id in excluded
         )
     ):
@@ -397,7 +403,6 @@ def _supervision_evidence_matches_conversion(
         and supervision.official_life_right_censored
         == conversion.official_life_right_censored
         and supervision.reference_capacity_ah == conversion.reference_capacity_ah
-        and supervision.observed_cycle_count == conversion.cycle_count
     )
 
 
@@ -490,6 +495,12 @@ def _load_supervision_rows(
         for cell_id in allowed_cell_ids
     ):
         raise ValueError("selected supervision evidence differs from conversion evidence")
+    if any(
+        supervision_evidence[cell_id].observed_cycle_count
+        <= supervision.horizon_cycle
+        for cell_id in allowed_cell_ids
+    ):
+        raise ValueError("selected supervision evidence does not cover the full horizon")
     if supervision_path.is_symlink() or not supervision_path.is_file():
         raise ValueError("supervision Parquet must be a regular file")
     if _sha256_file(supervision_path) != supervision.parquet_sha256:

@@ -60,7 +60,7 @@ def _component_contract() -> tuple[
             protocol_id="p1",
             reference_capacity_ah=1.1,
             row_count=1000,
-            cycle_count=501,
+            cycle_count=151,
             quality_issue_counts={},
             manifest_relative_path="MATR_b1c0/manifest.json",
             parquet_sha256="1" * 64,
@@ -74,7 +74,7 @@ def _component_contract() -> tuple[
             protocol_id="p2",
             reference_capacity_ah=1.2,
             row_count=800,
-            cycle_count=400,
+            cycle_count=151,
             quality_issue_counts={},
             manifest_relative_path="MATR_b1c1/manifest.json",
             parquet_sha256="3" * 64,
@@ -161,6 +161,14 @@ def _component_contract() -> tuple[
     return component, conversion, split, eligibility, supervision
 
 
+def test_component_contract_allows_cutoff_conversion_and_full_trajectory_counts() -> None:
+    component, conversion, split, eligibility, supervision = _component_contract()
+
+    _validate_component_contract(
+        component, conversion, split, eligibility, supervision
+    )
+
+
 @pytest.mark.parametrize(
     ("field_name", "changed_value"),
     [
@@ -185,13 +193,13 @@ def test_component_contract_rejects_cell_level_supervision_disagreement(
         )
 
 
-def test_component_contract_rejects_exclusion_observed_count_disagreement() -> None:
+def test_component_contract_rejects_excluded_count_beyond_horizon() -> None:
     component, conversion, split, eligibility, supervision = _component_contract()
     changed_eligibility = eligibility.model_copy(
         update={
             "excluded": (
                 eligibility.excluded[0].model_copy(
-                    update={"observed_cycle_count": 399}
+                    update={"observed_cycle_count": 501}
                 ),
             )
         }
