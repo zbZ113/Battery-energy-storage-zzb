@@ -207,6 +207,13 @@ def test_direct_task_trains_validates_raw_units_and_caches_device_batches() -> N
     assert metrics.metrics.keys() == {"mae", "rmse", "mape", "r2"}
     assert metrics.metrics["mae"] > 1.0
 
+    test_batch = AdvancedCycleLifeBatch(
+        early_batch=_early_batch(("test-a",)),
+        raw_labels=torch.tensor([500.0]),
+    )
+    test_metrics = task.evaluate(test_batch, device=torch.device("cpu"))
+    assert test_metrics.metrics.keys() == {"mae", "rmse", "mape", "r2"}
+
 
 def test_direct_task_seed_controls_initial_model_state() -> None:
     train, validation = _cycle_life_batches()
@@ -326,6 +333,13 @@ def test_batlinet_task_uses_only_frozen_training_references_and_trains() -> None
     metrics = task.validate(1, device=torch.device("cpu"))
     assert not _changed(before_validation, task.model)
     assert metrics.metrics["mae"] > 1.0
+
+    test_batch = AdvancedCycleLifeBatch(
+        early_batch=_early_batch(("test-a",)),
+        raw_labels=torch.tensor([500.0]),
+    )
+    test_metrics = task.evaluate(test_batch, device=torch.device("cpu"))
+    assert test_metrics.metrics.keys() == {"mae", "rmse", "mape", "r2"}
 
 
 def test_batlinet_task_rejects_a_heldout_reference_library() -> None:
@@ -452,6 +466,11 @@ def test_hybrid_task_trains_and_validates_monotone_trajectory() -> None:
     assert validation.metrics["monotonic_violation_rate"] == 0.0
     assert validation.metrics["mae"] >= 0.0
     assert validation.metrics["rmse"] >= validation.metrics["mae"]
+
+    test_metrics = task.evaluate(
+        _trajectory_batch(("test-a",)), device=torch.device("cpu")
+    )
+    assert test_metrics.metrics["monotonic_violation_rate"] == 0.0
 
 
 @pytest.mark.parametrize(

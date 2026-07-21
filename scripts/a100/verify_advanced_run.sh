@@ -23,10 +23,13 @@ python - "${OUTPUT_ROOT}" "${INDEX}" <<'PY'
 import sys
 from pathlib import Path
 
-from quanxin_life.training.outputs import load_training_output_index, verify_training_output_index
+from quanxin_life.training.advanced_outputs import (
+    load_advanced_training_output_index,
+    verify_advanced_training_output_index,
+)
 
 root = Path(sys.argv[1])
-index = load_training_output_index(Path(sys.argv[2]))
-verify_training_output_index(root, index)
-print({"status": "VERIFIED", "run_id": index.run_manifest.run_id, "files": len(index.files), "sha256": index.output_sha256})
+index = load_advanced_training_output_index(Path(sys.argv[2]))
+verify_advanced_training_output_index(root, index)
+print({"status": "VERIFIED", "mode": index.mode, "operations": index.operation_count, "files": len(index.files), "sha256": index.output_sha256})
 PY

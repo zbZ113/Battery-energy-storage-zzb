@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -156,8 +158,14 @@ def test_executor_filters_a_requested_final_seed_before_running(
     seen: list[int] = []
 
     def run_key(**kwargs: object) -> dict[str, object]:
-        seen.append(kwargs["key"].seed)  # type: ignore[union-attr]
-        return {"seed": kwargs["key"].seed}  # type: ignore[union-attr]
+        key = kwargs["key"]
+        seen.append(key.seed)  # type: ignore[union-attr]
+        return {
+            "family": key.family,  # type: ignore[union-attr]
+            "candidate_id": key.candidate_id,  # type: ignore[union-attr]
+            "cutoff_cycle": key.cutoff_cycle,  # type: ignore[union-attr]
+            "seed": key.seed,  # type: ignore[union-attr]
+        }
 
     monkeypatch.setattr(advanced_orchestrator, "_run_key", run_key)
 
@@ -170,6 +178,68 @@ def test_executor_filters_a_requested_final_seed_before_running(
 
     assert seen == [38, 38, 38, 38]
     assert result["run_count"] == 4
+
+
+def test_aggregate_metrics_merge_seed_subprocess_results(tmp_path: Path) -> None:
+    run_root = tmp_path / "runs"
+    run_root.mkdir()
+    first = {
+        "mode": "final",
+        "dataset_id": "MATR",
+        "target": "matr_official_cycle_life",
+        "runs": [
+            {
+                "family": "cyclepatch_direct",
+                "candidate_id": "candidate",
+                "cutoff_cycle": 20,
+                "seed": 38,
+            }
+        ],
+        "run_count": 1,
+        "input_bundle_sha256": "a" * 64,
+    }
+    second = {
+        **first,
+        "runs": [
+            {
+                "family": "cyclepatch_direct",
+                "candidate_id": "candidate",
+                "cutoff_cycle": 20,
+                "seed": 39,
+            }
+        ],
+    }
+
+    advanced_orchestrator._write_merged_aggregate(run_root, first)
+    advanced_orchestrator._write_merged_aggregate(run_root, second)
+
+    payload = json.loads((run_root / "aggregate_metrics.json").read_text(encoding="utf-8"))
+    assert payload["run_count"] == 2
+    assert [row["seed"] for row in payload["runs"]] == [38, 39]
+
+
+def test_source_commit_falls_back_to_packaged_revision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    revision = "c" * 40
+    (tmp_path / "source_revision.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "source-revision-v1",
+                "git_commit": revision,
+                "git_dirty": False,
+                "created_at": "2026-07-21T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def unavailable(*_args: object, **_kwargs: object) -> object:
+        raise subprocess.CalledProcessError(128, "git")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+
+    assert advanced_orchestrator._source_commit(tmp_path) == revision
 
 
 def test_select_executes_stage1_stage2_and_full_recheck_without_final_loader(

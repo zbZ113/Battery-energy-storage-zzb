@@ -186,7 +186,11 @@ def load_training_output_index(path: Path) -> TrainingOutputIndex:
     return TrainingOutputIndex.model_validate(_read_strict_json(path))
 
 
-def _collect_output_files(root: Path) -> tuple[TrainingOutputFile, ...]:
+def _collect_output_files(
+    root: Path,
+    *,
+    excluded_relative_paths: frozenset[str] = frozenset(),
+) -> tuple[TrainingOutputFile, ...]:
     files: list[TrainingOutputFile] = []
     for current_root, directory_names, file_names in os.walk(root, followlinks=False):
         current = Path(current_root)
@@ -198,6 +202,8 @@ def _collect_output_files(root: Path) -> tuple[TrainingOutputFile, ...]:
         for name in file_names:
             path = current / name
             relative = path.relative_to(root)
+            if relative.as_posix() in excluded_relative_paths:
+                continue
             _validate_output_path(relative, is_file=True)
             if path.is_symlink():
                 raise ValueError("symbolic link is forbidden in training output")

@@ -213,12 +213,17 @@ class CyclePatchDirectTrainingTask:
 
     def validate(self, epoch: int, *, device: torch.device) -> EpochMetrics:
         del epoch
-        batches = self._batches_for_device(device)
+        return self.evaluate(self._validation_batch, device=device)
+
+    def evaluate(
+        self, batch: AdvancedCycleLifeBatch, *, device: torch.device
+    ) -> EpochMetrics:
+        _validate_evaluation_early_batch(self._train_batch.early_batch, batch.early_batch)
         self._model.eval()
         with torch.no_grad():
-            standardized = self._model(batches.validation_early)
+            standardized = self._model(_move_early_batch(batch.early_batch, device))
             raw_prediction = self.target_scaler.inverse_transform(standardized)
-            metrics = _raw_cycle_metrics(raw_prediction, batches.validation_raw)
+            metrics = _raw_cycle_metrics(raw_prediction, batch.raw_labels.to(device=device))
         return EpochMetrics(loss=metrics["mae"], metrics=metrics)
 
 
@@ -371,6 +376,12 @@ class CyclePatchBatLiNetTrainingTask:
 
     def validate(self, epoch: int, *, device: torch.device) -> EpochMetrics:
         del epoch
+        return self.evaluate(self._validation_batch, device=device)
+
+    def evaluate(
+        self, batch: AdvancedCycleLifeBatch, *, device: torch.device
+    ) -> EpochMetrics:
+        _validate_evaluation_early_batch(self._train_batch.early_batch, batch.early_batch)
         batches = self._batches_for_device(device)
         assert batches.reference_indices is not None
         assert batches.reference_labels is not None
@@ -380,14 +391,16 @@ class CyclePatchBatLiNetTrainingTask:
             reference_embeddings = train_embeddings.index_select(
                 0, batches.reference_indices
             )
-            validation_embeddings = self._model.encode(batches.validation_early)
+            validation_embeddings = self._model.encode(
+                _move_early_batch(batch.early_batch, device)
+            )
             standardized = self._model.fuse_standardized(
                 validation_embeddings,
                 reference_embeddings,
                 batches.reference_labels,
             )
             raw_prediction = self.target_scaler.inverse_transform(standardized)
-            metrics = _raw_cycle_metrics(raw_prediction, batches.validation_raw)
+            metrics = _raw_cycle_metrics(raw_prediction, batch.raw_labels.to(device=device))
         return EpochMetrics(loss=metrics["mae"], metrics=metrics)
 
 
@@ -478,7 +491,15 @@ class HybridPatchV2TrainingTask:
 
     def validate(self, epoch: int, *, device: torch.device) -> EpochMetrics:
         del epoch
-        batch = self._batches_for_device(device).validation
+        return self.evaluate(self._validation_batch, device=device)
+
+    def evaluate(
+        self, batch: AdvancedTrajectoryBatch, *, device: torch.device
+    ) -> EpochMetrics:
+        _validate_evaluation_early_batch(
+            self._train_batch.inputs.early_batch, batch.inputs.early_batch
+        )
+        batch = _move_trajectory_batch(batch, device)
         self._model.eval()
         with torch.no_grad():
             output = self._model(batch.inputs)
@@ -600,6 +621,15 @@ def _validate_trajectory_batches(
     validation_cycles = validation.inputs.prediction_cycles.detach().cpu()
     if not torch.equal(train_cycles, validation_cycles):
         raise ValueError("training and validation prediction cycles must match")
+
+
+def _validate_evaluation_early_batch(
+    training: EarlyCycleBatch, evaluation: EarlyCycleBatch
+) -> None:
+    if set(training.cell_ids) & set(evaluation.cell_ids):
+        raise ValueError("evaluation cells must be disjoint from training cells")
+    if _early_schema(training) != _early_schema(evaluation):
+        raise ValueError("evaluation early batch schema must match training data")
 
 
 def _early_schema(batch: EarlyCycleBatch) -> tuple[object, ...]:

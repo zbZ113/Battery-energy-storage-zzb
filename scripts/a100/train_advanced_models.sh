@@ -51,6 +51,7 @@ if [[ "${MODE}" == "select" ]]; then
   SEEDS=(38 39 40)
   export PYTHONHASHSEED=38
   python scripts/run_advanced_model_suite.py "${DATASET}" "${MODE}" 2>&1 | tee -a "${log_file}"
+  python scripts/build_advanced_run_index.py "${DATASET}" "${MODE}" 2>&1 | tee -a "${log_file}"
   echo "advanced run completed: ${log_file}" | tee -a "${log_file}"
   exit 0
 fi
@@ -66,4 +67,5 @@ for seed in "${SEEDS[@]}"; do
   python scripts/run_advanced_model_suite.py "${DATASET}" "${MODE}" --seed "${seed}" 2>&1 | tee -a "${log_file}"
 done
 
+python scripts/build_advanced_run_index.py "${DATASET}" "${MODE}" 2>&1 | tee -a "${log_file}"
 echo "advanced run completed: ${log_file}" | tee -a "${log_file}"

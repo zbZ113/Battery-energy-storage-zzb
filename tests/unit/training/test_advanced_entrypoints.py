@@ -43,6 +43,7 @@ def test_advanced_shell_pins_gpu_and_seed_subprocesses() -> None:
         "SEEDS=(38 39 40 41 42)",
     ):
         assert marker in script
+    assert "build_advanced_run_index.py" in script
 
 
 def test_verify_script_is_executable_on_posix() -> None:

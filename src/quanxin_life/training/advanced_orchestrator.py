@@ -51,7 +51,7 @@ from quanxin_life.training.advanced_tasks import (
 )
 from quanxin_life.training.checkpoint import AdvancedCheckpointContext, model_architecture_sha256
 from quanxin_life.training.config import ModelTrainingConfig
-from quanxin_life.training.engine import TrainingEngine
+from quanxin_life.training.engine import TrainingEngine, TrainingRunStatus
 
 AdvancedMode = Literal["smoke", "select", "final"]
 SelectionStage = Literal["selection_stage1", "selection_stage2", "selection_recheck"]
@@ -186,8 +186,7 @@ def execute_advanced_matr_three_batch_suite(
         "run_count": len(results),
         "input_bundle_sha256": registered.input_bundle_sha256,
     }
-    _write_json(run_root / "aggregate_metrics.json", aggregate)
-    return aggregate
+    return _write_merged_aggregate(run_root, aggregate)
 
 
 def _run_key(
@@ -258,6 +257,20 @@ def _run_key(
         run_directory=run_directory,
         device=device,
     ).run(epoch_limit=epoch_limit)
+    if config.mode == "final" and result.status in {
+        TrainingRunStatus.COMPLETED,
+        TrainingRunStatus.EARLY_STOPPED,
+        TrainingRunStatus.SKIPPED_COMPLETED,
+    }:
+        if not isinstance(data, AdvancedFinalMatrData):
+            raise ValueError("final evaluation requires held-out MATR data")
+        _write_final_test_metrics(
+            run_directory=run_directory,
+            family=key.family,
+            task=task,
+            data=data,
+            device=device,
+        )
     return {
         "family": key.family,
         "candidate_id": key.candidate_id,
@@ -715,40 +728,72 @@ def _hybrid_config(candidate: AdvancedCandidate) -> HybridPatchV2Config:
 def _build_current_hybrid_task(data: Any, candidate: CurrentHybridCandidate, seed: int) -> Any:
     """Adapt real masked SOH batches to the legacy current-Hybrid baseline."""
 
-    from quanxin_life.training.tasks import HybridTrajectoryBatch, HybridTrajectoryTrainingTask
+    from quanxin_life.training.tasks import HybridTrajectoryTrainingTask
 
-    def convert(batch: Any) -> HybridTrajectoryBatch:
-        common = batch.targets.target_mask.all(dim=0)
-        indices = torch.nonzero(common, as_tuple=False).flatten()
-        if indices.numel() < 3:
-            raise ValueError("current Hybrid baseline needs three common real target cycles")
-        cycles = batch.inputs.prediction_cycles.index_select(0, indices)
-        if int(cycles[-1]) != 500:
-            raise ValueError("current Hybrid baseline requires a real cycle-500 target")
-        values = batch.inputs.early_batch.values
-        mask = batch.inputs.early_batch.sample_mask.unsqueeze(-1)
-        clean = torch.where(mask, values, torch.zeros_like(values))
-        count = mask.to(values.dtype).sum(dim=(1, 2, 3)).clamp_min(1.0)
-        features = clean.sum(dim=(1, 2, 3)) / count
-        targets = batch.targets.target_soh.index_select(1, indices)
-        return HybridTrajectoryBatch(
-            dataset_id="MATR",
-            cell_ids=batch.cell_ids,
-            features=features,
-            initial_soh=batch.inputs.initial_soh,
-            target_soh=targets,
-            prediction_cycles=tuple(int(value) for value in cycles.tolist()),
-            cutoff_cycle=int(batch.inputs.early_batch.cycle_mask.shape[1] - 1),
-        )
-
-    train = convert(data.hybrid_train)
-    validation = convert(data.hybrid_validation)
+    train = _current_hybrid_batch(data.hybrid_train)
+    validation = _current_hybrid_batch(data.hybrid_validation)
     return HybridTrajectoryTrainingTask(
         train_batch=train,
         validation_batch=validation,
         hidden_dim=candidate.hidden_dim,
         learning_rate=float(candidate.learning_rate),
         seed=seed,
+    )
+
+
+def _current_hybrid_batch(batch: Any) -> Any:
+    from quanxin_life.training.tasks import HybridTrajectoryBatch
+
+    common = batch.targets.target_mask.all(dim=0)
+    indices = torch.nonzero(common, as_tuple=False).flatten()
+    if indices.numel() < 3:
+        raise ValueError("current Hybrid baseline needs three common real target cycles")
+    cycles = batch.inputs.prediction_cycles.index_select(0, indices)
+    if int(cycles[-1]) != 500:
+        raise ValueError("current Hybrid baseline requires a real cycle-500 target")
+    values = batch.inputs.early_batch.values
+    mask = batch.inputs.early_batch.sample_mask.unsqueeze(-1)
+    clean = torch.where(mask, values, torch.zeros_like(values))
+    count = mask.to(values.dtype).sum(dim=(1, 2, 3)).clamp_min(1.0)
+    features = clean.sum(dim=(1, 2, 3)) / count
+    targets = batch.targets.target_soh.index_select(1, indices)
+    return HybridTrajectoryBatch(
+        dataset_id="MATR",
+        cell_ids=batch.cell_ids,
+        features=features,
+        initial_soh=batch.inputs.initial_soh,
+        target_soh=targets,
+        prediction_cycles=tuple(int(value) for value in cycles.tolist()),
+        cutoff_cycle=int(batch.inputs.early_batch.cycle_mask.shape[1] - 1),
+    )
+
+
+def _write_final_test_metrics(
+    *,
+    run_directory: Path,
+    family: str,
+    task: Any,
+    data: AdvancedFinalMatrData,
+    device: torch.device,
+) -> None:
+    batch = (
+        data.scalar_test
+        if family in {"cyclepatch_direct", "cyclepatch_batlinet"}
+        else _current_hybrid_batch(data.hybrid_test)
+        if family == "current_hybrid"
+        else data.hybrid_test
+    )
+    metrics = task.evaluate(batch, device=device)
+    _write_json(
+        run_directory / "metrics_test.json",
+        {
+            "schema_version": "advanced-test-metrics-v1",
+            "family": family,
+            "partition": "test",
+            "cell_count": len(batch.cell_ids),
+            "loss": metrics.loss,
+            "metrics": metrics.metrics,
+        },
     )
 
 
@@ -812,8 +857,17 @@ def _source_commit(root: Path) -> str:
             text=True,
             timeout=5,
         ).stdout.strip()
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ValueError("cannot determine source commit") from exc
+    except (OSError, subprocess.SubprocessError):
+        revision_path = root / "source_revision.json"
+        if revision_path.is_symlink() or not revision_path.is_file():
+            raise ValueError("cannot determine source commit") from None
+        payload = json.loads(revision_path.read_text(encoding="utf-8"))
+        if (
+            payload.get("schema_version") != "source-revision-v1"
+            or payload.get("git_dirty") is not False
+        ):
+            raise ValueError("source revision evidence is invalid") from None
+        value = str(payload.get("git_commit", ""))
     if len(value) not in {40, 64}:
         raise ValueError("source commit is invalid")
     return value
@@ -841,6 +895,44 @@ def _write_json(path: Path, payload: Mapping[str, object]) -> None:
     temporary = path.with_name(f".{path.name}.{__import__('os').getpid()}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def _write_merged_aggregate(
+    run_root: Path, aggregate: Mapping[str, object]
+) -> dict[str, object]:
+    destination = run_root / "aggregate_metrics.json"
+    existing_runs: list[dict[str, object]] = []
+    if destination.is_file() and not destination.is_symlink():
+        existing = json.loads(destination.read_text(encoding="utf-8"))
+        for field in ("mode", "dataset_id", "target", "input_bundle_sha256"):
+            if existing.get(field) != aggregate.get(field):
+                raise ValueError("existing advanced aggregate belongs to another run context")
+        existing_runs = list(existing.get("runs", []))
+    combined: dict[tuple[object, ...], dict[str, object]] = {}
+    for row in (*existing_runs, *cast(list[dict[str, object]], aggregate["runs"])):
+        identity = (
+            row.get("family"),
+            row.get("candidate_id"),
+            row.get("cutoff_cycle"),
+            row.get("seed"),
+        )
+        combined[identity] = row
+    runs = sorted(
+        combined.values(),
+        key=lambda row: (
+            int(cast(int, row["cutoff_cycle"])),
+            str(row["family"]),
+            str(row["candidate_id"]),
+            int(cast(int, row["seed"])),
+        ),
+    )
+    merged = {
+        **dict(aggregate),
+        "runs": runs,
+        "run_count": len(runs),
+    }
+    _write_json(destination, merged)
+    return merged
 
 
 def _load_mode_config(root: Path, mode: AdvancedMode) -> AdvancedMatrThreeBatchRunConfig:
