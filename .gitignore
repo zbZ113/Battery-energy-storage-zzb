@@ -5,6 +5,7 @@ __pycache__/
 .env
 .mypy_cache/
 .pytest_cache/
+.superpowers/
 .test-tmp/
 .test-tmp-*/
 .ruff_cache/
@@ -35,6 +36,7 @@ artifacts/
 /models/
 /runs/
 reports/generated/
+/reports/data_quality/advanced_matr_*_preflight.json
 *.log
 .DS_Store
 Thumbs.db
