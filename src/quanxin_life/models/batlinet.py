@@ -378,7 +378,8 @@ class CyclePatchBatLiNet(nn.Module):
         if self.config.fusion_alpha == 1.0:
             return direct
         relative = reference_labels.unsqueeze(0) + self.pair_delta(targets, references)
-        relative_median = torch.median(relative, dim=1).values
+        sorted_relative = torch.sort(relative, dim=1).values
+        relative_median = sorted_relative[:, (sorted_relative.shape[1] - 1) // 2]
         return (
             self.config.fusion_alpha * direct
             + (1.0 - self.config.fusion_alpha) * relative_median

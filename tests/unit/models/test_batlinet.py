@@ -293,6 +293,32 @@ def test_reference_median_is_order_invariant_and_alpha_one_is_direct_only() -> N
     assert torch.allclose(direct, direct_fused)
 
 
+def test_fusion_does_not_require_nondeterministic_median_dim_kernel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_median = torch.median
+
+    def reject_dimension_median(
+        values: torch.Tensor, *args: object, **kwargs: object
+    ) -> torch.Tensor:
+        if args or "dim" in kwargs:
+            raise RuntimeError("median CUDA with indices output is nondeterministic")
+        return original_median(values)
+
+    monkeypatch.setattr(torch, "median", reject_dimension_median)
+    model = CyclePatchBatLiNet(_model_config(), condition_count=3).eval()
+
+    with torch.no_grad():
+        fused = model.fuse_standardized(
+            torch.randn(3, 24),
+            torch.randn(4, 24),
+            torch.tensor([-1.0, -0.2, 0.4, 1.3]),
+        )
+
+    assert fused.shape == (3,)
+    assert torch.isfinite(fused).all()
+
+
 def test_pair_batch_requires_one_floating_dtype() -> None:
     with pytest.raises(ValueError, match="dtype"):
         CycleLifePairBatch(
