@@ -730,8 +730,15 @@ def _build_current_hybrid_task(data: Any, candidate: CurrentHybridCandidate, see
 
     from quanxin_life.training.tasks import HybridTrajectoryTrainingTask
 
-    train = _current_hybrid_batch(data.hybrid_train)
-    validation = _current_hybrid_batch(data.hybrid_validation)
+    prediction_cycles = _current_hybrid_prediction_cycles(
+        data.hybrid_train, data.hybrid_validation
+    )
+    train = _current_hybrid_batch(
+        data.hybrid_train, prediction_cycles=prediction_cycles
+    )
+    validation = _current_hybrid_batch(
+        data.hybrid_validation, prediction_cycles=prediction_cycles
+    )
     return HybridTrajectoryTrainingTask(
         train_batch=train,
         validation_batch=validation,
@@ -741,16 +748,45 @@ def _build_current_hybrid_task(data: Any, candidate: CurrentHybridCandidate, see
     )
 
 
-def _current_hybrid_batch(batch: Any) -> Any:
+def _current_hybrid_prediction_cycles(*batches: Any) -> tuple[int, ...]:
+    if not batches:
+        raise ValueError("current Hybrid baseline requires trajectory batches")
+    source_cycles = batches[0].inputs.prediction_cycles.detach().cpu()
+    common = torch.ones_like(source_cycles, dtype=torch.bool)
+    for batch in batches:
+        cycles = batch.inputs.prediction_cycles.detach().cpu()
+        if not torch.equal(source_cycles, cycles):
+            raise ValueError("current Hybrid source prediction axes must match")
+        common &= batch.targets.target_mask.detach().cpu().all(dim=0)
+    prediction_cycles = tuple(int(value) for value in source_cycles[common].tolist())
+    if len(prediction_cycles) < 3:
+        raise ValueError("current Hybrid baseline needs three common real target cycles")
+    if prediction_cycles[-1] != 500:
+        raise ValueError("current Hybrid baseline requires a real cycle-500 target")
+    return prediction_cycles
+
+
+def _current_hybrid_batch(
+    batch: Any, *, prediction_cycles: tuple[int, ...]
+) -> Any:
     from quanxin_life.training.tasks import HybridTrajectoryBatch
 
-    common = batch.targets.target_mask.all(dim=0)
-    indices = torch.nonzero(common, as_tuple=False).flatten()
-    if indices.numel() < 3:
+    if len(prediction_cycles) < 3:
         raise ValueError("current Hybrid baseline needs three common real target cycles")
-    cycles = batch.inputs.prediction_cycles.index_select(0, indices)
-    if int(cycles[-1]) != 500:
+    if prediction_cycles[-1] != 500:
         raise ValueError("current Hybrid baseline requires a real cycle-500 target")
+    source_cycles = tuple(int(value) for value in batch.inputs.prediction_cycles.tolist())
+    source_indices = {cycle: index for index, cycle in enumerate(source_cycles)}
+    if any(cycle not in source_indices for cycle in prediction_cycles):
+        raise ValueError("current Hybrid prediction axis is unavailable in this partition")
+    indices = torch.tensor(
+        [source_indices[cycle] for cycle in prediction_cycles],
+        dtype=torch.int64,
+        device=batch.targets.target_soh.device,
+    )
+    selected_mask = batch.targets.target_mask.index_select(1, indices)
+    if not bool(selected_mask.all().item()):
+        raise ValueError("current Hybrid prediction axis contains missing real targets")
     values = batch.inputs.early_batch.values
     mask = batch.inputs.early_batch.sample_mask.unsqueeze(-1)
     clean = torch.where(mask, values, torch.zeros_like(values))
@@ -763,7 +799,7 @@ def _current_hybrid_batch(batch: Any) -> Any:
         features=features,
         initial_soh=batch.inputs.initial_soh,
         target_soh=targets,
-        prediction_cycles=tuple(int(value) for value in cycles.tolist()),
+        prediction_cycles=prediction_cycles,
         cutoff_cycle=int(batch.inputs.early_batch.cycle_mask.shape[1] - 1),
     )
 
@@ -779,7 +815,10 @@ def _write_final_test_metrics(
     batch = (
         data.scalar_test
         if family in {"cyclepatch_direct", "cyclepatch_batlinet"}
-        else _current_hybrid_batch(data.hybrid_test)
+        else _current_hybrid_batch(
+            data.hybrid_test,
+            prediction_cycles=task.train_batch.prediction_cycles,
+        )
         if family == "current_hybrid"
         else data.hybrid_test
     )

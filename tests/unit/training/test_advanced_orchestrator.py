@@ -242,6 +242,85 @@ def test_source_commit_falls_back_to_packaged_revision(
     assert advanced_orchestrator._source_commit(tmp_path) == revision
 
 
+def _masked_current_hybrid_batch(
+    cell_ids: tuple[str, ...], *, missing_cycle: int | None = None
+) -> SimpleNamespace:
+    prediction_cycles = torch.tensor([30, 40, 50, 60, 500], dtype=torch.int64)
+    cell_count = len(cell_ids)
+    target_soh = torch.tensor(
+        [[0.98, 0.96, 0.94, 0.92, 0.80] for _ in cell_ids], dtype=torch.float32
+    )
+    target_mask = torch.ones_like(target_soh, dtype=torch.bool)
+    if missing_cycle is not None:
+        column = int(torch.nonzero(prediction_cycles == missing_cycle).item())
+        target_mask[0, column] = False
+        target_soh[0, column] = float("nan")
+    return SimpleNamespace(
+        cell_ids=cell_ids,
+        inputs=SimpleNamespace(
+            early_batch=SimpleNamespace(
+                values=torch.ones((cell_count, 21, 1, 1, 1), dtype=torch.float32),
+                sample_mask=torch.ones((cell_count, 21, 1, 1), dtype=torch.bool),
+                cycle_mask=torch.ones((cell_count, 21), dtype=torch.bool),
+            ),
+            initial_soh=torch.full((cell_count,), 0.99, dtype=torch.float32),
+            prediction_cycles=prediction_cycles,
+        ),
+        targets=SimpleNamespace(target_soh=target_soh, target_mask=target_mask),
+    )
+
+
+def test_current_hybrid_uses_one_shared_real_prediction_axis() -> None:
+    data = SimpleNamespace(
+        hybrid_train=_masked_current_hybrid_batch(
+            ("train-a", "train-b"), missing_cycle=40
+        ),
+        hybrid_validation=_masked_current_hybrid_batch(
+            ("validation-a",), missing_cycle=50
+        ),
+    )
+
+    task = advanced_orchestrator._build_current_hybrid_task(
+        data,
+        SimpleNamespace(hidden_dim=4, learning_rate=1e-3),
+        seed=38,
+    )
+
+    assert task.train_batch.prediction_cycles == (30, 60, 500)
+    assert task.validation_batch.prediction_cycles == (30, 60, 500)
+
+
+def test_current_hybrid_final_evaluation_reuses_training_axis(tmp_path: Path) -> None:
+    data = SimpleNamespace(
+        hybrid_train=_masked_current_hybrid_batch(
+            ("train-a", "train-b"), missing_cycle=40
+        ),
+        hybrid_validation=_masked_current_hybrid_batch(
+            ("validation-a",), missing_cycle=50
+        ),
+    )
+    task = advanced_orchestrator._build_current_hybrid_task(
+        data,
+        SimpleNamespace(hidden_dim=4, learning_rate=1e-3),
+        seed=38,
+    )
+    final_data = SimpleNamespace(
+        hybrid_test=_masked_current_hybrid_batch(("test-a",))
+    )
+
+    advanced_orchestrator._write_final_test_metrics(
+        run_directory=tmp_path,
+        family="current_hybrid",
+        task=task,
+        data=final_data,
+        device=torch.device("cpu"),
+    )
+
+    payload = json.loads((tmp_path / "metrics_test.json").read_text(encoding="utf-8"))
+    assert payload["cell_count"] == 1
+    assert payload["partition"] == "test"
+
+
 def test_select_executes_stage1_stage2_and_full_recheck_without_final_loader(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
