@@ -1,0 +1,550 @@
+# 泉芯智寿产品补全、可信知识库、云端部署与 A100 模型接入计划
+
+> 当前执行版本：2026-07-24  
+> 项目：泉芯智寿——面向新能源装备产业的多智能体储能电芯退化感知与决策系统  
+> 状态：A100 高级模型训练已完成，进入指标收口、模型晋级、产品接入与竞赛交付阶段  
+> 本计划承接 `2026-07-12-quanxin-zhishou-full-implementation.md`、`2026-07-17-a100-real-training-evaluation-pipeline.md` 和 `2026-07-19-cyclepatch-batlinet-hybridpatch-a100-model-upgrade.md`。
+
+## 一、当前事实基线
+
+### 1. 已完成并通过验证的 A100 训练
+
+- 高级 Select 已完成，`selection_manifest.json` 和 `final_config_resolved.json` 已冻结。
+- Advanced Final 完成 4 个 cutoff、4 个模型、5 个随机种子，共 80 个正式运行。
+- A100 输出验证结果：
+
+```text
+status=VERIFIED
+mode=final
+operations=80
+files=2654
+source_commit=232d9fc8957bb547ca2b80205802f377864e982b
+output_sha256=d201224870a28c655f66a810bc94f90ad28133e06f2fb4a7285195274c303d82
+```
+
+- 80 个运行均包含 `training_log.jsonl`、`metrics_epoch.csv`、`metrics_validation.csv` 和 `metrics_test.json`。
+- 21 个运行正常跑满，59 个运行按既定规则提前停止。
+- 结果包包含 897 个 safetensors 文件；模型与结果文件均有 SHA-256 证据。
+- A100 环境不使用 Git、SSH、SCP 或网盘。后续若需更新运行代码，继续采用人工文件传输通道、离线 ZIP、清单和 SHA-256 校验。
+
+### 2. 已完成的本地逐样本预测取证
+
+本地结果根目录：
+
+```text
+server-results/advanced-final-20260723T015211Z/
+```
+
+该目录由 `/server-results/` 规则排除，不进入 Git。
+
+已生成并验证：
+
+- 40 个 RUL 运行、1,080 行逐电芯预测；
+- 40 个 SOH 运行、500,000 行逐电芯逐循环轨迹；
+- 20、50、100、150 四个 cutoff；
+- 随机种子 38、39、40、41、42；
+- CSV 与 Parquet 双格式；
+- 预测导出清单与对账报告。
+
+本地 CPU 复算与 A100 聚合指标对账结果：
+
+```text
+RUL 最大绝对差异：0.015913 cycles
+RUL 平均绝对差异：0.002222
+SOH 最大绝对差异：7.05e-8
+SOH 平均绝对差异：4.77e-9
+```
+
+差异属于 CPU/CUDA 浮点执行差异，不是样本、模型或配置错位。
+
+### 3. 当前正式实验结果
+
+#### RUL 当前最佳候选
+
+`CyclePatch Direct + cutoff 150`：
+
+| 指标 | 五种子均值 |
+|---|---:|
+| MAE | 98.19 cycles |
+| RMSE | 122.49 cycles |
+| MAPE | 12.62% |
+| R² | 0.8656 |
+
+该结果可用于科研、比赛展示和离线辅助分析，但不得称为分类准确率、SOTA 或工业寿命承诺。
+
+#### SOH 当前候选
+
+| 模型 | 最低 MAE | 对应 RMSE | 单调违规率 |
+|---|---:|---:|---:|
+| HybridPatch-v2 | 1.281 SOH 百分点 | 2.700 SOH 百分点 | 0% |
+| Current Hybrid | 1.610 SOH 百分点 | 2.578 SOH 百分点 | 0% |
+
+HybridPatch-v2 平均误差更低，Current Hybrid 尾部大误差更小。SOH 正式模型尚未完成晋级判断。
+
+### 4. 已完成的论文图件
+
+已生成 6 张主图与 6 张补充图，采用 Python/Matplotlib 和真实实验数据：
+
+- 数据集与任务全景；
+- RUL 指标随 cutoff 变化；
+- RUL 真实值与预测值；
+- SOH 代表电芯轨迹；
+- SOH 远期误差；
+- 模型精度、稳定性、耗时与显存权衡；
+- 训练曲线、随机种子稳定性、批次性能、寿命分组误差、效率和证据完整性。
+
+每张图均包含 SVG、PDF、PNG 和 600 DPI TIFF，并附 source data、元数据和 SHA-256。
+
+### 5. 必须保留的证据边界
+
+- 本次离线结果包未包含 `mlruns`，不得声称 MLflow 存储已随结果包交付。
+- A100 训练时 `input_bundle_sha256` 与当前本地重建值不同；该差异必须写入数据溯源说明。
+- 当前标量目标是 MATR 官方 cycle life，不得表述为统一 EOL80 或真实 15–25 年工业寿命。
+- 当前 SOH 轨迹验证到真实 cycle 500，不得宣称已可靠预测完整 1000+ 循环轨迹。
+- HUST 外部验证、跨数据集 Conformal 重校准和真实工业数据验证尚未完成。
+
+## 二、后续执行总顺序
+
+1. 指标收口与模型晋级；
+2. A100 正式套件登记与 ToolResult 接入；
+3. 高完成度 Next.js 门户；
+4. 真实数据上传、质检、自动冻结、分析和下载；
+5. 可信知识库和个人研究工作空间；
+6. 多 LLM、Agent 记忆、邮件和飞书协同；
+7. 本地完整 Docker Compose；
+8. 阿里云、域名备案、HTTPS 和 OSS 备份；
+9. HUST 外部验证、HybridPatch-v2.1 等后续研究；
+10. 华为杯材料、演示视频和匿名复现包。
+
+模型结果已足够支持工程继续推进，不再以重复 A100 训练作为产品开发前置条件。
+
+## 三、阶段 A：指标收口与正式模型晋级
+
+### 1. 补齐易理解和论文级指标
+
+基于现有逐样本预测直接计算，不重新训练：
+
+- ±5%、±10%、±15%、±20% 相对误差命中率；
+- BatteryLife 同口径 `15%-Acc`；
+- 逐电芯绝对误差和相对误差；
+- 短寿命、中寿命、长寿命分组误差；
+- 三个 MATR 批次分别的指标；
+- 误差分位数 P50/P75/P90/P95/max；
+- 10,000 次逐电芯 Bootstrap 95% 置信区间；
+- 模型间逐电芯配对差异与置信区间；
+- SOH 按预测距离、cycle 区间、电芯和批次分组的 MAE/RMSE；
+- SOH 尾部高误差电芯清单；
+- 单调性、非法范围和异常恢复检查。
+
+所有新增结果写入 `server-results/.../analysis/metrics-closure/`，不进入 Git；可复用分析代码进入 `scripts/` 或 `src/quanxin_life/` 并纳入 Git。
+
+### 2. Conformal 与可信区间
+
+- 使用独立 calibration 电芯，测试电芯不得参与校准；
+- Split Conformal 作为基线；
+- Normalized Conformal 作为主方法；
+- 报告 80%、90%、95% 目标覆盖率；
+- 输出 PICP、MPIW、分批次覆盖率、寿命分组覆盖率；
+- 跨域未重校准时不得宣称覆盖保证；
+- 区间跨过决策阈值时输出 `RECHECK`，不能给出强制通过结论。
+
+### 3. 模型晋级规则
+
+RUL：
+
+- 以固定 test split、五种子聚合结果为主；
+- 综合 MAE、RMSE、MAPE、R²、15%-Acc、P90 误差、Conformal 覆盖和推理成本；
+- 不因单一 MAE 最低就自动晋级；
+- 当前优先评估 `CyclePatch Direct + cutoff 150`。
+
+SOH：
+
+- 同时检查 MAE、RMSE、尾部误差、远期误差、单调性和推理成本；
+- 比较 Current Hybrid 与 HybridPatch-v2；
+- 若 HybridPatch-v2 的尾部风险不能接受，则不得仅凭平均 MAE 晋级；
+- 可按应用角色保留“平均精度模型”和“保守尾部模型”，但报告必须明确路由规则。
+
+### 4. 阶段交付
+
+- 正式模型晋级报告；
+- 模型卡；
+- 数据卡；
+- 指标总表；
+- 分组指标；
+- Bootstrap 与 Conformal 报告；
+- 失败案例清单；
+- 适用范围和拒绝条件；
+- 每个正式制品的 SHA-256。
+
+## 四、阶段 B：A100 结果登记与正式推理接入
+
+### 1. 正式套件导入
+
+- 导入完整 Advanced Final 套件，而不是单独复制权重；
+- 验证运行清单、数据版本、split、配置、日志、指标、模型卡和文件哈希；
+- 不完整套件只可登记为候选，不得激活；
+- 保存 A100 来源提交、输出索引哈希和已知输入 bundle 差异；
+- 禁止加载 pickle、joblib、`.pt`、`.pth`。
+
+### 2. 模型注册
+
+- 20、50、100、150 cutoff 分别登记候选与冠军；
+- 历史模型不可覆盖；
+- 支持人工激活和一键回退；
+- 每个结果绑定实际模型版本、数据版本、feature 版本和输入哈希；
+- CPU smoke 与正式 A100 模型严格分离。
+
+### 3. ToolResult 接入
+
+- RUL、SOH、Conformal、在线校正和批次决策全部返回统一 ToolResult；
+- LLM 不得修改 ToolResult 数值；
+- 报告和 UI 只读取经过审计的 ToolResult；
+- 正式数字缺少 `result_id`、模型版本或数据版本时必须失败关闭。
+
+## 五、阶段 C：高完成度前端和真实数据链
+
+### 1. 页面顺序
+
+1. Owner 登录、首次初始化和邮箱找回；
+2. 项目驾驶舱；
+3. 普通数据导入与专家导入；
+4. 数据质量和版本冻结；
+5. 单电芯诊断；
+6. 批次风险与复检；
+7. 科研证据工作台；
+8. Agent 执行中心与页面侧边助手；
+9. 知识库和 Agent 记忆；
+10. 技术报告与导出中心；
+11. LLM、模型、通知、备份和集成管理后台。
+
+产品界面仅呈现单 Owner 和演示沙箱，不继续开发评委账号。
+
+### 2. 上传与自动分析
+
+- 普通上传采用固定模板 CSV/Parquet；
+- 支持多文件同批上传、分片、暂停和重试；
+- 电脑端单文件 500 MB、单数据集 2 GB；
+- 手机端超过 50 MB 提示使用电脑；
+- 浏览器使用短期签名凭证写入 MinIO 临时区；
+- 单位必须确认；
+- 坏文件进入隔离区，不自动跳过；
+- 质检全绿后自动创建不可变数据版本并启动分析；
+- 有警告时停止自动冻结；
+- 冻结版本不能原地修改，只能创建新版本。
+
+### 3. 专业展示
+
+- 强制标注预测目标定义；
+- Observed、Predicted、Newly Observed、Simulated 四类曲线；
+- Conformal 区间；
+- 在线更新前后对比；
+- 全屏图表、缩放、框选、同步十字线和数据下载；
+- 批次风险矩阵和决策原因；
+- 模型对比、消融、稳定性、效率、Naumann 和 PyBaMM 页面；
+- 现有 12 张论文图作为科研证据入口，但页面优先使用机器可读数据动态绘图。
+
+### 4. 下载
+
+- 支持技术报告、图表、CSV、ToolResult、数据卡、模型卡和配置逐项下载；
+- 多选后异步生成 ZIP；
+- ZIP 附清单、版本、生成时间和 SHA-256；
+- 产品只生成技术报告，比赛材料单独维护。
+
+## 六、阶段 D：可信知识库与研究工作空间
+
+### 1. 语料范围
+
+- 公共电池基础库：论文、数据集说明、PyBaMM、Conformal、主动试验和工业规范；
+- 项目私有库：实验协议、数据卡、模型卡、失败分析和项目笔记；
+- 默认搜索公共库和当前项目私有库；
+- 禁止跨项目检索私有文档。
+
+### 2. 文档流程
+
+支持 PDF、Markdown、TXT、DOCX：
+
+```text
+上传
+→ 安全预检
+→ 许可证检查 / OCR
+→ Owner 二次审核
+→ 语义切块
+→ Embedding 与 BM25 索引
+→ 发布不可变 corpus_version
+```
+
+- 未知许可证可暂存，但不能检索和引用；
+- 扫描 PDF 按需本地 OCR，并人工确认；
+- 文档新版本不覆盖旧版本；
+- 报告绑定具体文档、语料和索引版本；
+- 文档中的提示注入只作为资料内容，不能成为 Agent 指令。
+
+### 3. 检索与降级
+
+```text
+权限过滤
+→ 中文 BM25
+→ 远程 Embedding
+→ 候选合并
+→ 本地轻量 reranker
+→ 带页码证据
+```
+
+降级顺序：远程 Embedding → 本地 Embedding → BM25。reranker 失败时保留召回结果并显示警告。
+
+### 4. 研究能力
+
+- PDF 页码跳转、高亮、批注和收藏；
+- 跨文献对比；
+- DOI、作者、年份和期刊元数据；
+- BibTeX、RIS、GB/T 7714；
+- 中英文术语表；
+- 带页码的证据关系图；
+- 新论文关键词订阅和候选审核；
+- Zotero Web API 手动同步与每日同步；
+- Zotero 只自动同步元数据，附件需人工审核；
+- 同步冲突必须人工解决。
+
+### 5. 回答边界
+
+- Agent 回答每个实质结论必须带引用；
+- 引用可打开原文对应页；
+- 证据不足时明确拒绝补写；
+- 知识证据不得覆盖模型 ToolResult；
+- 外部搜索必须由 Owner 主动触发，候选资料审核后才可正式引用。
+
+## 七、阶段 E：LLM、Agent 记忆和外部协同
+
+### 1. 多 LLM
+
+- 支持多套 OpenAI 兼容服务；
+- 每套配置主模型、经济模型和 Embedding 模型；
+- API Key 加密保存，主密钥只存在服务器 Secret；
+- 服务故障可按优先级切换；
+- 月预算达到硬上限后所有供应商停止调用；
+- LLM 断线时固定数值工作流继续运行。
+
+### 2. Agent 记忆
+
+- 原始聊天保存 30 天；
+- 只有 Owner 确认的结构化信息进入长期记忆；
+- 提供查看、修正、停用、导出和删除；
+- 记忆、论文证据和 ToolResult 必须分开显示。
+
+### 3. 通知与飞书
+
+- 站内、邮件、飞书三路通知；
+- 飞书支持创建任务、状态卡、审批、多维表格和报告链接；
+- 外部通知只发送状态、少量审计摘要和安全链接；
+- 验签、去重、幂等、重试和死信必须完整；
+- 未配置真实凭证时明确使用沙箱。
+
+## 八、阶段 F：本地与阿里云部署
+
+### 1. 本地 Compose
+
+```text
+caddy
+frontend
+api
+worker
+scheduler
+streamlit
+postgres
+redis
+minio
+mailpit
+ocr-worker
+```
+
+Prometheus 和 Grafana 不常驻；管理页提供服务、磁盘、数据库、队列、对象仓、知识索引和备份的轻量健康状态。
+
+### 2. 阿里云
+
+- 当前 ECS 先执行实际报价门；
+- 月预算不超过 300 元；
+- 4 核 16 GB 超预算时降为 4 核 8 GB；
+- Worker 并发为 1；
+- 增加约 8 GB swap 和约 100 GB 数据盘；
+- 保留 Ubuntu 22.04；
+- 绑定 EIP；
+- 购买域名、实名认证、备案并启用 HTTPS；
+- 数据库、Redis 和 MinIO 控制台不得暴露公网；
+- 原始 MATR/HUST 全集不进入比赛服务器。
+
+### 3. 备份
+
+- 每日数据库加密备份；
+- 每日对象清单；
+- 每周关键对象完整备份；
+- OSS 异地备份；
+- 每月恢复演练；
+- 备份密钥和服务器登录密钥分离。
+
+## 九、阶段 G：后续研究与比赛交付
+
+### 1. 后续研究
+
+- HUST 安全转换和外部测试；
+- MATR 两批训练、第三批完全留出；
+- CORAL、DANN 和目标域重校准；
+- HybridPatch-v2 尾部误差定位；
+- 仅在有明确研究假设时运行 V2.1，不以盲目调参阻塞产品主线；
+- 更长 SOH 轨迹实验必须使用真实达到目标周期的电芯。
+
+### 2. 华为杯证据主线
+
+1. 早期循环数据治理；
+2. 可信寿命与 SOH 预测；
+3. Conformal 风险区间；
+4. 在线个体更新；
+5. PyBaMM 短时物理核验；
+6. 主动试验推荐；
+7. 受约束多智能体编排；
+8. ToolResult 数值防火墙；
+9. 单电芯主场景和批次第二场景；
+10. 真实实验、失败案例和边界说明。
+
+### 3. 材料
+
+- 300 字项目简介；
+- 匿名完整项目文档；
+- 实验协议；
+- 数据卡、模型卡和 Agent 卡；
+- 正式实验表和 12 张图；
+- 消融、Conformal、在线更新和 Agent 可靠性结果；
+- 演示视频；
+- 一键部署与复现说明；
+- 第三方许可证和数据来源清单；
+- 已知限制和失败案例。
+
+## 十、公共接口增量
+
+需要新增或扩展的公共契约包括：
+
+- `UploadSession`
+- `DatasetImportStatus`
+- `DatasetFileStatus`
+- `UnitMapping`
+- `DatasetQualitySummary`
+- `ExportSelection`
+- `ModelPromotionDecision`
+- `LlmProviderProfile`
+- `LlmBudgetState`
+- `AgentMemoryRecord`
+- `KnowledgeScope`
+- `KnowledgeDocumentVersion`
+- `KnowledgeCorpusSnapshot`
+- `KnowledgeEmbeddingIndex`
+- `KnowledgeCitation`
+- `ZoteroSyncRun`
+- `DemoSession`
+
+不得新建与 `quanxin_life.core` 现有类型语义重复的 DTO。
+
+## 十一、质量门禁
+
+每个纵向切片执行：
+
+```text
+失败测试
+→ 最小实现
+→ 目标测试
+→ 相关集成测试
+→ 全量门禁
+→ 差异审查
+→ 本地 Git 提交
+```
+
+后端：
+
+```text
+pytest -q
+pytest tests/leakage -q
+pytest tests/integration -q
+pytest tests/e2e -q
+ruff check .
+mypy src/quanxin_life
+python -m compileall -q src workbench deploy
+pip-audit
+```
+
+前端：
+
+```text
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm playwright test
+```
+
+部署：
+
+```text
+docker compose config
+docker compose up -d
+docker compose ps
+健康检查
+数据库迁移检查
+对象存储校验
+OSS 备份与恢复演练
+```
+
+没有最新命令输出，不得声称完成或通过。
+
+## 十二、当前立即执行的任务
+
+### Task 1：指标收口工具
+
+读取现有逐样本 RUL/SOH Parquet，生成：
+
+- accuracy-at-tolerance；
+- Bootstrap 置信区间；
+- 批次、寿命分组和预测距离指标；
+- 失败电芯清单；
+- 机器可读 JSON/CSV 和 SHA-256 清单。
+
+### Task 2：正式模型晋级报告
+
+- 评估 Direct、BatLiNet、Current Hybrid 和 HybridPatch-v2；
+- 冻结 RUL 选择；
+- 决定 SOH 单模型或双模型路由；
+- 生成模型卡和拒绝条件。
+
+### Task 3：正式套件注册与 ToolResult
+
+- 导入 A100 套件；
+- 注册候选模型；
+- 人工激活和回退；
+- 将真实模型结果接入 API、Agent、报告和 UI。
+
+以上三个任务完成后，进入 Next.js 门户和真实数据上传链。
+
+## 十三、Git 与制品规则
+
+- `server-results/`、原始数据、缓存、模型结果和生成图不提交 Git；
+- 可复用源码、测试、配置、设计和计划进入 Git；
+- 不使用 `git add .` 暂存结果目录；
+- 每个完成切片形成小提交；
+- Codex 不执行 `git push`，由用户通过 GitHub Desktop 审核后推送；
+- 不移动或删除用户已有结果和未提交文件。
+
+## 十四、比赛版完成定义
+
+只有同时满足以下条件才可称比赛版完成：
+
+- A100 正式模型完成晋级、注册、回退和 ToolResult 接入；
+- 15%-Acc、Bootstrap、Conformal 和分组误差完成；
+- 单电芯真实纵向链贯通；
+- 批次风险第二场景贯通；
+- Next.js、Streamlit、FastAPI、Worker、PostgreSQL、Redis 和 MinIO 贯通；
+- 知识库返回带页码、版本和许可证的证据；
+- Agent 受白名单、审批、预算和数值防火墙约束；
+- 邮件和飞书完成真实联调，或明确展示沙箱状态；
+- Docker 干净环境可启动；
+- 云端 HTTPS 可稳定演示；
+- OSS 备份恢复成功；
+- 所有正式数字可追溯到 ToolResult；
+- 竞赛文档、图表、视频和匿名复现包完成；
+- 不夸大为 SOTA、工业质保或真实 BMS/EMS 生产部署。
