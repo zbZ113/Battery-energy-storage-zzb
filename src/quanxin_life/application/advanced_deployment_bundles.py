@@ -8,6 +8,7 @@ import json
 import math
 import os
 import shutil
+import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -260,6 +261,12 @@ class AdvancedDeploymentBundleIndex(ContractModel):
 
     @model_validator(mode="after")
     def index_is_closed_and_hash_bound(self) -> AdvancedDeploymentBundleIndex:
+        hashes_match = (
+            self.training_input_bundle_sha256
+            == self.local_reconstructed_input_bundle_sha256
+        )
+        if self.input_bundle_hashes_match != hashes_match:
+            raise ValueError("input bundle comparison does not match its digests")
         route_keys = {(row.task, row.cutoff_cycle, row.role) for row in self.routes}
         if len(route_keys) != len(self.routes):
             raise ValueError("deployment index contains a duplicate route coordinate")
@@ -502,6 +509,83 @@ def export_advanced_deployment_bundles(
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
+
+
+def load_and_verify_advanced_deployment_bundle_index(
+    bundle_root: Path,
+    *,
+    expected_manifest_sha256: str,
+) -> AdvancedDeploymentBundleIndex:
+    """Load one externally pinned inactive bundle and reverify its closed byte tree."""
+
+    root = _regular_directory(bundle_root, "deployment bundle root")
+    expected = _sha256(
+        expected_manifest_sha256,
+        "expected deployment bundle manifest SHA-256",
+    )
+    index_path = _regular_file(
+        root / _INDEX_NAME,
+        "deployment bundle index",
+    )
+    index = AdvancedDeploymentBundleIndex.model_validate(_strict_json(index_path))
+    if index.manifest_sha256 != expected:
+        raise ValueError(
+            "deployment bundle differs from the expected manifest trust anchor"
+        )
+    route_coordinates = {
+        (route.task, route.cutoff_cycle, route.role) for route in index.routes
+    }
+    if (
+        len(route_coordinates) != len(index.routes)
+        or route_coordinates != _EXPECTED_ROUTE_MATRIX
+    ):
+        raise ValueError("deployment bundle does not contain the exact route matrix")
+
+    expected_root_names = {_INDEX_NAME, "artifacts"}
+    actual_root_names = {item.name for item in root.iterdir()}
+    if actual_root_names != expected_root_names:
+        raise ValueError("deployment bundle root contains an unexpected file")
+    artifact_root = _regular_directory(
+        root / "artifacts",
+        "deployment artifact root",
+    )
+    if artifact_root.parent != root:
+        raise ValueError("deployment artifact root escaped the deployment bundle")
+    expected_artifact_ids = {artifact.artifact_id for artifact in index.artifacts}
+    actual_artifact_ids: set[str] = set()
+    for item in artifact_root.iterdir():
+        if _is_reparse_point(item):
+            raise ValueError(
+                "deployment artifact directory contains a reparse point"
+            )
+        resolved_item = item.resolve(strict=True)
+        if resolved_item.parent != artifact_root or not resolved_item.is_dir():
+            raise ValueError(
+                "deployment artifact root contains an unexpected non-directory"
+            )
+        actual_artifact_ids.add(item.name)
+    if actual_artifact_ids != expected_artifact_ids:
+        raise ValueError("deployment artifact directory set is not closed")
+
+    for artifact in index.artifacts:
+        manifest_path = _regular_file(
+            artifact_root / artifact.artifact_id / "manifest.json",
+            "deployment artifact manifest",
+        )
+        manifest = DeepModelArtifactManifest.model_validate(
+            _strict_json(manifest_path)
+        )
+        if (
+            manifest.artifact_id != artifact.artifact_id
+            or manifest.artifact_kind is not artifact.artifact_kind
+            or manifest.manifest_sha256 != artifact.artifact_manifest_sha256
+            or manifest.files != artifact.files
+        ):
+            raise ValueError(
+                "deployment artifact differs from the indexed artifact context"
+            )
+        verify_deep_model_artifact(artifact_root, manifest)
+    return index
 
 
 def _resume_artifact(
@@ -1260,12 +1344,22 @@ def _validate_source_provenance(
 
 
 def _regular_directory(path: Path, label: str) -> Path:
-    if path.is_symlink():
+    if _is_reparse_point(path):
         raise ValueError(f"{label} must be a regular directory")
     resolved = path.resolve(strict=True)
     if not resolved.is_dir():
         raise ValueError(f"{label} must be a regular directory")
     return resolved
+
+
+def _is_reparse_point(path: Path) -> bool:
+    try:
+        details = path.lstat()
+    except OSError:
+        return False
+    attributes = getattr(details, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return path.is_symlink() or bool(attributes & reparse_flag)
 
 
 def _regular_file(path: Path, label: str) -> Path:

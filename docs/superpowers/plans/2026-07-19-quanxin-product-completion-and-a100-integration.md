@@ -594,12 +594,13 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 
 ### Task 3：正式套件注册与 ToolResult
 
-状态：**实施中（2026-07-24 完成部署制品子切片）**。
+状态：**实施中（2026-07-24 完成部署制品与 managed candidate registry 子切片）**。
 
 已生成：
 
 ```text
 server-results/advanced-final-20260723T015211Z/analysis/deployment-bundles/v1/
+server-results/advanced-final-20260723T015211Z/analysis/deployment-registry/v1/
 ```
 
 已完成内容：
@@ -616,15 +617,22 @@ server-results/advanced-final-20260723T015211Z/analysis/deployment-bundles/v1/
 - 每个导出 artifact 的 weights SHA-256 必须与其源 checkpoint `model.safetensors` 完全一致，resume 不接受仅包内自洽的替换权重；
 - 部署索引 `manifest_sha256=9657e34d77122d79e81b5f9d75bbdc0b783e57b1a002ab05a51e3319fbe5d1eb`；
 - `input_bundle_hashes_match=false` 原样保留，未把本地重建输入冒充 A100 原始输入；
-- 所有 bundle 与路由仍为 `NOT_ACTIVATED`，本子切片不执行注册、审批、激活、回退或 ToolResult 接入。
+- 所有 bundle 与路由仍为 `NOT_ACTIVATED`；managed registry 只登记候选，不执行审批、激活、回退或 ToolResult 接入；
+- 新增 Advanced deployment managed registry：外部钉死 deployment manifest SHA，按封闭目录复验精确 15 条路由和全部 Deep artifact 字节后原子复制、幂等登记；
+- 新增 Advanced Deep artifact Catalog trusted source：每次解析重新验证 managed bundle，向现有产品 Catalog 只暴露 `REGISTERED_CANDIDATE / NOT_ACTIVATED` 候选；
+- Catalog metadata 保存 Final、promotion、selection、A100/local input hash 差异、candidate、seed、best epoch 和 checkpoint SHA provenance，不保存 MAE/RMSE 等业务指标；
+- 登记过程不调用 safetensors loader、不构造模型、不产生 active route、审批、回退或 ToolResult。
+- 真实 managed record `record_sha256=bacb8be304319e1815f1c44eabdff848f5ae58cd55cc86e8b18b05576ee1dc62`，连续登记保持同一时间与摘要；
+- Windows managed path 使用完整 SHA 校验身份、16 字符前缀落盘，避免长路径失效；`bundles/records/artifacts` junction、复制期 junction swap、naive UTC 时间和记录篡改均 fail closed。
 
 可复现源码入口：
 
 ```text
 scripts/export_advanced_deployment_bundles.py
+scripts/register_advanced_deployment_bundles.py
 ```
 
-Task 3 后续顺序：Advanced Final 套件与 Deep bundle 正式登记 → 追加式人工激活/回退账本 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
+Task 3 后续顺序：Advanced Final 80-run 专用 importer 与产品 Catalog 事务批量登记 → 追加式人工激活/回退账本 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
 
 - 导入 A100 套件；
 - 注册候选模型；

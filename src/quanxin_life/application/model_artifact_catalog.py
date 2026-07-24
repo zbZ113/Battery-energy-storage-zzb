@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 
 from quanxin_life.application.model_artifacts import ModelArtifactRegistry
@@ -44,6 +44,80 @@ class ModelArtifactCatalogStateError(RuntimeError):
     """Raised when persisted metadata no longer matches verified source context."""
 
 
+class AdvancedModelRouteProvenance(ContractModel):
+    """One inactive deployment route bound to a representative checkpoint."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["advanced-model-route-provenance-v1"] = (
+        "advanced-model-route-provenance-v1"
+    )
+    task: Literal["RUL", "SOH"]
+    role: Literal[
+        "DEFAULT",
+        "POINT_ACCURACY",
+        "COVERAGE",
+        "MEAN_ACCURACY",
+        "TAIL_EFFICIENCY",
+    ]
+    disposition: Literal["CONDITIONAL"] = "CONDITIONAL"
+    family: Literal[
+        "cyclepatch_direct",
+        "cyclepatch_batlinet",
+        "current_hybrid",
+        "hybridpatch_v2",
+    ]
+    candidate_id: str = Field(min_length=1, max_length=100)
+    cutoff_cycle: int = Field(gt=0)
+    seed: int = Field(gt=0)
+    best_epoch: int = Field(gt=0)
+    run_id: str = Field(min_length=1, max_length=200)
+    checkpoint_manifest_sha256: Sha256
+    checkpoint_model_sha256: Sha256
+    checkpoint_context_sha256: Sha256
+
+
+class AdvancedModelArtifactProvenance(ContractModel):
+    """Allow-listed deployment evidence without metrics or active-route state."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["advanced-model-artifact-provenance-v1"] = (
+        "advanced-model-artifact-provenance-v1"
+    )
+    lifecycle_status: Literal["REGISTERED_CANDIDATE"] = "REGISTERED_CANDIDATE"
+    activation_status: Literal["NOT_ACTIVATED"] = "NOT_ACTIVATED"
+    deployment_bundle_manifest_sha256: Sha256
+    source_commit: str = Field(pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+    final_output_sha256: Sha256
+    final_config_sha256: Sha256
+    promotion_manifest_sha256: Sha256
+    promotion_decisions_sha256: Sha256
+    promotion_source_evidence_sha256: Sha256
+    selection_manifest_sha256: Sha256
+    training_input_bundle_sha256: Sha256
+    local_reconstructed_input_bundle_sha256: Sha256
+    input_bundle_hashes_match: bool
+    candidate_config_sha256: Sha256
+    normalization_sha256: Sha256
+    target_scaler_context_sha256: Sha256 | None = None
+    reference_library_sha256: Sha256 | None = None
+    routes: tuple[AdvancedModelRouteProvenance, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def comparison_and_routes_are_consistent(self) -> AdvancedModelArtifactProvenance:
+        hashes_match = (
+            self.training_input_bundle_sha256
+            == self.local_reconstructed_input_bundle_sha256
+        )
+        if self.input_bundle_hashes_match != hashes_match:
+            raise ValueError("input bundle comparison does not match its digests")
+        route_keys = {(route.task, route.cutoff_cycle, route.role) for route in self.routes}
+        if len(route_keys) != len(self.routes):
+            raise ValueError("advanced artifact provenance contains duplicate routes")
+        return self
+
+
 class VerifiedModelArtifactMetadata(ContractModel):
     """Allow-listed model context that cannot contain metrics or arbitrary fields."""
 
@@ -57,6 +131,7 @@ class VerifiedModelArtifactMetadata(ContractModel):
     schema_version: str = Field(min_length=1, max_length=100)
     cutoff_cycle: int = Field(ge=0)
     feature_names: tuple[str, ...] = Field(min_length=1)
+    advanced_provenance: AdvancedModelArtifactProvenance | None = None
 
     @field_validator("feature_names")
     @classmethod
@@ -162,6 +237,7 @@ class ModelArtifactCatalogRecord(ContractModel):
     schema_version: str = Field(min_length=1, max_length=100)
     cutoff_cycle: int = Field(ge=0)
     feature_names: tuple[str, ...] = Field(min_length=1)
+    advanced_provenance: AdvancedModelArtifactProvenance | None = None
     registered_at: datetime
 
     @field_validator("artifact_id")
@@ -226,6 +302,7 @@ def _record(
         schema_version=metadata.schema_version,
         cutoff_cycle=metadata.cutoff_cycle,
         feature_names=metadata.feature_names,
+        advanced_provenance=metadata.advanced_provenance,
         registered_at=artifact.created_at,
     )
 
@@ -445,6 +522,8 @@ class ModelArtifactCatalogService:
 
 
 __all__ = [
+    "AdvancedModelArtifactProvenance",
+    "AdvancedModelRouteProvenance",
     "ClassicModelArtifactCatalogSource",
     "ModelArtifactCatalogAccessError",
     "ModelArtifactCatalogNotFoundError",
