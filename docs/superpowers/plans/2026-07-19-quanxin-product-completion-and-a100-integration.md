@@ -497,6 +497,33 @@ OSS 备份与恢复演练
 
 ### Task 1：指标收口工具
 
+状态：**已完成（2026-07-24）**。
+
+已生成：
+
+```text
+server-results/advanced-final-20260723T015211Z/analysis/metrics-closure/rul-v1/
+server-results/advanced-final-20260723T015211Z/analysis/metrics-closure/soh-v1/
+```
+
+完成内容：
+
+- RUL 10,000 次逐电芯 Bootstrap；
+- RUL ±5%/±10%/±15%/±20% 命中率；
+- RUL 批次、寿命分组、模型配对比较和失败电芯清单；
+- SOH 10,000 次逐电芯 Bootstrap；
+- SOH ±1/±2/±5 个百分点命中率；
+- SOH 批次、预测距离、模型配对比较和尾部失败电芯清单；
+- 输入预测 Parquet、原预测清单和全部输出 SHA-256 绑定。
+
+当前新增判断：
+
+- Direct-150 的 15%-Acc 为 64.44%，20%-Acc 为 81.48%；
+- Direct 与 BatLiNet 的逐电芯 MAE 配对区间跨过零，不能声称 Direct 在当前测试集上统计显著优于 BatLiNet；
+- HybridPatch-v2 在四个 cutoff 的逐电芯轨迹 MAE 配对区间均优于 Current Hybrid；
+- Current Hybrid 的总体 RMSE 仍更低，HybridPatch-v2 不能仅凭 MAE 直接成为唯一 SOH 冠军；
+- SOH 远期 201–350 cycles 区间误差明显放大，高误差电芯主要集中在 2017-06-30 批次。
+
 读取现有逐样本 RUL/SOH Parquet，生成：
 
 - accuracy-at-tolerance；
