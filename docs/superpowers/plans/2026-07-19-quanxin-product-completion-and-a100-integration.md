@@ -562,14 +562,35 @@ server-results/advanced-final-20260723T015211Z/analysis/conformal/rul-v1/
 
 ### Task 2：正式模型晋级报告
 
-状态：**进行中（2026-07-24）**。
+状态：**已完成（2026-07-24）**。
 
-前置的指标收口、Bootstrap、独立 calibration 导出和 Conformal 评价均已完成。下一步基于这些冻结证据：
+已生成：
+
+```text
+server-results/advanced-final-20260723T015211Z/analysis/model-promotion/v1/
+```
+
+完成内容：
 
 - 评估 Direct、BatLiNet、Current Hybrid 和 HybridPatch-v2；
-- 冻结 RUL 选择；
-- 决定 SOH 单模型或双模型路由；
-- 生成模型卡和拒绝条件。
+- RUL 按点预测精度与 Split coverage 两个可观测目标冻结条件路由，不用未经批准的权重强行合成单一冠军；
+- SOH 冻结平均精度与尾部/效率双模型路由；
+- representative seed 只按 `best_validation_metric` 选择，不读取 test 指标；
+- 生成 15 条 `CONDITIONAL` 推荐、4 份模型卡、机器可读拒绝策略和 9 个文件的 SHA-256 清单；
+- 所有推荐保持 `NOT_ACTIVATED`，不把聚合晋级报告冒充具体模型制品激活；
+- 明确训练耗时与峰值显存不是推理延迟，当前没有推理延迟基准；
+- 明确冻结 test split 已被本次一次性晋级使用，后续不得继续用其调参或重选模型。
+
+当前冻结路由：
+
+- RUL cutoff 20：CyclePatch Direct 同时承担点精度与 coverage 默认角色；
+- RUL cutoff 50：Direct 为 `POINT_ACCURACY`，BatLiNet 为 `COVERAGE`；
+- RUL cutoff 100：BatLiNet 为 `POINT_ACCURACY`，Direct 为当前可用的 `COVERAGE` 候选，但两者 90% PICP 均未达到目标；
+- RUL cutoff 150：Direct 为 `POINT_ACCURACY`，BatLiNet 为 `COVERAGE`；
+- SOH 四个 cutoff：HybridPatch-v2 为 `MEAN_ACCURACY`，Current Hybrid 为 `TAIL_EFFICIENCY`；
+- 若 SOH 只能单路由，保留 Current Hybrid，不能仅凭平均 MAE 让 HybridPatch-v2 成为唯一冠军。
+
+Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可激活制品必须分层；公共激活契约、追加式决策账本、人工审批和回退在 Task 3 实施。
 
 ### Task 3：正式套件注册与 ToolResult
 
