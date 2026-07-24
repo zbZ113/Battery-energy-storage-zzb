@@ -532,7 +532,39 @@ server-results/advanced-final-20260723T015211Z/analysis/metrics-closure/soh-v1/
 - 失败电芯清单；
 - 机器可读 JSON/CSV 和 SHA-256 清单。
 
+#### Conformal 与可信区间
+
+状态：**已完成（2026-07-24）**。
+
+已生成：
+
+```text
+server-results/advanced-final-20260723T015211Z/analysis/calibration_predictions/
+server-results/advanced-final-20260723T015211Z/analysis/conformal/rul-v1/
+```
+
+完成内容：
+
+- 从 40 个 SHA-256 已验证的 RUL safetensors 检查点导出 480 行 calibration 预测；
+- calibration 固定为 12 个独立电芯，test 固定为 27 个电芯，两者无交集；
+- 保留完整 80-run 训练输入哈希闭包核验和本地重建 bundle 哈希差异；
+- Split Conformal 基线与 Normalized Conformal 均报告 80%、90%、95% 目标覆盖；
+- Normalized 难度尺度仅使用同模型五个随机种子预测的样本标准差，不读取标签；
+- 输出 48 条模型/方法/cutoff/覆盖率汇总、1,296 个测试区间和 336 条分组覆盖；
+- 输出 PICP、MPIW、分批次覆盖、寿命四分位覆盖、逐电芯区间和 SHA-256 清单。
+
+当前新增判断：
+
+- 12 个 calibration 电芯属于小校准队列，所有结果必须带 `SMALL_CALIBRATION_COHORT`；
+- 有限样本秩在该队列上使 90% 与 95% 使用相同的最大校准分位数，不能解释为两种不同强度的经验保证；
+- 五种子分歧尺度的 Normalized Conformal 未稳定改善覆盖-宽度权衡，不能自动作为正式主方法；
+- 当前结果只对已声明的 MATR calibration/test 划分有效，不形成 HUST、Naumann 或工业域覆盖保证。
+
 ### Task 2：正式模型晋级报告
+
+状态：**进行中（2026-07-24）**。
+
+前置的指标收口、Bootstrap、独立 calibration 导出和 Conformal 评价均已完成。下一步基于这些冻结证据：
 
 - 评估 Direct、BatLiNet、Current Hybrid 和 HybridPatch-v2；
 - 冻结 RUL 选择；
