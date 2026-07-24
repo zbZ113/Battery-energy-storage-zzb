@@ -436,6 +436,66 @@ def load_advanced_training_checkpoint(
     """Verify every v2 byte and restore only the exact advanced context."""
 
     _validate_advanced_model_architecture(expected_context, model)
+    root, restored_progress = _verify_advanced_checkpoint(
+        checkpoint_root,
+        manifest,
+        expected_context=expected_context,
+    )
+
+    model_state = load_file(str(root / "model.safetensors"), device="cpu")
+    _validate_state_against_model(model_state, model)
+    model.load_state_dict(model_state, strict=True)
+    optimizer_tensors = load_file(str(root / "optimizer.safetensors"), device="cpu")
+    optimizer_metadata = _read_strict_json(root / "optimizer_state.json")
+    _restore_optimizer(model, optimizer, optimizer_tensors, optimizer_metadata)
+    scheduler_payload = _read_strict_json(root / "scheduler_state.json")
+    scheduler_state = scheduler_payload.get("state")
+    if scheduler_state is not None:
+        if scheduler is None or not isinstance(scheduler_state, dict):
+            raise ValueError("checkpoint scheduler state is incompatible with the run")
+        decoded_scheduler_state = _decode_non_finite_floats(scheduler_state)
+        if not isinstance(decoded_scheduler_state, dict):
+            raise ValueError("checkpoint scheduler state is incompatible with the run")
+        scheduler.load_state_dict(decoded_scheduler_state)
+    elif scheduler is not None:
+        raise ValueError("checkpoint is missing the requested scheduler state")
+
+    progress_payload = _read_strict_json(root / "progress.json")
+    rng_metadata = progress_payload.get("rng")
+    if not isinstance(rng_metadata, dict):
+        raise ValueError("checkpoint RNG metadata is invalid")
+    rng_tensors = load_file(str(root / "rng_state.safetensors"), device="cpu")
+    _restore_rng_state(rng_tensors, rng_metadata)
+    return restored_progress
+
+
+def load_advanced_inference_checkpoint(
+    checkpoint_root: Path,
+    manifest: AdvancedTrainingCheckpointManifest,
+    *,
+    expected_context: AdvancedCheckpointContext,
+    model: torch.nn.Module,
+) -> TrainingProgress:
+    """Verify a complete v2 checkpoint while restoring model weights only."""
+
+    _validate_advanced_model_architecture(expected_context, model)
+    root, progress = _verify_advanced_checkpoint(
+        checkpoint_root,
+        manifest,
+        expected_context=expected_context,
+    )
+    model_state = load_file(str(root / "model.safetensors"), device="cpu")
+    _validate_state_against_model(model_state, model)
+    model.load_state_dict(model_state, strict=True)
+    return progress
+
+
+def _verify_advanced_checkpoint(
+    checkpoint_root: Path,
+    manifest: AdvancedTrainingCheckpointManifest,
+    *,
+    expected_context: AdvancedCheckpointContext,
+) -> tuple[Path, TrainingProgress]:
     root = _validated_checkpoint_root(checkpoint_root, require_empty=False)
     if manifest.context != expected_context:
         raise ValueError("checkpoint context does not match the requested training run")
@@ -460,36 +520,13 @@ def load_advanced_training_checkpoint(
         if _sha256_file(path) != item.sha256:
             raise ValueError("checkpoint file SHA-256 does not match the manifest")
 
-    model_state = load_file(str(root / "model.safetensors"), device="cpu")
-    _validate_state_against_model(model_state, model)
-    model.load_state_dict(model_state, strict=True)
-    optimizer_tensors = load_file(str(root / "optimizer.safetensors"), device="cpu")
-    optimizer_metadata = _read_strict_json(root / "optimizer_state.json")
-    _restore_optimizer(model, optimizer, optimizer_tensors, optimizer_metadata)
-    scheduler_payload = _read_strict_json(root / "scheduler_state.json")
-    scheduler_state = scheduler_payload.get("state")
-    if scheduler_state is not None:
-        if scheduler is None or not isinstance(scheduler_state, dict):
-            raise ValueError("checkpoint scheduler state is incompatible with the run")
-        decoded_scheduler_state = _decode_non_finite_floats(scheduler_state)
-        if not isinstance(decoded_scheduler_state, dict):
-            raise ValueError("checkpoint scheduler state is incompatible with the run")
-        scheduler.load_state_dict(decoded_scheduler_state)
-    elif scheduler is not None:
-        raise ValueError("checkpoint is missing the requested scheduler state")
-
     progress_payload = _read_strict_json(root / "progress.json")
     if progress_payload.get("context") != expected_context.model_dump(mode="json"):
         raise ValueError("checkpoint progress context does not match the requested run")
-    restored_progress = TrainingProgress.model_validate(progress_payload.get("progress"))
-    if restored_progress != manifest.progress:
+    progress = TrainingProgress.model_validate(progress_payload.get("progress"))
+    if progress != manifest.progress:
         raise ValueError("checkpoint progress does not match the manifest")
-    rng_metadata = progress_payload.get("rng")
-    if not isinstance(rng_metadata, dict):
-        raise ValueError("checkpoint RNG metadata is invalid")
-    rng_tensors = load_file(str(root / "rng_state.safetensors"), device="cpu")
-    _restore_rng_state(rng_tensors, rng_metadata)
-    return restored_progress
+    return root, progress
 
 
 def _validate_advanced_model_architecture(

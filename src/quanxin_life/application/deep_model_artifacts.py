@@ -26,6 +26,7 @@ from torch import Tensor
 from quanxin_life.core import PredictionTarget
 from quanxin_life.core.hashing import sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
+from quanxin_life.features.early_cycle_sequence import VARIABLE_NAMES
 from quanxin_life.models.batlinet import (
     BatLiNetConfig,
     CycleLifeReferenceLibrary,
@@ -46,6 +47,7 @@ from quanxin_life.models.hybrid_degradation import (
     HybridDegradationPredictor,
     _FittedContext,
     _HybridNetwork,
+    normalise_prediction_cycle_positions,
 )
 from quanxin_life.models.hybridpatch_v2 import (
     HybridPatchV2Config,
@@ -60,6 +62,7 @@ class DeepArtifactKind(StrEnum):
     HYBRID = "hybrid-soh-trajectory"
     CYCLEPATCH_DIRECT = "cyclepatch-direct-official-cycle-life"
     CYCLEPATCH_BATLINET = "cyclepatch-batlinet-official-cycle-life"
+    CURRENT_HYBRID = "current-hybrid-soh-trajectory"
     HYBRIDPATCH_V2 = "hybridpatch-v2-soh-trajectory"
 
 
@@ -172,6 +175,20 @@ class HybridArchitecture(ContractModel):
         "quanxin_hybrid_soh_trajectory"
     )
     hidden_dim: int = Field(gt=0)
+
+
+class CurrentHybridArchitecture(ContractModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["current-hybrid-architecture-v1"] = (
+        "current-hybrid-architecture-v1"
+    )
+    architecture: Literal["quanxin_current_hybrid_advanced"] = (
+        "quanxin_current_hybrid_advanced"
+    )
+    input_dim: Literal[3] = 3
+    hidden_dim: Literal[32, 64, 128]
+    horizon: int = Field(ge=3)
 
 
 class HybridFeatureConfig(ContractModel):
@@ -496,6 +513,38 @@ class HybridPatchV2FeatureConfig(_AdvancedFeatureBase):
         "hybridpatch-v2-feature-context-v1"
     )
     max_prediction_cycle: Literal[500] = 500
+
+
+class CurrentHybridFeatureConfig(_AdvancedFeatureBase):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["current-hybrid-feature-context-v1"] = (
+        "current-hybrid-feature-context-v1"
+    )
+    prediction_cycles: tuple[int, ...] = Field(min_length=3)
+    variable_names: tuple[str, ...]
+    aggregation_version: Literal["masked-variable-mean-v1"] = (
+        "masked-variable-mean-v1"
+    )
+
+    @model_validator(mode="after")
+    def trajectory_context_is_valid(self) -> CurrentHybridFeatureConfig:
+        if self.variable_names != VARIABLE_NAMES:
+            raise ValueError(f"variable_names must be fixed to {VARIABLE_NAMES}")
+        if any(
+            current <= previous
+            for previous, current in zip(
+                self.prediction_cycles,
+                self.prediction_cycles[1:],
+                strict=False,
+            )
+        ):
+            raise ValueError("prediction_cycles must be strictly increasing")
+        if any(cycle <= self.cutoff_cycle for cycle in self.prediction_cycles):
+            raise ValueError("prediction_cycles must be strictly after cutoff_cycle")
+        if self.prediction_cycles[-1] != 500:
+            raise ValueError("prediction_cycles must end at real cycle 500")
+        return self
 
 
 def export_cpmlp_artifact(
@@ -1086,6 +1135,164 @@ def load_hybridpatch_v2_artifact(
     return LoadedHybridPatchV2(network.eval(), feature).eval()
 
 
+class LoadedCurrentHybrid(torch.nn.Module):
+    """Current Hybrid baseline bound to its advanced masked-mean feature contract."""
+
+    def __init__(
+        self,
+        network: _HybridNetwork,
+        feature: CurrentHybridFeatureConfig,
+    ) -> None:
+        super().__init__()
+        self.network = network
+        self.feature = feature
+        cycle_positions = normalise_prediction_cycle_positions(
+            prediction_cycles=feature.prediction_cycles,
+            cutoff_cycle=feature.cutoff_cycle,
+        )
+        self.register_buffer(
+            "cycle_positions",
+            torch.tensor(cycle_positions, dtype=torch.float32),
+            persistent=False,
+        )
+
+    def forward(self, batch: EarlyCycleBatch, initial_soh: Tensor) -> Tensor:
+        _validate_advanced_batch(batch, self.feature)
+        if initial_soh.dtype != batch.values.dtype:
+            raise ValueError("initial_soh dtype must match the inference batch")
+        if initial_soh.device != batch.values.device:
+            raise ValueError("initial_soh device must match the inference batch")
+        if initial_soh.shape != (len(batch.cell_ids),):
+            raise ValueError("initial_soh must align with inference batch cells")
+        if not bool(
+            (
+                torch.isfinite(initial_soh)
+                & (initial_soh > 0)
+                & (initial_soh <= 1.5)
+            )
+            .all()
+            .item()
+        ):
+            raise ValueError("initial_soh must be finite and in (0, 1.5]")
+        mask = batch.sample_mask.unsqueeze(-1)
+        clean = torch.where(mask, batch.values, torch.zeros_like(batch.values))
+        count = mask.to(batch.values.dtype).sum(dim=(1, 2, 3)).clamp_min(1.0)
+        features = clean.sum(dim=(1, 2, 3)) / count
+        output: Tensor = self.network(
+            features,
+            initial_soh,
+            self.cycle_positions.to(
+                device=batch.values.device,
+                dtype=batch.values.dtype,
+            ),
+        )
+        return output
+
+
+def export_current_hybrid_artifact(
+    network: _HybridNetwork,
+    *,
+    artifact_root: Path,
+    artifact_id: str,
+    created_at: datetime,
+    dataset_id: str,
+    data_version: str,
+    split_version: str,
+    feature_version: str,
+    cutoff_cycle: int,
+    condition_names: tuple[str, ...],
+    prediction_cycles: tuple[int, ...],
+    variable_names: tuple[str, ...],
+    aggregation_version: str,
+    normalization_sha256: str,
+    candidate_config_sha256: str,
+) -> DeepModelArtifactManifest:
+    _require_inference_network(network, _HybridNetwork)
+    input_layer = network.encoder[0]
+    if not isinstance(input_layer, torch.nn.Linear):
+        raise ValueError("Current Hybrid encoder input layer is not approved")
+    architecture = CurrentHybridArchitecture.model_validate(
+        {
+            "input_dim": input_layer.in_features,
+            "hidden_dim": input_layer.out_features,
+            "horizon": network.horizon,
+        }
+    )
+    feature = CurrentHybridFeatureConfig.model_validate(
+        {
+            "dataset_id": dataset_id,
+            "data_version": data_version,
+            "split_version": split_version,
+            "feature_version": feature_version,
+            "cutoff_cycle": cutoff_cycle,
+            "condition_names": condition_names,
+            "normalization_sha256": normalization_sha256,
+            "candidate_config_sha256": candidate_config_sha256,
+            "prediction_cycles": prediction_cycles,
+            "variable_names": variable_names,
+            "aggregation_version": aggregation_version,
+        }
+    )
+    if architecture.input_dim != len(feature.variable_names):
+        raise ValueError("variable_names do not match Current Hybrid input_dim")
+    if architecture.horizon != len(feature.prediction_cycles):
+        raise ValueError("prediction_cycles do not match Current Hybrid horizon")
+    return _export_deep_artifact(
+        network=network,
+        artifact_root=artifact_root,
+        artifact_id=artifact_id,
+        artifact_kind=DeepArtifactKind.CURRENT_HYBRID,
+        architecture=architecture.model_dump(mode="json"),
+        feature_config=feature.model_dump(mode="json"),
+        created_at=created_at,
+    )
+
+
+def load_current_hybrid_artifact(
+    artifact_root: Path,
+    manifest: DeepModelArtifactManifest,
+    *,
+    expected_prediction_cycles: tuple[int, ...],
+    expected_variable_names: tuple[str, ...],
+    expected_aggregation_version: str,
+    expected_normalization_sha256: str,
+    expected_candidate_config_sha256: str,
+) -> LoadedCurrentHybrid:
+    files = _advanced_files(
+        artifact_root,
+        manifest,
+        expected_kind=DeepArtifactKind.CURRENT_HYBRID,
+    )
+    architecture = CurrentHybridArchitecture.model_validate(
+        _read_strict_json(files[DeepArtifactFileRole.ARCHITECTURE])
+    )
+    feature = CurrentHybridFeatureConfig.model_validate(
+        _read_strict_json(files[DeepArtifactFileRole.FEATURE_CONFIG])
+    )
+    _validate_expected_feature_hashes(
+        feature,
+        expected_normalization_sha256=expected_normalization_sha256,
+        expected_candidate_config_sha256=expected_candidate_config_sha256,
+    )
+    if feature.prediction_cycles != expected_prediction_cycles:
+        raise ValueError("prediction_cycles do not match the approved trajectory axis")
+    if feature.variable_names != expected_variable_names:
+        raise ValueError("variable_names do not match the approved feature schema")
+    if feature.aggregation_version != expected_aggregation_version:
+        raise ValueError("aggregation_version does not match the approved feature transform")
+    if architecture.input_dim != len(feature.variable_names):
+        raise ValueError("variable_names do not match Current Hybrid input_dim")
+    if architecture.horizon != len(feature.prediction_cycles):
+        raise ValueError("prediction_cycles do not match Current Hybrid horizon")
+    network = _HybridNetwork(
+        input_dim=architecture.input_dim,
+        horizon=architecture.horizon,
+        hidden_dim=architecture.hidden_dim,
+    )
+    _load_verified_state(network, files[DeepArtifactFileRole.WEIGHTS])
+    return LoadedCurrentHybrid(network.eval(), feature).eval()
+
+
 def _advanced_files(
     artifact_root: Path,
     manifest: DeepModelArtifactManifest,
@@ -1093,7 +1300,9 @@ def _advanced_files(
     expected_kind: DeepArtifactKind,
 ) -> dict[DeepArtifactFileRole, Path]:
     if manifest.artifact_kind is not expected_kind:
-        raise ValueError(f"artifact is not an approved {expected_kind.value} model")
+        raise ValueError(
+            f"artifact kind is not an approved {expected_kind.value} model"
+        )
     return _verify_deep_artifact(artifact_root, manifest)
 
 
@@ -1308,6 +1517,15 @@ def _verify_deep_artifact(
             raise ValueError("artifact file SHA-256 does not match the manifest")
         verified[item.role] = resolved
     return verified
+
+
+def verify_deep_model_artifact(
+    artifact_root: Path,
+    manifest: DeepModelArtifactManifest,
+) -> None:
+    """Reverify every registered byte without constructing a model."""
+
+    _verify_deep_artifact(artifact_root, manifest)
 
 
 def _save_safetensors(network: torch.nn.Module, path: Path) -> None:

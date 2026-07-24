@@ -594,6 +594,38 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 
 ### Task 3：正式套件注册与 ToolResult
 
+状态：**实施中（2026-07-24 完成部署制品子切片）**。
+
+已生成：
+
+```text
+server-results/advanced-final-20260723T015211Z/analysis/deployment-bundles/v1/
+```
+
+已完成内容：
+
+- 将 15 条聚合晋级路由逐条绑定到 representative seed 的具体 best checkpoint；
+- representative seed 继续只来自验证指标，不重新读取 test 指标选模型；
+- 对完整 Advanced Final 输出索引、promotion 清单、来源证据、checkpoint 上下文和六文件 SHA-256 闭包重新验收；
+- 推理恢复只反序列化 `model.safetensors`，optimizer、scheduler 和 RNG 仅做字节校验；
+- 为 Advanced Current Hybrid 新增独立制品语义，不复用输入契约不同的 legacy Hybrid；
+- 导出 15 个独立 `DeepModelArtifact`，每个包含 safetensors、架构、特征上下文和清单，BatLiNet 另含 reference library；
+- 四个模型族均完成原 checkpoint 与导出后安全 loader 的 CPU 前向逐张量对账；
+- 总索引显式绑定 data/split/feature、candidate、normalization、target scaler/reference library、selection、promotion 和 A100 来源哈希；
+- 独立钉死 promotion manifest `sha256=7fd7e56322a7266b23422b4cd31839f9dc4f729bbab1d6538de970c60bd9f085`，并从 80-run 验证指标重新核对 representative seed；
+- 每个导出 artifact 的 weights SHA-256 必须与其源 checkpoint `model.safetensors` 完全一致，resume 不接受仅包内自洽的替换权重；
+- 部署索引 `manifest_sha256=9657e34d77122d79e81b5f9d75bbdc0b783e57b1a002ab05a51e3319fbe5d1eb`；
+- `input_bundle_hashes_match=false` 原样保留，未把本地重建输入冒充 A100 原始输入；
+- 所有 bundle 与路由仍为 `NOT_ACTIVATED`，本子切片不执行注册、审批、激活、回退或 ToolResult 接入。
+
+可复现源码入口：
+
+```text
+scripts/export_advanced_deployment_bundles.py
+```
+
+Task 3 后续顺序：Advanced Final 套件与 Deep bundle 正式登记 → 追加式人工激活/回退账本 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
+
 - 导入 A100 套件；
 - 注册候选模型；
 - 人工激活和回退；

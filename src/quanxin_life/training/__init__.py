@@ -20,9 +20,12 @@ from quanxin_life.training.bundle import (
     verify_training_bundle_manifest,
 )
 from quanxin_life.training.checkpoint import (
+    AdvancedCheckpointContext,
+    AdvancedTrainingCheckpointManifest,
     CheckpointContext,
     TrainingCheckpointManifest,
     TrainingProgress,
+    load_advanced_inference_checkpoint,
     load_training_checkpoint,
     save_training_checkpoint,
 )
@@ -92,6 +95,8 @@ __all__ = [
     "A100PackageFile",
     "A100PackageFileRole",
     "A100TrainingRunManifest",
+    "AdvancedCheckpointContext",
+    "AdvancedTrainingCheckpointManifest",
     "CPMLPTrainingTask",
     "CheckpointContext",
     "CheckpointPolicy",
@@ -139,6 +144,7 @@ __all__ = [
     "curve_batch_to_tabular",
     "fit_dummy_cycle_life",
     "fit_variance_cycle_life",
+    "load_advanced_inference_checkpoint",
     "load_matr_cycle_life_curve_cohorts",
     "load_matr_hybrid_trajectory_cohorts",
     "load_training_checkpoint",
