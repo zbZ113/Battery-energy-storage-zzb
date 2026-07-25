@@ -594,7 +594,7 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 
 ### Task 3：正式套件注册与 ToolResult
 
-状态：**实施中（2026-07-24 完成部署制品与 managed candidate registry 子切片）**。
+状态：**实施中（2026-07-25 完成部署制品、managed candidate registry 与追加式人工激活/回退账本子切片）**。
 
 已生成：
 
@@ -638,7 +638,13 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 - 批注册响应固定为 `REGISTERED_CANDIDATE / NOT_ACTIVATED`，不创建 active route、审批、回退或 ToolResult，也不复制 MAE/RMSE 等业务指标；
 - 新增 trusted-origin 管理 API `POST /v1/admin/model-artifacts/advanced-candidates`，请求只接受 `project_id`，不接受调用方注入 artifact IDs、路径、哈希或状态；
 - 产品 Catalog 本阶段不新增数据库 migration；现有 `model_artifacts/model_manifests` 已能保存 15 个候选及严格 provenance；
-- 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录。
+- 新增 `model_route_activation_events` 追加式 SQL 账本，按 `project + task + cutoff + role` 维护严格递增序号和 SHA-256 哈希链；历史激活与回退事件不可覆盖；
+- 人工激活与回退只允许 ADMIN 在 ACTIVE、可见项目内执行，必须提供 trusted origin、人工原因、`Idempotency-Key` 和预期账本头；请求摘要绑定决策 ADMIN 身份，陈旧账本头、跨管理员复用、重复键异义请求、路由不匹配与历史篡改均失败关闭；
+- 激活前重新验证 managed Advanced 候选、Catalog 持久记录及完整 route provenance；并发唯一约束恢复也会重新验证 ACTIVE 项目、完整账本和可信候选，不凭数据库事件单独返回成功；
+- 回退只接受更早的有效 `ACTIVATE` 事件 ID，目标 artifact、哈希和 provenance 全部由服务端历史派生，调用方不能注入回退制品；回退通过追加 `ROLLBACK` 事件实现，不修改旧记录；
+- 新增管理 API `POST /v1/admin/model-routes/activations`、`POST /v1/admin/model-routes/rollbacks` 和只读历史 API `GET /v1/model-routes/activation-events`；写接口不接受调用方注入路径、状态或 provenance 哈希，competition HTTP 正式装配强制注入该 adapter；
+- Catalog 候选继续保持 `REGISTERED_CANDIDATE / NOT_ACTIVATED`，激活状态只存在于决策账本；本切片未实现 current projection 或 active-route resolver；
+- 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录，也未修改任何真实产品数据库。
 
 可复现源码入口：
 
@@ -647,9 +653,12 @@ scripts/export_advanced_deployment_bundles.py
 scripts/register_advanced_deployment_bundles.py
 scripts/register_advanced_final_suite.py
 scripts/register_advanced_candidates_to_catalog.py
+src/quanxin_life/application/model_route_activation.py
+src/quanxin_life/api/model_routes.py
+migrations/versions/0009_model_route_activation_ledger.py
 ```
 
-Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册 → 追加式人工激活/回退账本 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
+Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
 
 - 导入 A100 套件；
 - 注册候选模型；

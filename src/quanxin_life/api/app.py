@@ -91,6 +91,7 @@ def create_fastapi_app(
     industrial_adapter: Any | None = None,
     experiment_adapter: Any | None = None,
     model_artifact_adapter: Any | None = None,
+    model_route_adapter: Any | None = None,
     report_exporter: Any | None = None,
 ) -> Any:
     """Create the HTTP adapter without duplicating domain-tool execution logic."""
@@ -158,6 +159,10 @@ def create_fastapi_app(
         if auth_adapter is None:
             raise ValueError("model_artifact_adapter requires auth_adapter")
         app.include_router(model_artifact_adapter.router)
+    if model_route_adapter is not None:
+        if auth_adapter is None:
+            raise ValueError("model_route_adapter requires auth_adapter")
+        app.include_router(model_route_adapter.router)
     ready_route_options = (
         {"dependencies": ready_user_dependencies} if ready_user_dependencies else {}
     )

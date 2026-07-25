@@ -1,6 +1,8 @@
 """Stable, service-independent domain contracts."""
 
 from quanxin_life.core.enums import (
+    AdvancedModelRouteRole,
+    AdvancedModelTask,
     AgentDispatchStatus,
     AgentEventType,
     AgentFailurePolicy,
@@ -14,6 +16,7 @@ from quanxin_life.core.enums import (
     Decision,
     EvidenceLevel,
     KnowledgeReviewStatus,
+    ModelRouteDecisionType,
     PredictionTarget,
     ProjectStatus,
     SessionStatus,
@@ -49,6 +52,8 @@ from quanxin_life.core.schemas import (
 )
 
 __all__ = [
+    "AdvancedModelRouteRole",
+    "AdvancedModelTask",
     "AgentDispatchStatus",
     "AgentEventType",
     "AgentFailurePolicy",
@@ -76,6 +81,7 @@ __all__ = [
     "LifePrediction",
     "LifetimeMetrics",
     "LlmProviderConfig",
+    "ModelRouteDecisionType",
     "NormalizedConformalCalibration",
     "NormalizedPredictionInterval",
     "PredictionInterval",

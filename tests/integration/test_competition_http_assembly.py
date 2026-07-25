@@ -27,6 +27,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
     dataset_adapter = object()
     experiment_adapter = object()
     model_artifact_adapter = object()
+    model_route_adapter = object()
     agent_run_adapter = object()
     knowledge_adapter = object()
 
@@ -52,6 +53,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
         dataset_adapter,
         experiment_adapter,
         model_artifact_adapter,
+        model_route_adapter,
         agent_run_adapter,
         knowledge_adapter,
     ):
@@ -63,6 +65,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
         calls["dataset_adapter"] = dataset_adapter
         calls["experiment_adapter"] = experiment_adapter
         calls["model_artifact_adapter"] = model_artifact_adapter
+        calls["model_route_adapter"] = model_route_adapter
         calls["agent_run_adapter"] = agent_run_adapter
         calls["knowledge_adapter"] = knowledge_adapter
         return "fastapi-app"
@@ -77,6 +80,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
         dataset_adapter=dataset_adapter,  # type: ignore[arg-type]
         experiment_adapter=experiment_adapter,  # type: ignore[arg-type]
         model_artifact_adapter=model_artifact_adapter,  # type: ignore[arg-type]
+        model_route_adapter=model_route_adapter,  # type: ignore[arg-type]
         agent_run_adapter=agent_run_adapter,  # type: ignore[arg-type]
         knowledge_adapter=knowledge_adapter,  # type: ignore[arg-type]
     )
@@ -93,6 +97,7 @@ def test_competition_http_factory_shares_service_batch_store_and_verified_workfl
     assert calls["dataset_adapter"] is dataset_adapter
     assert calls["experiment_adapter"] is experiment_adapter
     assert calls["model_artifact_adapter"] is model_artifact_adapter
+    assert calls["model_route_adapter"] is model_route_adapter
     assert calls["agent_run_adapter"] is agent_run_adapter
     assert calls["knowledge_adapter"] is knowledge_adapter
     assert calls["runner"](service, request) == "workflow-result"
@@ -113,6 +118,7 @@ def test_competition_http_factory_rejects_an_explicitly_missing_auth_adapter() -
             dataset_adapter=object(),  # type: ignore[arg-type]
             experiment_adapter=object(),  # type: ignore[arg-type]
             model_artifact_adapter=object(),  # type: ignore[arg-type]
+            model_route_adapter=object(),  # type: ignore[arg-type]
             agent_run_adapter=object(),  # type: ignore[arg-type]
             knowledge_adapter=object(),  # type: ignore[arg-type]
         )
@@ -130,6 +136,7 @@ def test_competition_http_factory_rejects_an_explicitly_missing_project_adapter(
             dataset_adapter=object(),  # type: ignore[arg-type]
             experiment_adapter=object(),  # type: ignore[arg-type]
             model_artifact_adapter=object(),  # type: ignore[arg-type]
+            model_route_adapter=object(),  # type: ignore[arg-type]
             agent_run_adapter=object(),  # type: ignore[arg-type]
             knowledge_adapter=object(),  # type: ignore[arg-type]
         )
@@ -147,6 +154,7 @@ def test_competition_http_factory_rejects_an_explicitly_missing_dataset_adapter(
             dataset_adapter=None,  # type: ignore[arg-type]
             experiment_adapter=object(),  # type: ignore[arg-type]
             model_artifact_adapter=object(),  # type: ignore[arg-type]
+            model_route_adapter=object(),  # type: ignore[arg-type]
             agent_run_adapter=object(),  # type: ignore[arg-type]
             knowledge_adapter=object(),  # type: ignore[arg-type]
         )
@@ -164,6 +172,7 @@ def test_competition_http_factory_rejects_an_explicitly_missing_experiment_adapt
             dataset_adapter=object(),  # type: ignore[arg-type]
             experiment_adapter=None,  # type: ignore[arg-type]
             model_artifact_adapter=object(),  # type: ignore[arg-type]
+            model_route_adapter=object(),  # type: ignore[arg-type]
             agent_run_adapter=object(),  # type: ignore[arg-type]
             knowledge_adapter=object(),  # type: ignore[arg-type]
         )
@@ -181,6 +190,7 @@ def test_competition_http_factory_rejects_an_explicitly_missing_agent_run_adapte
             dataset_adapter=object(),  # type: ignore[arg-type]
             experiment_adapter=object(),  # type: ignore[arg-type]
             model_artifact_adapter=object(),  # type: ignore[arg-type]
+            model_route_adapter=object(),  # type: ignore[arg-type]
             agent_run_adapter=None,  # type: ignore[arg-type]
             knowledge_adapter=object(),  # type: ignore[arg-type]
         )
@@ -198,6 +208,7 @@ def test_competition_http_factory_rejects_an_explicitly_missing_knowledge_adapte
             dataset_adapter=object(),  # type: ignore[arg-type]
             experiment_adapter=object(),  # type: ignore[arg-type]
             model_artifact_adapter=object(),  # type: ignore[arg-type]
+            model_route_adapter=object(),  # type: ignore[arg-type]
             agent_run_adapter=object(),  # type: ignore[arg-type]
             knowledge_adapter=None,  # type: ignore[arg-type]
         )
@@ -215,6 +226,25 @@ def test_competition_http_factory_rejects_missing_model_artifact_adapter() -> No
             dataset_adapter=object(),  # type: ignore[arg-type]
             experiment_adapter=object(),  # type: ignore[arg-type]
             model_artifact_adapter=None,  # type: ignore[arg-type]
+            model_route_adapter=object(),  # type: ignore[arg-type]
+            agent_run_adapter=object(),  # type: ignore[arg-type]
+            knowledge_adapter=object(),  # type: ignore[arg-type]
+        )
+
+
+def test_competition_http_factory_rejects_missing_model_route_adapter() -> None:
+    from quanxin_life.application.http_application import create_competition_fastapi_app
+
+    with pytest.raises(ValueError, match="model_route_adapter"):
+        create_competition_fastapi_app(
+            object(),  # type: ignore[arg-type]
+            batch_store=object(),  # type: ignore[arg-type]
+            auth_adapter=object(),  # type: ignore[arg-type]
+            project_adapter=object(),  # type: ignore[arg-type]
+            dataset_adapter=object(),  # type: ignore[arg-type]
+            experiment_adapter=object(),  # type: ignore[arg-type]
+            model_artifact_adapter=object(),  # type: ignore[arg-type]
+            model_route_adapter=None,  # type: ignore[arg-type]
             agent_run_adapter=object(),  # type: ignore[arg-type]
             knowledge_adapter=object(),  # type: ignore[arg-type]
         )

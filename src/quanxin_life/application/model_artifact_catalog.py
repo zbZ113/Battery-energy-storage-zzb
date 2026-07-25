@@ -18,7 +18,12 @@ from sqlalchemy.exc import IntegrityError
 from quanxin_life.application.model_artifacts import ModelArtifactRegistry
 from quanxin_life.application.projects import ProjectService
 from quanxin_life.auth import AuthPrincipal
-from quanxin_life.core import ProjectStatus, UserRole
+from quanxin_life.core import (
+    AdvancedModelRouteRole,
+    AdvancedModelTask,
+    ProjectStatus,
+    UserRole,
+)
 from quanxin_life.core.hashing import sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.persistence.database import SessionFactory, session_scope
@@ -53,14 +58,8 @@ class AdvancedModelRouteProvenance(ContractModel):
     schema_version: Literal["advanced-model-route-provenance-v1"] = (
         "advanced-model-route-provenance-v1"
     )
-    task: Literal["RUL", "SOH"]
-    role: Literal[
-        "DEFAULT",
-        "POINT_ACCURACY",
-        "COVERAGE",
-        "MEAN_ACCURACY",
-        "TAIL_EFFICIENCY",
-    ]
+    task: AdvancedModelTask
+    role: AdvancedModelRouteRole
     disposition: Literal["CONDITIONAL"] = "CONDITIONAL"
     family: Literal[
         "cyclepatch_direct",

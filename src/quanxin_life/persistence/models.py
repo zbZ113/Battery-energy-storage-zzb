@@ -9,6 +9,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -386,6 +387,84 @@ class ModelManifest(Base):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class ModelRouteActivationEvent(Base):
+    __tablename__ = "model_route_activation_events"
+    __table_args__ = (
+        CheckConstraint(
+            "stream_sequence > 0 AND cutoff_cycle > 0",
+            name="ck_model_route_activation_positive_coordinates",
+        ),
+        CheckConstraint(
+            "decision_type IN ('ACTIVATE', 'ROLLBACK')",
+            name="ck_model_route_activation_decision_type",
+        ),
+        CheckConstraint(
+            "(decision_type = 'ACTIVATE' AND rollback_target_event_id IS NULL) "
+            "OR (decision_type = 'ROLLBACK' AND rollback_target_event_id IS NOT NULL)",
+            name="ck_model_route_activation_rollback_target",
+        ),
+        CheckConstraint(
+            "(task = 'RUL' AND route_role IN "
+            "('DEFAULT', 'POINT_ACCURACY', 'COVERAGE')) OR "
+            "(task = 'SOH' AND route_role IN "
+            "('MEAN_ACCURACY', 'TAIL_EFFICIENCY'))",
+            name="ck_model_route_activation_task_role",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "task",
+            "cutoff_cycle",
+            "route_role",
+            "stream_sequence",
+            name="uq_model_route_activation_stream_sequence",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "idempotency_key_sha256",
+            name="uq_model_route_activation_idempotency",
+        ),
+        UniqueConstraint("event_sha256", name="uq_model_route_activation_event_sha"),
+        Index(
+            "ix_model_route_activation_stream",
+            "project_id",
+            "task",
+            "cutoff_cycle",
+            "route_role",
+            "stream_sequence",
+        ),
+        Index("ix_model_route_activation_artifact", "artifact_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    stream_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    task: Mapped[str] = mapped_column(String(16), nullable=False)
+    cutoff_cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    route_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("model_artifacts.id"), nullable=False
+    )
+    artifact_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    deployment_bundle_manifest_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    route_provenance_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    rollback_target_event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("model_route_activation_events.id")
+    )
+    previous_event_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    idempotency_key_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
 
 

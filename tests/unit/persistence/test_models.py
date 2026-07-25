@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, String, UniqueConstraint
+from sqlalchemy import JSON, CheckConstraint, String, UniqueConstraint
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateTable
 
@@ -20,6 +20,7 @@ EXPECTED_TABLES = {
     "provenance_records",
     "model_artifacts",
     "model_manifests",
+    "model_route_activation_events",
     "calibration_cohorts",
     "decision_policies",
     "approval_requests",
@@ -41,6 +42,23 @@ def _unique_column_sets(table_name: str) -> set[tuple[str, ...]]:
         tuple(column.name for column in constraint.columns)
         for constraint in table.constraints
         if isinstance(constraint, UniqueConstraint)
+    }
+
+
+def _named_check_constraints(table_name: str) -> dict[str, str]:
+    table = Base.metadata.tables[table_name]
+    return {
+        str(constraint.name): " ".join(str(constraint.sqltext).split())
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+
+def _named_index_column_sets(table_name: str) -> dict[str, tuple[str, ...]]:
+    table = Base.metadata.tables[table_name]
+    return {
+        index.name: tuple(column.name for column in index.columns)
+        for index in table.indexes
     }
 
 
@@ -74,6 +92,100 @@ def test_idempotency_and_evidence_constraints_are_declared() -> None:
         "model_name",
         "seed",
     ) in _unique_column_sets("experiment_runs")
+
+
+def test_model_route_activation_ledger_declares_stream_identity_and_indexes() -> None:
+    unique_columns = _unique_column_sets("model_route_activation_events")
+    assert (
+        "project_id",
+        "task",
+        "cutoff_cycle",
+        "route_role",
+        "stream_sequence",
+    ) in unique_columns
+    assert ("project_id", "idempotency_key_sha256") in unique_columns
+    assert ("event_sha256",) in unique_columns
+
+    indexes = _named_index_column_sets("model_route_activation_events")
+    assert indexes["ix_model_route_activation_stream"] == (
+        "project_id",
+        "task",
+        "cutoff_cycle",
+        "route_role",
+        "stream_sequence",
+    )
+    assert indexes["ix_model_route_activation_artifact"] == ("artifact_id",)
+
+
+def test_model_route_activation_ledger_declares_domain_checks() -> None:
+    checks = _named_check_constraints("model_route_activation_events")
+
+    assert checks["ck_model_route_activation_positive_coordinates"] == (
+        "stream_sequence > 0 AND cutoff_cycle > 0"
+    )
+    assert checks["ck_model_route_activation_decision_type"] == (
+        "decision_type IN ('ACTIVATE', 'ROLLBACK')"
+    )
+    assert checks["ck_model_route_activation_rollback_target"] == (
+        "(decision_type = 'ACTIVATE' AND rollback_target_event_id IS NULL) "
+        "OR (decision_type = 'ROLLBACK' AND rollback_target_event_id IS NOT NULL)"
+    )
+    assert checks["ck_model_route_activation_task_role"] == (
+        "(task = 'RUL' AND route_role IN ('DEFAULT', 'POINT_ACCURACY', 'COVERAGE')) "
+        "OR (task = 'SOH' AND route_role IN ('MEAN_ACCURACY', 'TAIL_EFFICIENCY'))"
+    )
+
+
+def test_model_route_activation_ledger_is_append_only_evidence() -> None:
+    events = Base.metadata.tables["model_route_activation_events"]
+
+    foreign_keys = {
+        column.name: {
+            (foreign_key.target_fullname, foreign_key.ondelete)
+            for foreign_key in column.foreign_keys
+        }
+        for column in events.columns
+        if column.foreign_keys
+    }
+    assert foreign_keys == {
+        "project_id": {("projects.id", None)},
+        "artifact_id": {("model_artifacts.id", None)},
+        "rollback_target_event_id": {
+            ("model_route_activation_events.id", None)
+        },
+        "actor_user_id": {("users.id", None)},
+    }
+    assert events.c.rollback_target_event_id.nullable is True
+
+    required_hash_columns = {
+        "artifact_sha256",
+        "manifest_sha256",
+        "deployment_bundle_manifest_sha256",
+        "route_provenance_sha256",
+        "previous_event_sha256",
+        "event_sha256",
+        "idempotency_key_sha256",
+        "request_sha256",
+    }
+    for column_name in required_hash_columns:
+        column = events.c[column_name]
+        assert isinstance(column.type, String)
+        assert column.type.length == 64
+        assert column.nullable is False
+
+    assert all(
+        column.nullable is False
+        for column in events.columns
+        if column.name != "rollback_target_event_id"
+    )
+    assert events.c.created_at.type.timezone is True
+    assert {
+        "updated_at",
+        "deleted_at",
+        "is_active",
+        "status",
+        "current_artifact_id",
+    }.isdisjoint(events.c.keys())
 
 
 def test_agent_run_control_plane_columns_are_strictly_declared() -> None:

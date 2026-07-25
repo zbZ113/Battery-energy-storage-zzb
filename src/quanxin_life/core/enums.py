@@ -31,6 +31,30 @@ class PredictionTarget(StrEnum):
     MATR_OFFICIAL_CYCLE_LIFE = "matr_official_cycle_life"
 
 
+class AdvancedModelTask(StrEnum):
+    """Governed Advanced deployment task families."""
+
+    RUL = "RUL"
+    SOH = "SOH"
+
+
+class AdvancedModelRouteRole(StrEnum):
+    """Approved semantic route roles from the frozen promotion report."""
+
+    DEFAULT = "DEFAULT"
+    POINT_ACCURACY = "POINT_ACCURACY"
+    COVERAGE = "COVERAGE"
+    MEAN_ACCURACY = "MEAN_ACCURACY"
+    TAIL_EFFICIENCY = "TAIL_EFFICIENCY"
+
+
+class ModelRouteDecisionType(StrEnum):
+    """Append-only manual decisions permitted in the activation ledger."""
+
+    ACTIVATE = "ACTIVATE"
+    ROLLBACK = "ROLLBACK"
+
+
 class AgentRole(StrEnum):
     """Bounded professional roles used by planners and the safe executor."""
 

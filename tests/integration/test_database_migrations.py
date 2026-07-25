@@ -34,6 +34,7 @@ EXPECTED_TABLES = {
     "feishu_event_receipts",
     "experiment_suites",
     "experiment_runs",
+    "model_route_activation_events",
 }
 
 
@@ -128,6 +129,38 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
                 "experiment_runs"
             )
         }
+        assert {
+            "project_id",
+            "stream_sequence",
+            "task",
+            "cutoff_cycle",
+            "route_role",
+            "decision_type",
+            "artifact_id",
+            "previous_event_sha256",
+            "event_sha256",
+            "idempotency_key_sha256",
+            "request_sha256",
+        } <= {
+            column["name"]
+            for column in upgraded_inspector.get_columns(
+                "model_route_activation_events"
+            )
+        }
+        activation_uniques = {
+            tuple(constraint["column_names"])
+            for constraint in upgraded_inspector.get_unique_constraints(
+                "model_route_activation_events"
+            )
+        }
+        assert (
+            "project_id",
+            "task",
+            "cutoff_cycle",
+            "route_role",
+            "stream_sequence",
+        ) in activation_uniques
+        assert ("project_id", "idempotency_key_sha256") in activation_uniques
         assert {
             "created_by_user_id",
             "object_size_bytes",

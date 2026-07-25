@@ -25,7 +25,11 @@ from quanxin_life.application.model_artifact_catalog import (
     VerifiedModelArtifactMetadata,
     VerifiedModelArtifactRegistration,
 )
-from quanxin_life.core import sha256_canonical
+from quanxin_life.core import (
+    AdvancedModelRouteRole,
+    AdvancedModelTask,
+    sha256_canonical,
+)
 from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.features.early_cycle_sequence import VARIABLE_NAMES
 
@@ -354,8 +358,8 @@ class AdvancedDeepModelArtifactCatalogSource:
                     reference_library_sha256=artifact.reference_library_sha256,
                     routes=tuple(
                         AdvancedModelRouteProvenance(
-                            task=item.task,
-                            role=item.role,
+                            task=AdvancedModelTask(item.task),
+                            role=AdvancedModelRouteRole(item.role),
                             family=item.family,
                             candidate_id=item.candidate_id,
                             cutoff_cycle=item.cutoff_cycle,
