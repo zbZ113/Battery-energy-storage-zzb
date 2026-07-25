@@ -10,12 +10,17 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, cast
 
 from pydantic import ValidationError
 
 from quanxin_life.core import ToolResult, sha256_canonical
 from quanxin_life.core.schemas import ContractModel
+
+if TYPE_CHECKING:
+    from quanxin_life.application.invocation_context import (
+        VerifiedProjectInvocationContext,
+    )
 
 
 class StandardToolName(StrEnum):
@@ -36,6 +41,13 @@ class StandardToolName(StrEnum):
     MAKE_BATCH_DECISION = "make_batch_decision"
     RETRIEVE_BATTERY_EVIDENCE = "retrieve_battery_evidence"
     GENERATE_AUDITED_REPORT = "generate_audited_report"
+
+
+class ToolExecutionScope(StrEnum):
+    """Trusted execution boundary required by one registered tool."""
+
+    GLOBAL = "GLOBAL"
+    PROJECT = "PROJECT"
 
 
 class ToolRegistryError(RuntimeError):
@@ -69,6 +81,15 @@ class ToolContractError(ToolRegistryError):
 InputContractT = TypeVar("InputContractT", bound=ContractModel)
 
 
+class ProjectInvocationContextValidator(Protocol):
+    """Live validator for issuer-bound project invocation contexts."""
+
+    def revalidate(
+        self,
+        context: VerifiedProjectInvocationContext,
+    ) -> VerifiedProjectInvocationContext: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ToolDefinition(Generic[InputContractT]):
     """A versioned, strongly typed domain tool implementation."""
@@ -76,7 +97,11 @@ class ToolDefinition(Generic[InputContractT]):
     tool_name: StandardToolName
     tool_version: str
     input_model: type[InputContractT]
-    executor: Callable[[InputContractT], ToolResult]
+    executor: Callable[[InputContractT], ToolResult] | None
+    execution_scope: ToolExecutionScope = ToolExecutionScope.GLOBAL
+    project_executor: (
+        Callable[[InputContractT, VerifiedProjectInvocationContext], ToolResult] | None
+    ) = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.tool_name, StandardToolName):
@@ -87,8 +112,18 @@ class ToolDefinition(Generic[InputContractT]):
             self.input_model, ContractModel
         ):
             raise TypeError("input_model must be a ContractModel type")
-        if not callable(self.executor):
-            raise TypeError("executor must be callable")
+        if not isinstance(self.execution_scope, ToolExecutionScope):
+            raise TypeError("execution_scope must be a ToolExecutionScope")
+        if self.execution_scope is ToolExecutionScope.GLOBAL:
+            if not callable(self.executor):
+                raise TypeError("executor must be callable for a global-scoped tool")
+            if self.project_executor is not None:
+                raise TypeError("global-scoped tool cannot define project_executor")
+        else:
+            if self.executor is not None:
+                raise TypeError("project-scoped tool cannot define a global executor")
+            if not callable(self.project_executor):
+                raise TypeError("project_executor must be callable for a project-scoped tool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,8 +152,17 @@ class ToolSchema(ContractModel):
 class ToolRegistry:
     """In-process registry shared by agents, APIs, MCP and user interfaces."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        project_context_validator: ProjectInvocationContextValidator | None = None,
+    ) -> None:
         self._tools: dict[StandardToolName, RegisteredTool[ContractModel]] = {}
+        self._project_context_validator = project_context_validator
+
+    @property
+    def project_context_validator(self) -> ProjectInvocationContextValidator | None:
+        return self._project_context_validator
 
     def register(
         self, definition: ToolDefinition[InputContractT]
@@ -134,8 +178,15 @@ class ToolRegistry:
         self._tools[definition.tool_name] = cast(RegisteredTool[ContractModel], registered)
         return registered
 
-    def list_schemas(self) -> tuple[ToolSchema, ...]:
-        """Return deterministic discovery metadata without executing any tool."""
+    def list_schemas(
+        self,
+        *,
+        execution_scope: ToolExecutionScope = ToolExecutionScope.GLOBAL,
+    ) -> tuple[ToolSchema, ...]:
+        """Return deterministic discovery metadata for one trusted execution scope."""
+
+        if not isinstance(execution_scope, ToolExecutionScope):
+            raise TypeError("execution_scope must be a ToolExecutionScope")
 
         return tuple(
             ToolSchema(
@@ -144,6 +195,7 @@ class ToolRegistry:
                 input_schema=registered.definition.input_model.model_json_schema(),
             )
             for _, registered in sorted(self._tools.items(), key=lambda item: item[0].value)
+            if registered.definition.execution_scope is execution_scope
         )
 
     def execute(
@@ -162,6 +214,12 @@ class ToolRegistry:
                 f"No implementation is registered for tool '{normalized_name.value}'"
             )
 
+        if registered.definition.execution_scope is ToolExecutionScope.PROJECT:
+            raise ToolAuthorizationError(
+                f"Tool '{normalized_name.value}' is project-scoped and requires "
+                "a verified project invocation context"
+            )
+
         if allowed_tool_names is not None and normalized_name not in self._normalize_allowlist(
             allowed_tool_names
         ):
@@ -169,19 +227,55 @@ class ToolRegistry:
                 f"Tool '{normalized_name.value}' is not permitted for this execution"
             )
 
-        validated_input = self._validate_input(registered, input_value)
-        expected_input_hash = sha256_canonical(validated_input.model_dump(mode="json"))
+        executor = registered.definition.executor
+        if executor is None:  # pragma: no cover - guarded by ToolDefinition
+            raise ToolAuthorizationError("global-scoped tool executor is unavailable")
+        return self._execute_registered(registered, input_value, executor)
 
-        try:
-            result = registered.definition.executor(validated_input)
-        except ToolRegistryError:
-            raise
-        except Exception as exc:
-            raise ToolExecutionError(
-                f"Tool '{normalized_name.value}' failed before returning a ToolResult"
-            ) from exc
+    def execute_in_project(
+        self,
+        tool_name: StandardToolName | str,
+        input_value: Mapping[str, Any] | ContractModel,
+        *,
+        context: VerifiedProjectInvocationContext,
+        allowed_tool_names: Collection[StandardToolName | str] | None = None,
+    ) -> ToolResult:
+        """Execute only a PROJECT tool with one verified immutable context."""
 
-        return self._validate_result(registered, result, expected_input_hash)
+        from quanxin_life.application.invocation_context import (
+            VerifiedProjectInvocationContext,
+        )
+
+        if not isinstance(context, VerifiedProjectInvocationContext):
+            raise ToolAuthorizationError("verified project invocation context is required")
+        if self._project_context_validator is None:
+            raise ToolAuthorizationError("project context validator is not configured")
+        verified_context = self._project_context_validator.revalidate(context)
+        normalized_name = self._coerce_tool_name(tool_name)
+        registered = self._tools.get(normalized_name)
+        if registered is None:
+            raise UnknownToolError(
+                f"No implementation is registered for tool '{normalized_name.value}'"
+            )
+        if registered.definition.execution_scope is ToolExecutionScope.GLOBAL:
+            raise ToolAuthorizationError(
+                f"Tool '{normalized_name.value}' is global-scoped and cannot execute "
+                "through a project invocation"
+            )
+        if allowed_tool_names is not None and normalized_name not in self._normalize_allowlist(
+            allowed_tool_names
+        ):
+            raise ToolAuthorizationError(
+                f"Tool '{normalized_name.value}' is not permitted for this execution"
+            )
+        executor = registered.definition.project_executor
+        if executor is None:  # pragma: no cover - guarded by ToolDefinition
+            raise ToolAuthorizationError("project-scoped tool executor is unavailable")
+        return self._execute_registered(
+            registered,
+            input_value,
+            lambda value: executor(value, verified_context),
+        )
 
     def execute_for_agent(
         self,
@@ -202,6 +296,26 @@ class ToolRegistry:
             input_value,
             allowed_tool_names=normalized_allowlist,
         )
+
+    def _execute_registered(
+        self,
+        registered: RegisteredTool[ContractModel],
+        input_value: Mapping[str, Any] | ContractModel,
+        executor: Callable[[ContractModel], ToolResult],
+    ) -> ToolResult:
+        validated_input = self._validate_input(registered, input_value)
+        expected_input_hash = sha256_canonical(validated_input.model_dump(mode="json"))
+
+        try:
+            result = executor(validated_input)
+        except ToolRegistryError:
+            raise
+        except Exception as exc:
+            raise ToolExecutionError(
+                f"Tool '{registered.tool_name.value}' failed before returning a ToolResult"
+            ) from exc
+
+        return self._validate_result(registered, result, expected_input_hash)
 
     @staticmethod
     def _coerce_tool_name(tool_name: StandardToolName | str) -> StandardToolName:

@@ -594,7 +594,7 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 
 ### Task 3：正式套件注册与 ToolResult
 
-状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本与 active-route resolver 子切片）**。
+状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本、active-route resolver 与可信 project-scoped invocation context 子切片）**。
 
 已生成：
 
@@ -648,6 +648,13 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 - 新增冻结的 `VerifiedActiveModelRoute` 契约与内部 resolver：只解析精确 `project + task + cutoff + role`，不自动 fallback；每次解析重新验证 ACTIVE/可见项目、trusted source、Catalog、事件快照和 route provenance；
 - Catalog 候选继续保持 `REGISTERED_CANDIDATE / NOT_ACTIVATED`，当前生效状态只由已验证决策账本派生；不新增保存 active artifact 的 current projection；
 - resolver 不开放新的 HTTP endpoint、不加载 safetensors、不构造模型、不读取指标、不生成 ToolResult；HTTP、推理加载和 ToolResult 留给下一子切片；
+- 新增服务端签发的冻结 `VerifiedProjectInvocationContext`：绑定 project、actor、session、role 和调用来源；签发与每次使用均检查 ACTIVE 用户、密码轮换状态、有效未撤销 session、ACTIVE/可见项目和当前成员关系；伪造签名、项目归档、成员撤销、用户禁用和 session 撤销均 fail closed；
+- Tool registry 新增显式 `GLOBAL / PROJECT` 执行域；PROJECT 工具不会出现在通用 HTTP/MCP discovery，也不能经通用 service、MCP 或普通 Agent 入口执行；project executor 只能接收经同一 context service 现场复验的上下文；
+- 新增 project-scoped `ProjectAuditLedger`，将 ToolResult 与 exact project、actor、session、tool 和 input hash 绑定；跨项目解析失败，未配置 project ledger 时在 executor 启动前失败；
+- 新增 `POST /v1/projects/{project_id}/tools/{tool_name}` 可信项目入口：principal 只来自认证 Cookie dependency，project 只来自 path，经 trusted Origin 和同一 context service 校验后进入 PROJECT registry 与 project audit ledger；请求 payload 不能注入 project、actor 或 route；
+- project HTTP 集成测试使用真实 `ToolInvocationService + PROJECT ToolDefinition + ProjectAuditLedger`，不以 fake service 或 GLOBAL tool 冒充项目链路；
+- 当前未注册任何生产 PROJECT 工具，未加载 Advanced safetensors，未生成 RUL/SOH/Conformal 数值；`ProjectAuditLedger` 仍为进程内边界，持久化 project result binding、`record_batch_bindings` 和真实数值工具接入留给后续子切片；
+- 尚无从持久化 AgentRun 派生并复验 context/allowlist 的可信 resolver，因此不开放 project-scoped Agent 执行入口；不得由 Agent payload 自报 project、actor、run 或 allowlist；
 - 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录，也未修改任何真实产品数据库。
 
 可复现源码入口：
@@ -658,12 +665,17 @@ scripts/register_advanced_deployment_bundles.py
 scripts/register_advanced_final_suite.py
 scripts/register_advanced_candidates_to_catalog.py
 src/quanxin_life/application/model_route_activation.py
+src/quanxin_life/application/invocation_context.py
+src/quanxin_life/audit/project_ledger.py
+src/quanxin_life/tools/registry.py
+src/quanxin_life/api/service.py
+src/quanxin_life/api/app.py
 src/quanxin_life/api/model_routes.py
 migrations/versions/0009_model_route_activation_ledger.py
 migrations/versions/0010_model_route_stream_heads.py
 ```
 
-Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 migration → 建立可信 project-scoped invocation context → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
+Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 migration → 新增 `record_batch_bindings` 与 project-scoped canonical upload/resolve → 持久化 project ToolResult binding → 从持久 AgentRun 派生可信 context/allowlist → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
 
 - 导入 A100 套件；
 - 注册候选模型；

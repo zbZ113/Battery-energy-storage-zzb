@@ -12,6 +12,13 @@ from quanxin_life.application.ingestion import (
     InMemoryVerifiedEarlyCycleBatchStore,
     VerifiedEarlyCycleBatchStore,
 )
+from quanxin_life.application.invocation_context import (
+    ProjectInvocationAccessError,
+    ProjectInvocationContextService,
+    ProjectInvocationNotFoundError,
+    ProjectInvocationSource,
+    VerifiedProjectInvocationContext,
+)
 from quanxin_life.application.lifetime_workflow import (
     LifetimeDecisionWorkflowRequest,
     LifetimeDecisionWorkflowResult,
@@ -54,10 +61,15 @@ __all__ = [
     "ModelArtifactManifest",
     "ModelArtifactPolicy",
     "ModelArtifactRegistry",
+    "ProjectInvocationAccessError",
+    "ProjectInvocationContextService",
+    "ProjectInvocationNotFoundError",
+    "ProjectInvocationSource",
     "VerifiedEarlyCycleBatchStore",
     "VerifiedModelArtifact",
     "VerifiedModelArtifactMetadata",
     "VerifiedModelArtifactRegistration",
+    "VerifiedProjectInvocationContext",
     "create_competition_tool_invocation_service",
     "create_competition_tool_registry",
     "load_verified_xgboost_life_predictor",

@@ -20,11 +20,17 @@ from quanxin_life.application.ingestion import (
     MAX_CANONICAL_CSV_BYTES,
     CanonicalCsvBatchRegistration,
 )
+from quanxin_life.application.invocation_context import (
+    ProjectInvocationAccessError,
+    ProjectInvocationContextService,
+    ProjectInvocationNotFoundError,
+)
 from quanxin_life.application.lifetime_workflow import (
     LifetimeDecisionWorkflowRequest,
     LifetimeDecisionWorkflowResult,
 )
 from quanxin_life.audit import AuditLedgerError
+from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import UserRole
 from quanxin_life.core.schemas import ContractModel
 from quanxin_life.tools import (
@@ -93,6 +99,7 @@ def create_fastapi_app(
     model_artifact_adapter: Any | None = None,
     model_route_adapter: Any | None = None,
     report_exporter: Any | None = None,
+    project_invocation_context_service: ProjectInvocationContextService | None = None,
 ) -> Any:
     """Create the HTTP adapter without duplicating domain-tool execution logic."""
     try:
@@ -105,6 +112,7 @@ def create_fastapi_app(
     ready_user_dependencies: list[Any] = []
     operator_dependencies: list[Any] = []
     admin_dependencies: list[Any] = []
+    operator_principal_dependency: Any | None = None
     if auth_adapter is not None:
         cors_module = importlib.import_module("fastapi.middleware.cors")
         app.add_middleware(
@@ -118,10 +126,12 @@ def create_fastapi_app(
         ready_user_dependencies = [
             fastapi_module.Depends(auth_adapter.require_ready_user)
         ]
+        operator_dependency = auth_adapter.require_roles(
+            {UserRole.ADMIN, UserRole.MEMBER}
+        )
+        operator_principal_dependency = fastapi_module.Depends(operator_dependency)
         operator_dependencies = [
-            fastapi_module.Depends(
-                auth_adapter.require_roles({UserRole.ADMIN, UserRole.MEMBER})
-            ),
+            operator_principal_dependency,
             fastapi_module.Depends(auth_adapter.require_trusted_origin),
         ]
         admin_dependencies = [
@@ -163,6 +173,21 @@ def create_fastapi_app(
         if auth_adapter is None:
             raise ValueError("model_route_adapter requires auth_adapter")
         app.include_router(model_route_adapter.router)
+    if project_invocation_context_service is not None and auth_adapter is None:
+        raise ValueError("project_invocation_context_service requires auth_adapter")
+    if project_invocation_context_service is not None:
+        if service.registry.project_context_validator is not project_invocation_context_service:
+            raise ValueError(
+                "project tool registry must use the HTTP project context service"
+            )
+        if (
+            service.project_audit_ledger is None
+            or service.project_audit_ledger.context_validator
+            is not project_invocation_context_service
+        ):
+            raise ValueError(
+                "project audit ledger must use the HTTP project context service"
+            )
     ready_route_options = (
         {"dependencies": ready_user_dependencies} if ready_user_dependencies else {}
     )
@@ -306,6 +331,68 @@ def create_fastapi_app(
     )
     async def invoke_tool(tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await execute_domain_tool(tool_name, payload)
+
+    if project_invocation_context_service is not None:
+        assert auth_adapter is not None
+        assert operator_principal_dependency is not None
+        project_operator_principal = operator_principal_dependency
+
+        @app.post(  # type: ignore[untyped-decorator]
+            "/v1/projects/{project_id}/tools/{tool_name}",
+            dependencies=[fastapi_module.Depends(auth_adapter.require_trusted_origin)],
+        )
+        async def invoke_project_tool(
+            project_id: str,
+            tool_name: str,
+            payload: dict[str, Any],
+            principal: AuthPrincipal = project_operator_principal,
+        ) -> dict[str, Any]:
+            try:
+                invocation = ToolInvocation(
+                    tool_name=StandardToolName(tool_name),
+                    input_value=payload,
+                )
+            except (TypeError, ValueError, ValidationError) as exc:
+                raise fastapi_module.HTTPException(status_code=422, detail=str(exc)) from exc
+            try:
+                context = project_invocation_context_service.resolve_http(
+                    principal,
+                    project_id,
+                )
+                result = service.invoke_in_project(invocation, context=context)
+            except ProjectInvocationAccessError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=403,
+                    detail="project_tool_access_denied",
+                ) from exc
+            except ProjectInvocationNotFoundError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=404,
+                    detail="project_scope_not_found",
+                ) from exc
+            except ToolInputValidationError as exc:
+                raise fastapi_module.HTTPException(status_code=422, detail=str(exc)) from exc
+            except UnknownToolError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=503,
+                    detail="requested tool is not available in this application context",
+                ) from exc
+            except AuditLedgerError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=503,
+                    detail="project audit storage is not available",
+                ) from exc
+            except ToolAuthorizationError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=403,
+                    detail="tool access denied",
+                ) from exc
+            except (ToolContractError, ToolExecutionError) as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=500,
+                    detail="domain tool execution failed",
+                ) from exc
+            return result.model_dump(mode="json")
 
     def domain_tool_endpoint(
         tool_name: StandardToolName,
