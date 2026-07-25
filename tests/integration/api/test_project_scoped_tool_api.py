@@ -16,7 +16,7 @@ from quanxin_life.application.invocation_context import (
     VerifiedProjectInvocationContext,
 )
 from quanxin_life.application.projects import ProjectService
-from quanxin_life.audit import ProjectAuditLedger
+from quanxin_life.audit import SqlProjectAuditLedger
 from quanxin_life.auth import (
     Argon2idPasswordHasher,
     AuthPrincipal,
@@ -58,7 +58,7 @@ class _ApiContext:
     owner_client: TestClient
     outsider_client: TestClient
     invocation_service: ToolInvocationService
-    project_audit_ledger: ProjectAuditLedger
+    project_audit_ledger: SqlProjectAuditLedger
     executor_calls: list[tuple[_ProjectToolInput, VerifiedProjectInvocationContext]]
     owner_user_id: str
     active_project_id: str
@@ -172,8 +172,10 @@ def _api_context(tmp_path: Path) -> _ApiContext:
             project_executor=executor,
         )
     )
-    project_audit_ledger = ProjectAuditLedger(
-        context_validator=project_context_service
+    project_audit_ledger = SqlProjectAuditLedger(
+        session_factory,
+        context_validator=project_context_service,
+        clock=lambda: NOW,
     )
     invocation_service = ToolInvocationService(
         registry=registry,

@@ -409,6 +409,58 @@ class ProvenanceRecordRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ProjectToolResultBindingRecord(Base):
+    __tablename__ = "project_tool_result_bindings"
+    __table_args__ = (
+        Index(
+            "ix_project_tool_result_bindings_project_created",
+            "project_id",
+            "created_at",
+        ),
+        CheckConstraint(
+            "binding_schema_version = 'project-tool-result-binding-v1'",
+            name="ck_project_tool_result_binding_schema_version",
+        ),
+        CheckConstraint(
+            "actor_role IN ('ADMIN', 'MEMBER', 'JUDGE')",
+            name="ck_project_tool_result_binding_actor_role",
+        ),
+        CheckConstraint(
+            "invocation_source IN ('HTTP', 'AGENT')",
+            name="ck_project_tool_result_binding_invocation_source",
+        ),
+        CheckConstraint(
+            "length(input_hash) = 64 AND length(result_sha256) = 64 AND "
+            "length(binding_sha256) = 64",
+            name="ck_project_tool_result_binding_hash_lengths",
+        ),
+    )
+
+    result_id: Mapped[str] = mapped_column(
+        ForeignKey("tool_results.id"), primary_key=True
+    )
+    binding_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id"), nullable=False
+    )
+    actor_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    actor_session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.id"), nullable=False
+    )
+    actor_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    invocation_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    agent_run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id"))
+    tool_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    binding_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
 class ModelArtifact(Base):
     __tablename__ = "model_artifacts"
     __table_args__ = (

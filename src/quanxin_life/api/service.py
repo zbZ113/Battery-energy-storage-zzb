@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import field_validator
 
-from quanxin_life.audit import AuditLedger, AuditLedgerError, ProjectAuditLedger
+from quanxin_life.audit import AuditLedger, AuditLedgerError, ProjectResultLedger
 from quanxin_life.core import ToolResult, sha256_canonical
 from quanxin_life.core.schemas import ContractModel, JsonMapping
 from quanxin_life.tools.bootstrap import create_available_tool_registry
@@ -47,7 +47,7 @@ class ToolInvocationService:
 
     registry: ToolRegistry
     audit_ledger: AuditLedger | None = None
-    project_audit_ledger: ProjectAuditLedger | None = None
+    project_audit_ledger: ProjectResultLedger | None = None
 
     def invoke(self, invocation: ToolInvocation) -> ToolResult:
         """Execute an external invocation through the shared typed registry."""

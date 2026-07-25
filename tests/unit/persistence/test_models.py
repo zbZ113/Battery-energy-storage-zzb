@@ -12,6 +12,7 @@ EXPECTED_TABLES = {
     "datasets",
     "dataset_files",
     "record_batch_bindings",
+    "project_tool_result_bindings",
     "cell_splits",
     "agent_runs",
     "agent_run_dispatches",

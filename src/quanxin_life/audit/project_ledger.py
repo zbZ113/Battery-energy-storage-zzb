@@ -23,6 +23,19 @@ class ProjectContextValidator(Protocol):
     ) -> VerifiedProjectInvocationContext: ...
 
 
+class ProjectResultLedger(Protocol):
+    """Shared boundary implemented by in-memory and persistent project ledgers."""
+
+    @property
+    def context_validator(self) -> ProjectContextValidator: ...
+
+    def register_result(
+        self,
+        context: VerifiedProjectInvocationContext,
+        result: ToolResult,
+    ) -> ToolResult: ...
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectToolResultBinding:
     """Non-numeric ownership metadata for one audited result."""
@@ -118,4 +131,8 @@ class ProjectAuditLedger:
         return self._context_validator.revalidate(context)
 
 
-__all__ = ["ProjectAuditLedger", "ProjectToolResultBinding"]
+__all__ = [
+    "ProjectAuditLedger",
+    "ProjectResultLedger",
+    "ProjectToolResultBinding",
+]
