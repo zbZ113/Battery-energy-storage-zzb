@@ -35,6 +35,7 @@ EXPECTED_TABLES = {
     "experiment_suites",
     "experiment_runs",
     "model_route_activation_events",
+    "model_route_activation_stream_heads",
 }
 
 
@@ -162,6 +163,21 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
         ) in activation_uniques
         assert ("project_id", "idempotency_key_sha256") in activation_uniques
         assert {
+            "project_id",
+            "task",
+            "cutoff_cycle",
+            "route_role",
+            "head_event_id",
+            "head_sequence",
+            "head_event_sha256",
+            "updated_at",
+        } == {
+            column["name"]
+            for column in upgraded_inspector.get_columns(
+                "model_route_activation_stream_heads"
+            )
+        }
+        assert {
             "created_by_user_id",
             "object_size_bytes",
             "object_content_type",
@@ -216,6 +232,93 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
 
         downgraded_tables = set(inspect(engine).get_table_names())
         assert EXPECTED_TABLES.isdisjoint(downgraded_tables)
+    finally:
+        engine.dispose()
+
+
+def test_route_stream_head_migration_backfills_existing_event(tmp_path: Path) -> None:
+    database_path = tmp_path / "route-head-backfill.sqlite3"
+    database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
+    config = _config(database_url)
+    command.upgrade(config, "0009")
+    engine = create_engine(database_url)
+    timestamp = "2026-07-25 00:00:00+00:00"
+    event_sha = "a" * 64
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO users "
+                    "(id, username, credential_hash, must_change_credential, role, "
+                    "status, created_at, updated_at) VALUES "
+                    "('route-user', 'route@example.test', 'hash', 0, 'ADMIN', "
+                    "'ACTIVE', :now, :now)"
+                ),
+                {"now": timestamp},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO projects "
+                    "(id, owner_user_id, name, status, created_at, updated_at) VALUES "
+                    "('route-project', 'route-user', 'route', 'ACTIVE', :now, :now)"
+                ),
+                {"now": timestamp},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO model_artifacts "
+                    "(id, project_id, artifact_format, object_uri, sha256, status, "
+                    "created_at) VALUES ('route-artifact', 'route-project', "
+                    "'safetensors-bundle', 'verified-model-artifact://legacy/bundle', "
+                    ":artifact_sha, 'VERIFIED', :now)"
+                ),
+                {"artifact_sha": "b" * 64, "now": timestamp},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO model_route_activation_events "
+                    "(id, project_id, stream_sequence, task, cutoff_cycle, route_role, "
+                    "decision_type, artifact_id, artifact_sha256, manifest_sha256, "
+                    "deployment_bundle_manifest_sha256, route_provenance_sha256, "
+                    "rollback_target_event_id, previous_event_sha256, event_sha256, "
+                    "actor_user_id, reason, idempotency_key_sha256, request_sha256, "
+                    "created_at) VALUES ('route-event', 'route-project', 1, 'RUL', 20, "
+                    "'DEFAULT', 'ACTIVATE', 'route-artifact', :artifact_sha, "
+                    ":manifest_sha, :bundle_sha, :route_sha, NULL, :previous_sha, "
+                    ":event_sha, 'route-user', 'approved', :key_sha, :request_sha, :now)"
+                ),
+                {
+                    "artifact_sha": "b" * 64,
+                    "manifest_sha": "c" * 64,
+                    "bundle_sha": "d" * 64,
+                    "route_sha": "e" * 64,
+                    "previous_sha": "0" * 64,
+                    "event_sha": event_sha,
+                    "key_sha": "f" * 64,
+                    "request_sha": "1" * 64,
+                    "now": timestamp,
+                },
+            )
+
+        command.upgrade(config, "0010")
+
+        with engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT project_id, task, cutoff_cycle, route_role, head_event_id, "
+                    "head_sequence, head_event_sha256 FROM "
+                    "model_route_activation_stream_heads"
+                )
+            ).one()
+        assert tuple(row) == (
+            "route-project",
+            "RUL",
+            20,
+            "DEFAULT",
+            "route-event",
+            1,
+            event_sha,
+        )
     finally:
         engine.dispose()
 

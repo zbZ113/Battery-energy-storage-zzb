@@ -468,6 +468,41 @@ class ModelRouteActivationEvent(Base):
     )
 
 
+class ModelRouteActivationStreamHead(Base):
+    __tablename__ = "model_route_activation_stream_heads"
+    __table_args__ = (
+        CheckConstraint(
+            "head_sequence > 0 AND cutoff_cycle > 0",
+            name="ck_model_route_stream_head_positive_coordinates",
+        ),
+        CheckConstraint(
+            "(task = 'RUL' AND route_role IN "
+            "('DEFAULT', 'POINT_ACCURACY', 'COVERAGE')) OR "
+            "(task = 'SOH' AND route_role IN "
+            "('MEAN_ACCURACY', 'TAIL_EFFICIENCY'))",
+            name="ck_model_route_stream_head_task_role",
+        ),
+    )
+
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id"),
+        primary_key=True,
+    )
+    task: Mapped[str] = mapped_column(String(16), primary_key=True)
+    cutoff_cycle: Mapped[int] = mapped_column(Integer, primary_key=True)
+    route_role: Mapped[str] = mapped_column(String(32), primary_key=True)
+    head_event_id: Mapped[str] = mapped_column(
+        ForeignKey("model_route_activation_events.id"),
+        nullable=False,
+    )
+    head_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_event_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+
 class ExperimentSuite(Base):
     __tablename__ = "experiment_suites"
     __table_args__ = (

@@ -21,6 +21,7 @@ EXPECTED_TABLES = {
     "model_artifacts",
     "model_manifests",
     "model_route_activation_events",
+    "model_route_activation_stream_heads",
     "calibration_cohorts",
     "decision_policies",
     "approval_requests",
@@ -186,6 +187,33 @@ def test_model_route_activation_ledger_is_append_only_evidence() -> None:
         "status",
         "current_artifact_id",
     }.isdisjoint(events.c.keys())
+
+
+def test_model_route_stream_head_is_only_an_integrity_anchor() -> None:
+    heads = Base.metadata.tables["model_route_activation_stream_heads"]
+
+    assert tuple(column.name for column in heads.primary_key.columns) == (
+        "project_id",
+        "task",
+        "cutoff_cycle",
+        "route_role",
+    )
+    assert {
+        foreign_key.target_fullname
+        for foreign_key in heads.c.head_event_id.foreign_keys
+    } == {"model_route_activation_events.id"}
+    assert heads.c.head_sequence.nullable is False
+    assert isinstance(heads.c.head_event_sha256.type, String)
+    assert heads.c.head_event_sha256.type.length == 64
+    assert heads.c.head_event_sha256.nullable is False
+    assert {
+        "artifact_id",
+        "artifact_sha256",
+        "manifest_sha256",
+        "model_version",
+        "status",
+        "current_artifact_id",
+    }.isdisjoint(heads.c.keys())
 
 
 def test_agent_run_control_plane_columns_are_strictly_declared() -> None:

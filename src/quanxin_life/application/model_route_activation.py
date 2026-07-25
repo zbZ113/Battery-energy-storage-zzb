@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from quanxin_life.application.model_artifact_catalog import (
+    AdvancedModelRouteProvenance,
     VerifiedModelArtifactCatalogSource,
     VerifiedModelArtifactMetadata,
     VerifiedModelArtifactRegistration,
@@ -34,6 +35,7 @@ from quanxin_life.persistence.models import (
     ModelArtifact,
     ModelManifest,
     ModelRouteActivationEvent,
+    ModelRouteActivationStreamHead,
     Project,
 )
 
@@ -124,8 +126,62 @@ class ModelRouteActivationEventRecord(ContractModel):
         return self
 
 
+class VerifiedActiveModelRoute(ContractModel):
+    """Freshly verified active candidate derived from one ledger stream head."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["verified-active-model-route-v1"] = (
+        "verified-active-model-route-v1"
+    )
+    project_id: str = Field(min_length=1)
+    task: AdvancedModelTask
+    cutoff_cycle: int = Field(gt=0)
+    role: AdvancedModelRouteRole
+    artifact: VerifiedModelArtifactRegistration
+    route_provenance: AdvancedModelRouteProvenance
+    route_provenance_sha256: Sha256
+    decision_event_id: str
+    decision_type: ModelRouteDecisionType
+    rollback_target_event_id: str | None = None
+    ledger_sequence_number: int = Field(gt=0)
+    ledger_head_sha256: Sha256
+
+    @field_validator("decision_event_id", "rollback_target_event_id")
+    @classmethod
+    def decision_identifiers_are_uuid_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return str(UUID(value))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("decision event identifiers must be UUID strings") from exc
+
+    @model_validator(mode="after")
+    def route_and_candidate_are_consistent(self) -> VerifiedActiveModelRoute:
+        _validate_route(self.task, self.role)
+        route = self.route_provenance
+        if (route.task, route.cutoff_cycle, route.role) != (
+            self.task,
+            self.cutoff_cycle,
+            self.role,
+        ):
+            raise ValueError("resolved route provenance does not match route coordinates")
+        provenance = self.artifact.metadata.advanced_provenance
+        if provenance is None or route not in provenance.routes:
+            raise ValueError("resolved artifact does not contain route provenance")
+        if self.route_provenance_sha256 != sha256_canonical(
+            route.model_dump(mode="json")
+        ):
+            raise ValueError("resolved route provenance SHA-256 does not match")
+        is_rollback = self.decision_type is ModelRouteDecisionType.ROLLBACK
+        if is_rollback != (self.rollback_target_event_id is not None):
+            raise ValueError("resolved rollback target does not match decision type")
+        return self
+
+
 class ModelRouteActivationService:
-    """Append and verify manual route decisions without deriving an active projection."""
+    """Append decisions and resolve routes without a materialized artifact projection."""
 
     def __init__(
         self,
@@ -220,6 +276,7 @@ class ModelRouteActivationService:
                 )
                 session.add(_event_row(event))
                 session.flush()
+                self._advance_stream_head(session, event, history)
                 return event
         except IntegrityError as exc:
             return self._recover_idempotent_conflict(
@@ -324,6 +381,7 @@ class ModelRouteActivationService:
                 )
                 session.add(_event_row(event))
                 session.flush()
+                self._advance_stream_head(session, event, history)
                 return event
         except IntegrityError as exc:
             return self._recover_idempotent_conflict(
@@ -359,6 +417,118 @@ class ModelRouteActivationService:
                 project_id=normalized_project,
                 route=route,
             )
+
+    def resolve_verified_active_model_route(
+        self,
+        principal: AuthPrincipal,
+        *,
+        project_id: str,
+        task: AdvancedModelTask,
+        cutoff_cycle: int,
+        role: AdvancedModelRouteRole,
+    ) -> VerifiedActiveModelRoute:
+        """Resolve one exact active route without loading model tensors."""
+
+        route = _route(task, cutoff_cycle, role)
+        normalized_project = _identifier(project_id, "project_id")
+        with session_scope(self._session_factory) as session:
+            project = session.scalar(
+                ProjectService.visible_projects_statement(principal).where(
+                    Project.id == normalized_project,
+                    Project.status == ProjectStatus.ACTIVE.value,
+                )
+            )
+            if project is None:
+                raise ModelRouteActivationNotFoundError("project was not found")
+            ledger = self._verified_project_ledger(session, normalized_project)
+            history = tuple(
+                event
+                for event in ledger
+                if (event.task, event.cutoff_cycle, event.role) == route
+            )
+            if not history:
+                raise ModelRouteActivationNotFoundError(
+                    "active model route was not found"
+                )
+            decision = history[-1]
+            source, _ = self._verified_candidate(
+                session,
+                project_id=normalized_project,
+                artifact_id=decision.artifact_id,
+                route=route,
+            )
+            provenance = source.metadata.advanced_provenance
+            if provenance is None:  # pragma: no cover - guarded by candidate validation
+                raise ModelRouteActivationStateError(
+                    "resolved Advanced candidate provenance is missing"
+                )
+            matching = next(
+                item
+                for item in provenance.routes
+                if (item.task, item.cutoff_cycle, item.role) == route
+            )
+            expected_snapshot = (
+                source.artifact_id,
+                source.artifact_sha256,
+                source.manifest_sha256,
+                provenance.deployment_bundle_manifest_sha256,
+                sha256_canonical(matching.model_dump(mode="json")),
+            )
+            if _candidate_snapshot(decision) != expected_snapshot:
+                raise ModelRouteActivationStateError(
+                    "active route event snapshot differs from verified source"
+                )
+            resolved = VerifiedActiveModelRoute(
+                project_id=normalized_project,
+                task=route[0],
+                cutoff_cycle=route[1],
+                role=route[2],
+                artifact=source,
+                route_provenance=matching,
+                route_provenance_sha256=decision.route_provenance_sha256,
+                decision_event_id=decision.event_id,
+                decision_type=decision.decision_type,
+                rollback_target_event_id=decision.rollback_target_event_id,
+                ledger_sequence_number=decision.sequence_number,
+                ledger_head_sha256=decision.event_sha256,
+            )
+
+        with session_scope(self._session_factory) as session:
+            self._active_project(session, principal, normalized_project)
+            ledger = self._verified_project_ledger(session, normalized_project)
+            latest = next(
+                (
+                    event
+                    for event in reversed(ledger)
+                    if (event.task, event.cutoff_cycle, event.role) == route
+                ),
+                None,
+            )
+            if (
+                latest is None
+                or latest.event_id != resolved.decision_event_id
+                or latest.event_sha256 != resolved.ledger_head_sha256
+                or latest.sequence_number != resolved.ledger_sequence_number
+            ):
+                raise ModelRouteActivationStateError(
+                    "active model route changed during resolution"
+                )
+            artifact = session.get(ModelArtifact, resolved.artifact.artifact_id)
+            manifest = session.scalar(
+                select(ModelManifest).where(
+                    ModelManifest.artifact_id == resolved.artifact.artifact_id
+                )
+            )
+            if (
+                artifact is None
+                or manifest is None
+                or artifact.project_id != normalized_project
+            ):
+                raise ModelRouteActivationStateError(
+                    "active model route candidate changed during resolution"
+                )
+            _assert_persisted_candidate(artifact, manifest, resolved.artifact)
+            return resolved
 
     def _verified_candidate(
         self,
@@ -415,6 +585,18 @@ class ModelRouteActivationService:
                 )
             )
         )
+        heads = {
+            (
+                AdvancedModelTask(row.task),
+                row.cutoff_cycle,
+                AdvancedModelRouteRole(row.route_role),
+            ): row
+            for row in session.scalars(
+                select(ModelRouteActivationStreamHead).where(
+                    ModelRouteActivationStreamHead.project_id == project_id
+                )
+            )
+        }
         by_route: dict[
             tuple[AdvancedModelTask, int, AdvancedModelRouteRole],
             list[ModelRouteActivationEventRecord],
@@ -426,8 +608,62 @@ class ModelRouteActivationService:
         verified: list[ModelRouteActivationEventRecord] = []
         for history in by_route.values():
             _verify_chain(history)
+            route = (history[0].task, history[0].cutoff_cycle, history[0].role)
+            head = heads.pop(route, None)
+            if head is None or not _head_matches(head, history[-1]):
+                raise ModelRouteActivationStateError(
+                    "model route activation stream head is invalid"
+                )
             verified.extend(history)
+        if heads:
+            raise ModelRouteActivationStateError(
+                "model route activation stream head has no event history"
+            )
         return tuple(verified)
+
+    @staticmethod
+    def _advance_stream_head(
+        session: Session,
+        event: ModelRouteActivationEventRecord,
+        history: Sequence[ModelRouteActivationEventRecord],
+    ) -> None:
+        head = session.get(
+            ModelRouteActivationStreamHead,
+            {
+                "project_id": event.project_id,
+                "task": event.task.value,
+                "cutoff_cycle": event.cutoff_cycle,
+                "route_role": event.role.value,
+            },
+        )
+        if not history:
+            if head is not None:
+                raise ModelRouteActivationStateError(
+                    "model route stream head exists without history"
+                )
+            session.add(
+                ModelRouteActivationStreamHead(
+                    project_id=event.project_id,
+                    task=event.task.value,
+                    cutoff_cycle=event.cutoff_cycle,
+                    route_role=event.role.value,
+                    head_event_id=event.event_id,
+                    head_sequence=event.sequence_number,
+                    head_event_sha256=event.event_sha256,
+                    updated_at=event.created_at,
+                )
+            )
+            session.flush()
+            return
+        if head is None or not _head_matches(head, history[-1]):
+            raise ModelRouteActivationStateError(
+                "model route stream head does not match prior history"
+            )
+        head.head_event_id = event.event_id
+        head.head_sequence = event.sequence_number
+        head.head_event_sha256 = event.event_sha256
+        head.updated_at = event.created_at
+        session.flush()
 
     def _verified_route_history(
         self,
@@ -686,6 +922,17 @@ def _candidate_snapshot(event: ModelRouteActivationEventRecord) -> tuple[str, ..
     )
 
 
+def _head_matches(
+    head: ModelRouteActivationStreamHead,
+    event: ModelRouteActivationEventRecord,
+) -> bool:
+    return (
+        head.head_event_id == event.event_id
+        and head.head_sequence == event.sequence_number
+        and head.head_event_sha256 == event.event_sha256
+    )
+
+
 def _assert_persisted_candidate(
     artifact: ModelArtifact,
     manifest: ModelManifest,
@@ -844,4 +1091,5 @@ __all__ = [
     "ModelRouteActivationNotFoundError",
     "ModelRouteActivationService",
     "ModelRouteActivationStateError",
+    "VerifiedActiveModelRoute",
 ]

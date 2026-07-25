@@ -594,7 +594,7 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 
 ### Task 3：正式套件注册与 ToolResult
 
-状态：**实施中（2026-07-25 完成部署制品、managed candidate registry 与追加式人工激活/回退账本子切片）**。
+状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本与 active-route resolver 子切片）**。
 
 已生成：
 
@@ -643,7 +643,11 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 - 激活前重新验证 managed Advanced 候选、Catalog 持久记录及完整 route provenance；并发唯一约束恢复也会重新验证 ACTIVE 项目、完整账本和可信候选，不凭数据库事件单独返回成功；
 - 回退只接受更早的有效 `ACTIVATE` 事件 ID，目标 artifact、哈希和 provenance 全部由服务端历史派生，调用方不能注入回退制品；回退通过追加 `ROLLBACK` 事件实现，不修改旧记录；
 - 新增管理 API `POST /v1/admin/model-routes/activations`、`POST /v1/admin/model-routes/rollbacks` 和只读历史 API `GET /v1/model-routes/activation-events`；写接口不接受调用方注入路径、状态或 provenance 哈希，competition HTTP 正式装配强制注入该 adapter；
-- Catalog 候选继续保持 `REGISTERED_CANDIDATE / NOT_ACTIVATED`，激活状态只存在于决策账本；本切片未实现 current projection 或 active-route resolver；
+- 新增 `model_route_activation_stream_heads` 完整性锚，只保存路由坐标、head event ID/sequence/hash，不保存 active artifact；`0010` 会为既有 `0009` 事件流按最高序号回填 head；
+- 激活/回退事件与 stream head 在同一事务提交；resolver 对项目内全部哈希链和 head 一致性做 fail-closed 校验，可阻断有 event 无 head、有 head 无 history、head 篡改及 SQLite 尾删除后的静默回退；
+- 新增冻结的 `VerifiedActiveModelRoute` 契约与内部 resolver：只解析精确 `project + task + cutoff + role`，不自动 fallback；每次解析重新验证 ACTIVE/可见项目、trusted source、Catalog、事件快照和 route provenance；
+- Catalog 候选继续保持 `REGISTERED_CANDIDATE / NOT_ACTIVATED`，当前生效状态只由已验证决策账本派生；不新增保存 active artifact 的 current projection；
+- resolver 不开放新的 HTTP endpoint、不加载 safetensors、不构造模型、不读取指标、不生成 ToolResult；HTTP、推理加载和 ToolResult 留给下一子切片；
 - 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录，也未修改任何真实产品数据库。
 
 可复现源码入口：
@@ -656,9 +660,10 @@ scripts/register_advanced_candidates_to_catalog.py
 src/quanxin_life/application/model_route_activation.py
 src/quanxin_life/api/model_routes.py
 migrations/versions/0009_model_route_activation_ledger.py
+migrations/versions/0010_model_route_stream_heads.py
 ```
 
-Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
+Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 migration → 建立可信 project-scoped invocation context → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
 
 - 导入 A100 套件；
 - 注册候选模型；
