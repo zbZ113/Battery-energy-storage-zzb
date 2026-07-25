@@ -8,18 +8,12 @@ usable by MCP, command-line and test callers.
 from __future__ import annotations
 
 import importlib
-from base64 import b64decode
-from binascii import Error as Base64DecodeError
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import Field, ValidationError
+from pydantic import ValidationError
 
 from quanxin_life.api.service import ToolInvocation, ToolInvocationService
-from quanxin_life.application.ingestion import (
-    MAX_CANONICAL_CSV_BYTES,
-    CanonicalCsvBatchRegistration,
-)
 from quanxin_life.application.invocation_context import (
     ProjectInvocationAccessError,
     ProjectInvocationContextService,
@@ -32,7 +26,6 @@ from quanxin_life.application.lifetime_workflow import (
 from quanxin_life.audit import AuditLedgerError
 from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import UserRole
-from quanxin_life.core.schemas import ContractModel
 from quanxin_life.tools import (
     StandardToolName,
     ToolAuthorizationError,
@@ -51,9 +44,6 @@ LifetimeWorkflowRunner = Callable[
     [ToolInvocationService, LifetimeDecisionWorkflowRequest],
     LifetimeDecisionWorkflowResult,
 ]
-CanonicalCsvRegistrar = Callable[[bytes, CanonicalCsvBatchRegistration], str]
-
-
 DOMAIN_ROUTE_TOOL_MAP: dict[str, StandardToolName] = {
     "/v1/analyses/quality": StandardToolName.VALIDATE_BATTERY_DATA,
     "/v1/predictions/lifetime": StandardToolName.PREDICT_CYCLE_LIFE,
@@ -65,32 +55,14 @@ DOMAIN_ROUTE_TOOL_MAP: dict[str, StandardToolName] = {
 }
 
 
-class CanonicalCsvUploadRequest(ContractModel):
-    """JSON-safe transport envelope for a canonical CSV byte payload."""
-
-    payload_base64: str = Field(min_length=1)
-    registration: CanonicalCsvBatchRegistration
-
-    def decoded_payload(self) -> bytes:
-        try:
-            payload = b64decode(self.payload_base64, validate=True)
-        except (Base64DecodeError, ValueError) as exc:
-            raise ValueError("payload_base64 must be valid base64") from exc
-        if not payload:
-            raise ValueError("decoded canonical CSV payload must not be empty")
-        if len(payload) > MAX_CANONICAL_CSV_BYTES:
-            raise ValueError("decoded canonical CSV payload exceeds the configured size limit")
-        return payload
-
-
 def create_fastapi_app(
     service: ToolInvocationService,
     *,
     lifetime_workflow_runner: LifetimeWorkflowRunner | None = None,
-    canonical_csv_registrar: CanonicalCsvRegistrar | None = None,
     auth_adapter: Any | None = None,
     project_adapter: Any | None = None,
     dataset_adapter: Any | None = None,
+    record_batch_adapter: Any | None = None,
     agent_run_adapter: Any | None = None,
     knowledge_adapter: Any | None = None,
     feishu_adapter: Any | None = None,
@@ -145,6 +117,10 @@ def create_fastapi_app(
         if auth_adapter is None:
             raise ValueError("dataset_adapter requires auth_adapter")
         app.include_router(dataset_adapter.router)
+    if record_batch_adapter is not None:
+        if auth_adapter is None:
+            raise ValueError("record_batch_adapter requires auth_adapter")
+        app.include_router(record_batch_adapter.router)
     if agent_run_adapter is not None:
         if auth_adapter is None:
             raise ValueError("agent_run_adapter requires auth_adapter")
@@ -426,30 +402,5 @@ def create_fastapi_app(
                     detail="lifetime decision workflow failed",
                 ) from exc
             return result.model_dump(mode="json")
-
-    if canonical_csv_registrar is not None:
-
-        @app.post(  # type: ignore[untyped-decorator]
-            "/v1/batches/canonical-csv", **operator_route_options
-        )
-        async def register_canonical_csv(payload: dict[str, Any]) -> dict[str, str]:
-            try:
-                request = CanonicalCsvUploadRequest.model_validate(payload)
-                raw_payload = request.decoded_payload()
-            except (TypeError, ValueError, ValidationError) as exc:
-                raise fastapi_module.HTTPException(status_code=422, detail=str(exc)) from exc
-            try:
-                record_batch_id = canonical_csv_registrar(
-                    raw_payload,
-                    request.registration,
-                )
-            except ValueError as exc:
-                raise fastapi_module.HTTPException(status_code=422, detail=str(exc)) from exc
-            if not isinstance(record_batch_id, str) or not record_batch_id.strip():
-                raise fastapi_module.HTTPException(
-                    status_code=500,
-                    detail="canonical CSV registrar returned an invalid record batch identifier",
-                )
-            return {"record_batch_id": record_batch_id}
 
     return app

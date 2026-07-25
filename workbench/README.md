@@ -45,7 +45,7 @@ $env:QUANXIN_TRUSTED_ORIGIN = "http://127.0.0.1:8501"
 - `POST /v1/auth/logout`
 - `GET /health`
 - `GET /v1/tools`
-- `POST /v1/batches/canonical-csv`
+- `POST /v1/datasets/{dataset_id}/batches/canonical-csv`
 - `POST /v1/workflows/lifetime-decision`
 - `POST /v1/agent/runs`
 - `GET /v1/agent/runs/{run_id}`

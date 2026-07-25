@@ -13,15 +13,13 @@ from quanxin_life.api.knowledge import KnowledgeHttpAdapter
 from quanxin_life.api.model_artifacts import ModelArtifactHttpAdapter
 from quanxin_life.api.model_routes import ModelRouteHttpAdapter
 from quanxin_life.api.projects import ProjectHttpAdapter
+from quanxin_life.api.record_batches import RecordBatchHttpAdapter
 from quanxin_life.api.service import ToolInvocationService
 from quanxin_life.application.assembly import (
     CompetitionToolDependencies,
     create_competition_tool_invocation_service,
 )
-from quanxin_life.application.ingestion import (
-    CanonicalCsvBatchRegistration,
-    VerifiedEarlyCycleBatchStore,
-)
+from quanxin_life.application.ingestion import VerifiedEarlyCycleBatchStore
 from quanxin_life.application.lifetime_workflow import (
     LifetimeDecisionWorkflowRequest,
     LifetimeDecisionWorkflowResult,
@@ -36,6 +34,7 @@ def create_competition_fastapi_app(
     auth_adapter: AuthHttpAdapter,
     project_adapter: ProjectHttpAdapter,
     dataset_adapter: DatasetHttpAdapter,
+    record_batch_adapter: RecordBatchHttpAdapter,
     experiment_adapter: ExperimentHttpAdapter,
     model_artifact_adapter: ModelArtifactHttpAdapter,
     model_route_adapter: ModelRouteHttpAdapter,
@@ -50,6 +49,10 @@ def create_competition_fastapi_app(
         raise ValueError("project_adapter is required for the competition HTTP application")
     if dataset_adapter is None:
         raise ValueError("dataset_adapter is required for the competition HTTP application")
+    if record_batch_adapter is None:
+        raise ValueError(
+            "record_batch_adapter is required for the competition HTTP application"
+        )
     if experiment_adapter is None:
         raise ValueError(
             "experiment_adapter is required for the competition HTTP application"
@@ -81,22 +84,13 @@ def create_competition_fastapi_app(
             batch_resolver=batch_store,
         )
 
-    def register_csv(
-        payload: bytes,
-        registration: CanonicalCsvBatchRegistration,
-    ) -> str:
-        return batch_store.register_canonical_csv(
-            payload,
-            registration=registration,
-        )
-
     return create_fastapi_app(
         service,
         lifetime_workflow_runner=run_workflow,
-        canonical_csv_registrar=register_csv,
         auth_adapter=auth_adapter,
         project_adapter=project_adapter,
         dataset_adapter=dataset_adapter,
+        record_batch_adapter=record_batch_adapter,
         experiment_adapter=experiment_adapter,
         model_artifact_adapter=model_artifact_adapter,
         model_route_adapter=model_route_adapter,

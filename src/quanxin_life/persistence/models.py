@@ -186,6 +186,60 @@ class DatasetFile(Base):
     )
 
 
+class RecordBatchBinding(Base):
+    __tablename__ = "record_batch_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id",
+            "content_batch_id",
+            name="uq_record_batch_binding_dataset_content",
+        ),
+        Index(
+            "ix_record_batch_bindings_project_dataset",
+            "project_id",
+            "dataset_id",
+        ),
+        CheckConstraint(
+            "cutoff_cycle > 0",
+            name="ck_record_batch_binding_cutoff_positive",
+        ),
+        CheckConstraint(
+            "length(source_manifest_sha256) = 64 AND "
+            "length(registration_sha256) = 64",
+            name="ck_record_batch_binding_sha256_lengths",
+        ),
+        CheckConstraint(
+            "binding_schema_version = 'record-batch-binding-v1'",
+            name="ck_record_batch_binding_schema_version",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    binding_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_batch_id: Mapped[str] = mapped_column(String(78), nullable=False)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False
+    )
+    source_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    registration_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_dataset_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    dataset_schema_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    cell_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    cutoff_cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    data_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    split_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_by_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
 class CellSplit(Base):
     __tablename__ = "cell_splits"
     __table_args__ = (

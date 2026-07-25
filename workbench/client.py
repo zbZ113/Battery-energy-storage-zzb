@@ -506,18 +506,22 @@ class ApiClient:
 
     def register_canonical_csv(
         self,
+        *,
+        dataset_id: str,
         payload: bytes,
         registration: Mapping[str, object],
     ) -> str:
-        """Upload bytes plus the public registration contract without deriving values."""
+        """Upload bytes into one server-resolved project dataset binding."""
 
+        normalized_dataset_id = _normalize_identifier(dataset_id, "dataset_id")
         if not payload:
             raise ValueError("canonical CSV payload must not be empty")
         if not registration:
             raise ValueError("canonical CSV registration must not be empty")
+        encoded_dataset_id = quote(normalized_dataset_id, safe="")
         body = self._request(
             "POST",
-            "/v1/batches/canonical-csv",
+            f"/v1/datasets/{encoded_dataset_id}/batches/canonical-csv",
             {
                 "payload_base64": b64encode(payload).decode("ascii"),
                 "registration": dict(registration),

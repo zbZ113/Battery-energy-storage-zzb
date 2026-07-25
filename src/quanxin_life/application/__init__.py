@@ -42,8 +42,17 @@ from quanxin_life.application.model_artifacts import (
     VerifiedModelArtifact,
     load_verified_xgboost_life_predictor,
 )
+from quanxin_life.application.record_batch_bindings import (
+    BINDING_SCHEMA_VERSION,
+    RecordBatchBindingAccessError,
+    RecordBatchBindingNotFoundError,
+    RecordBatchBindingRecord,
+    RecordBatchBindingService,
+    RecordBatchBindingStateError,
+)
 
 __all__ = [
+    "BINDING_SCHEMA_VERSION",
     "CANONICAL_CYCLE_CSV_FIELDS",
     "AdvancedModelArtifactCatalogBatchRecord",
     "ArtifactFormat",
@@ -65,6 +74,11 @@ __all__ = [
     "ProjectInvocationContextService",
     "ProjectInvocationNotFoundError",
     "ProjectInvocationSource",
+    "RecordBatchBindingAccessError",
+    "RecordBatchBindingNotFoundError",
+    "RecordBatchBindingRecord",
+    "RecordBatchBindingService",
+    "RecordBatchBindingStateError",
     "VerifiedEarlyCycleBatchStore",
     "VerifiedModelArtifact",
     "VerifiedModelArtifactMetadata",

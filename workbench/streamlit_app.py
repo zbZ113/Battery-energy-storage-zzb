@@ -188,6 +188,7 @@ def _render_service_and_data(st: Any, client: ApiClient) -> None:
         _show_action(st, lambda: st.json(list(client.list_tools())))
 
     st.subheader("注册可信 Canonical CSV 批次")
+    dataset_id = st.text_input("目标数据集 ID", placeholder="dataset_id")
     csv_file = st.file_uploader("Canonical CSV", type=("csv",))
     registration_text = st.text_area(
         "CanonicalCsvBatchRegistration JSON",
@@ -205,8 +206,9 @@ def _render_service_and_data(st: Any, client: ApiClient) -> None:
             if not isinstance(registration, dict):
                 raise ValueError("注册信息 JSON 顶层必须是对象")
             record_batch_id = client.register_canonical_csv(
-                csv_file.getvalue(),
-                registration,
+                dataset_id=dataset_id,
+                payload=csv_file.getvalue(),
+                registration=registration,
             )
             st.success("可信批次已注册")
             st.code(record_batch_id)

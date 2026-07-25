@@ -594,7 +594,7 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 
 ### Task 3：正式套件注册与 ToolResult
 
-状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本、active-route resolver 与可信 project-scoped invocation context 子切片）**。
+状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本、active-route resolver、可信 project-scoped invocation context 与 record batch binding 子切片）**。
 
 已生成：
 
@@ -653,7 +653,11 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 - 新增 project-scoped `ProjectAuditLedger`，将 ToolResult 与 exact project、actor、session、tool 和 input hash 绑定；跨项目解析失败，未配置 project ledger 时在 executor 启动前失败；
 - 新增 `POST /v1/projects/{project_id}/tools/{tool_name}` 可信项目入口：principal 只来自认证 Cookie dependency，project 只来自 path，经 trusted Origin 和同一 context service 校验后进入 PROJECT registry 与 project audit ledger；请求 payload 不能注入 project、actor 或 route；
 - project HTTP 集成测试使用真实 `ToolInvocationService + PROJECT ToolDefinition + ProjectAuditLedger`，不以 fake service 或 GLOBAL tool 冒充项目链路；
-- 当前未注册任何生产 PROJECT 工具，未加载 Advanced safetensors，未生成 RUL/SOH/Conformal 数值；`ProjectAuditLedger` 仍为进程内边界，持久化 project result binding、`record_batch_bindings` 和真实数值工具接入留给后续子切片；
+- 新增 `0011_record_batch_bindings` 迁移与追加式绑定模型：公开 `record_batch_id` 为服务端 UUID，同一 canonical CSV 内容可在不同项目复用内部 content ID，但每个 dataset 获得独立 opaque binding；公开响应不暴露内部 `content_batch_id`；
+- 新增唯一正式上传入口 `POST /v1/datasets/{dataset_id}/batches/canonical-csv`：只允许 ADMIN/MEMBER 向可见 ACTIVE 项目的 DRAFT dataset 上传，project 只从数据库中的 `Dataset.project_id` 派生，请求体不能注入 project、dataset、content ID 或服务端哈希；
+- record batch resolver 只接受经现场复验的 `VerifiedProjectInvocationContext`，只在同一 ACTIVE 项目及 FROZEN dataset 内解析；跨项目和不存在资源统一隐藏，dataset、binding、CSV、registration/provenance 或版本快照漂移均 fail closed；
+- 相同内容在共享内容存储中遇到不同 registration/provenance 时会在持久化 binding 前拒绝；旧 `/v1/batches/canonical-csv` 无作用域入口已从公开 FastAPI 工厂、Workbench 与运行文档移除，不能再返回内部 content ID；
+- 当前未注册任何生产 PROJECT 工具，未加载 Advanced safetensors，未生成 RUL/SOH/Conformal 数值；`ProjectAuditLedger` 仍为进程内边界，持久化 project result binding 和真实数值工具接入留给后续子切片；
 - 尚无从持久化 AgentRun 派生并复验 context/allowlist 的可信 resolver，因此不开放 project-scoped Agent 执行入口；不得由 Agent payload 自报 project、actor、run 或 allowlist；
 - 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录，也未修改任何真实产品数据库。
 
@@ -671,18 +675,21 @@ src/quanxin_life/tools/registry.py
 src/quanxin_life/api/service.py
 src/quanxin_life/api/app.py
 src/quanxin_life/api/model_routes.py
+src/quanxin_life/application/record_batch_bindings.py
+src/quanxin_life/api/record_batches.py
 migrations/versions/0009_model_route_activation_ledger.py
 migrations/versions/0010_model_route_stream_heads.py
+migrations/versions/0011_record_batch_bindings.py
 ```
 
-Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 migration → 新增 `record_batch_bindings` 与 project-scoped canonical upload/resolve → 持久化 project ToolResult binding → 从持久 AgentRun 派生可信 context/allowlist → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
+Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 migration → 持久化 project ToolResult binding → 从持久 AgentRun 派生可信 context/allowlist → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
 
 - 导入 A100 套件；
 - 注册候选模型；
 - 人工激活和回退；
 - 将真实模型结果接入 API、Agent、报告和 UI。
 
-以上三个任务完成后，进入 Next.js 门户和真实数据上传链。
+以上 Task 3 剩余子切片完成后，进入 Next.js 门户和真实数据上传链。
 
 ## 十三、Git 与制品规则
 

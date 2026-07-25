@@ -399,13 +399,17 @@ def test_canonical_csv_registration_sends_bytes_and_contract_metadata_only() -> 
     )
     registration = {"metadata": {"cell_id": "cell-1"}, "data_version": "v1"}
 
-    batch_id = client.register_canonical_csv(b"a,b\n1,2\n", registration)
+    batch_id = client.register_canonical_csv(
+        dataset_id="dataset/1",
+        payload=b"a,b\n1,2\n",
+        registration=registration,
+    )
 
     assert batch_id == "canonical-csv-batch"
     assert transport.calls == [
         (
             "POST",
-            "http://localhost:8000/v1/batches/canonical-csv",
+            "http://localhost:8000/v1/datasets/dataset%2F1/batches/canonical-csv",
             {
                 "payload_base64": "YSxiCjEsMgo=",
                 "registration": registration,

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import importlib.util
+import inspect
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -349,92 +349,9 @@ def test_fastapi_audit_read_endpoints_fail_closed(
     assert not_report.value.status_code == 404
 
 
-def test_fastapi_canonical_csv_endpoint_delegates_to_server_registrar(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_public_fastapi_factory_cannot_enable_unscoped_canonical_csv_upload() -> None:
     from quanxin_life.api.app import create_fastapi_app
-    from quanxin_life.api.service import ToolInvocationService
-    from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
-    from quanxin_life.core import CellMetadata, ProvenanceRecord, SourceKind, sha256_canonical
-    from quanxin_life.features import EarlyCycleFeatureConfig
 
-    monkeypatch.setattr(
-        "quanxin_life.api.app.importlib.import_module",
-        lambda _: _FakeFastApiModule,
-    )
-    payload = b"canonical-csv-fixture"
-    payload_sha = sha256_canonical("canonical-csv-fixture")
-    registration = CanonicalCsvBatchRegistration(
-        metadata=CellMetadata(
-            dataset_id="UPLOAD",
-            cell_id="cell-1",
-            chemistry="LFP/graphite",
-            nominal_capacity_ah=1.0,
-            source_uri="upload://cell-1.csv",
-            source_sha256=payload_sha,
-            schema_version="cycle-record-v1",
-        ),
-        feature_config=EarlyCycleFeatureConfig(cutoff_cycle=20),
-        data_version="upload-v1",
-        split_version="split-v1",
-        provenance=(
-            ProvenanceRecord(
-                source_id="upload-cell-1",
-                source_kind=SourceKind.OBSERVED,
-                uri="upload://cell-1.csv",
-                sha256=payload_sha,
-                description="API delegation fixture",
-                created_at=datetime(2026, 7, 15, tzinfo=UTC),
-            ),
-        ),
-    )
-    captured: list[tuple[bytes, CanonicalCsvBatchRegistration]] = []
-
-    def registrar(
-        raw_payload: bytes, metadata: CanonicalCsvBatchRegistration
-    ) -> str:
-        captured.append((raw_payload, metadata))
-        return "canonical-csv-batch-id"
-
-    app = create_fastapi_app(
-        ToolInvocationService(registry=_registry()),
-        canonical_csv_registrar=registrar,
-    )
-    endpoint = app.routes[("POST", "/v1/batches/canonical-csv")]
-
-    response = asyncio.run(
-        endpoint(
-            {
-                "payload_base64": base64.b64encode(payload).decode("ascii"),
-                "registration": registration.model_dump(mode="json"),
-            }
-        )
-    )
-
-    assert response == {"record_batch_id": "canonical-csv-batch-id"}
-    assert captured == [(payload, registration)]
-
-
-def test_fastapi_canonical_csv_endpoint_rejects_invalid_base64(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from quanxin_life.api.app import create_fastapi_app
-    from quanxin_life.api.service import ToolInvocationService
-
-    monkeypatch.setattr(
-        "quanxin_life.api.app.importlib.import_module",
-        lambda _: _FakeFastApiModule,
-    )
-    app = create_fastapi_app(
-        ToolInvocationService(registry=_registry()),
-        canonical_csv_registrar=lambda _payload, _registration: "unused",
-    )
-
-    with pytest.raises(_FakeHttpException) as invalid:
-        asyncio.run(
-            app.routes[("POST", "/v1/batches/canonical-csv")](
-                {"payload_base64": "not base64!", "registration": {}}
-            )
-        )
-
-    assert invalid.value.status_code == 422
+    assert "canonical_csv_registrar" not in inspect.signature(
+        create_fastapi_app
+    ).parameters

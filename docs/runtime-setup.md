@@ -130,6 +130,7 @@ app = create_competition_fastapi_app(
     auth_adapter=reviewed_auth_adapter,
     project_adapter=reviewed_project_adapter,
     dataset_adapter=reviewed_dataset_adapter,
+    record_batch_adapter=reviewed_record_batch_adapter,
     experiment_adapter=reviewed_experiment_adapter,
     agent_run_adapter=reviewed_agent_run_adapter,
     knowledge_adapter=reviewed_knowledge_adapter,
@@ -138,7 +139,7 @@ app = create_competition_fastapi_app(
 
 将这段装配代码放在使用方自己的运行模块后，可通过 Uvicorn 启动。完整 API 包括：
 
-- `POST /v1/batches/canonical-csv`
+- `POST /v1/datasets/{dataset_id}/batches/canonical-csv`
 - `POST /v1/workflows/lifetime-decision`
 - `POST /v1/experiments`
 - `GET /v1/experiments`
