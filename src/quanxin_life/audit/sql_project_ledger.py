@@ -23,6 +23,7 @@ from quanxin_life.core import ProvenanceRecord, SourceKind, ToolResult, UserRole
 from quanxin_life.core.hashing import sha256_canonical
 from quanxin_life.persistence.database import SessionFactory, session_scope
 from quanxin_life.persistence.models import (
+    AgentRun,
     ProjectToolResultBindingRecord,
     ProvenanceRecordRow,
     SessionRecord,
@@ -229,6 +230,17 @@ class SqlProjectAuditLedger:
                     raise AuditLedgerError(
                         "project ToolResult binding integrity check failed"
                     )
+                if binding.invocation_source == "AGENT":
+                    agent_run = session.get(AgentRun, binding.agent_run_id)
+                    if (
+                        agent_run is None
+                        or agent_run.project_id != binding.project_id
+                        or agent_run.created_by_user_id != binding.actor_user_id
+                        or agent_run.session_id != binding.actor_session_id
+                    ):
+                        raise AuditLedgerError(
+                            "project ToolResult binding integrity check failed"
+                        )
                 result = self._result_from_rows(result_row, provenance_rows)
                 self._verify_binding(binding, result)
                 detached_binding = ProjectToolResultBindingRecord(

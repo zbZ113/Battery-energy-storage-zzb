@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import (
+    AgentRunStatus,
     ProjectStatus,
     SessionStatus,
     UserRole,
@@ -21,7 +22,13 @@ from quanxin_life.core import (
     canonical_json_bytes,
 )
 from quanxin_life.persistence.database import SessionFactory, session_scope
-from quanxin_life.persistence.models import Project, SessionRecord, User, UserProjectRole
+from quanxin_life.persistence.models import (
+    AgentRun,
+    Project,
+    SessionRecord,
+    User,
+    UserProjectRole,
+)
 
 Clock = Callable[[], datetime]
 
@@ -122,6 +129,65 @@ class ProjectInvocationContextService:
         )
         return replace(unsigned, _authorization_tag=self._sign(unsigned))
 
+    def resolve_agent_run(self, run_id: str) -> VerifiedProjectInvocationContext:
+        """Issue an AGENT context only from one live persisted run identity."""
+
+        normalized_run_id = run_id.strip() if isinstance(run_id, str) else ""
+        if not normalized_run_id:
+            raise ProjectInvocationAccessError("persisted Agent run is required")
+        with session_scope(self._session_factory) as session:
+            run = session.get(AgentRun, normalized_run_id)
+            if (
+                run is None
+                or run.session_id is None
+                or not run.plan_hash
+                or run.status != AgentRunStatus.RUNNING.value
+            ):
+                raise ProjectInvocationAccessError(
+                    "persisted Agent run is no longer authorized"
+                )
+            user = session.get(User, run.created_by_user_id)
+            if user is None:
+                raise ProjectInvocationAccessError(
+                    "persisted Agent run is no longer authorized"
+                )
+            try:
+                actor_role = UserRole(user.role)
+            except ValueError as exc:
+                raise ProjectInvocationAccessError(
+                    "persisted Agent run is no longer authorized"
+                ) from exc
+            if actor_role not in {UserRole.ADMIN, UserRole.MEMBER}:
+                raise ProjectInvocationAccessError(
+                    "persisted Agent run is no longer authorized"
+                )
+            project_id = run.project_id
+            actor_user_id = run.created_by_user_id
+            actor_session_id = run.session_id
+
+        self._authorize_live_scope(
+            project_id=project_id,
+            actor_user_id=actor_user_id,
+            actor_session_id=actor_session_id,
+            actor_role=actor_role,
+        )
+        self._authorize_agent_run_binding(
+            run_id=normalized_run_id,
+            project_id=project_id,
+            actor_user_id=actor_user_id,
+            actor_session_id=actor_session_id,
+        )
+        unsigned = VerifiedProjectInvocationContext(
+            project_id=project_id,
+            actor_user_id=actor_user_id,
+            actor_session_id=actor_session_id,
+            actor_role=actor_role,
+            invocation_source=ProjectInvocationSource.AGENT,
+            agent_run_id=normalized_run_id,
+            _authorization_tag="0" * 64,
+        )
+        return replace(unsigned, _authorization_tag=self._sign(unsigned))
+
     def revalidate(
         self,
         context: VerifiedProjectInvocationContext,
@@ -138,7 +204,40 @@ class ProjectInvocationContextService:
             actor_session_id=context.actor_session_id,
             actor_role=context.actor_role,
         )
+        if context.invocation_source is ProjectInvocationSource.AGENT:
+            if context.agent_run_id is None:  # pragma: no cover - dataclass invariant
+                raise ProjectInvocationAccessError(
+                    "persisted Agent run is no longer authorized"
+                )
+            self._authorize_agent_run_binding(
+                run_id=context.agent_run_id,
+                project_id=context.project_id,
+                actor_user_id=context.actor_user_id,
+                actor_session_id=context.actor_session_id,
+            )
         return context
+
+    def _authorize_agent_run_binding(
+        self,
+        *,
+        run_id: str,
+        project_id: str,
+        actor_user_id: str,
+        actor_session_id: str,
+    ) -> None:
+        with session_scope(self._session_factory) as session:
+            run = session.get(AgentRun, run_id)
+            if (
+                run is None
+                or run.project_id != project_id
+                or run.created_by_user_id != actor_user_id
+                or run.session_id != actor_session_id
+                or run.status != AgentRunStatus.RUNNING.value
+                or not run.plan_hash
+            ):
+                raise ProjectInvocationAccessError(
+                    "persisted Agent run is no longer authorized"
+                )
 
     def _authorize_live_scope(
         self,

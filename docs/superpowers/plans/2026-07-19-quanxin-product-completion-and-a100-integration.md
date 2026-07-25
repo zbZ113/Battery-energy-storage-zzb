@@ -594,7 +594,7 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 
 ### Task 3：正式套件注册与 ToolResult
 
-状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本、active-route resolver、可信 project-scoped invocation context、record batch binding 与持久 project ToolResult binding 子切片）**。
+状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本、active-route resolver、可信 project-scoped invocation context、record batch binding、持久 project ToolResult binding 与持久 AgentRun per-step grant 子切片）**。
 
 已生成：
 
@@ -660,8 +660,13 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 - 新增 `0012_project_tool_result_bindings` 迁移与 `SqlProjectAuditLedger`：将原样 `ToolResult`、完整 provenance 和 project/actor/session/source/tool/input 绑定在同一数据库事务中追加写入，并保存 ToolResult SHA-256 与 binding SHA-256；
 - SQL project ledger 每次解析都重新复验可信 context，只允许同一 ACTIVE 项目读取；服务重启后可恢复，跨项目访问、session 撤销、ToolResult 内容篡改、provenance 篡改和 binding 篡改均 fail closed；
 - project HTTP 集成链已改用 SQL ledger，不再以进程内字典冒充正式 project result persistence；内存 `ProjectAuditLedger` 仅保留为轻量边界与单元测试实现；
-- 当前未注册任何生产 PROJECT 工具，未加载 Advanced safetensors，未生成 RUL/SOH/Conformal 数值；持久 AgentRun context/allowlist 和真实数值工具接入仍留给后续子切片；
-- 尚无从持久化 AgentRun 派生并复验 context/allowlist 的可信 resolver，因此不开放 project-scoped Agent 执行入口；不得由 Agent payload 自报 project、actor、run 或 allowlist；
+- 新增从持久 `AgentRun + dispatch + plan + AgentStep + claim + lease` 派生的服务端签名 `VerifiedAgentRunInvocationGrant`：冻结 exact step、plan hash 和单一 PROJECT tool allowlist，不接受 Agent payload 自报 project、actor、run 或 allowlist；
+- grant 每次使用前均重新复验 ACTIVE run/session/project/member、计划与持久 step 一致性、DISPATCHED 状态和当前 claim/lease；普通 project service 明确拒绝 AGENT context，防止绕过 per-step grant；
+- PROJECT executor 返回后、写 ledger 前再次复验同一 grant；若执行期间 claim 被替换、回收或过期，结果不得写入 `tool_results` 或 `project_tool_result_bindings`；
+- 当前 grant 入口是尚未装配 Worker 的授权基础设施：`0012` binding 仍只证明结果属于 AgentRun，尚不能持久证明 exact step、plan hash 与 claim；不得将其描述成完整 per-step 持久审计；
+- 接入 Worker 和真实 PROJECT 工具前必须先完成 `0013`：持久 binding 加入 exact `agent_step_id/step_id/plan_hash/claim` 证据，ledger 注册与 Worker step 完成同事务提交，并定义可验证的 fenced-claim 崩溃恢复协议；
+- 正式装配前还必须由服务端根据 plan/reference 编译并绑定 canonical input hash，并独立复验 step 依赖顺序与 `requires_approval` 的有效审批记录；当前 grant 仅绑定 singleton tool name，不能授权调用方替换输入；
+- 当前未注册任何生产 PROJECT 工具，未加载 Advanced safetensors，未生成 RUL/SOH/Conformal 数值，也未把新 grant 入口接入 Worker；真实数值工具接入仍留给上述硬门禁后的子切片；
 - 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录，也未修改任何真实产品数据库。
 
 可复现源码入口：
@@ -673,6 +678,7 @@ scripts/register_advanced_final_suite.py
 scripts/register_advanced_candidates_to_catalog.py
 src/quanxin_life/application/model_route_activation.py
 src/quanxin_life/application/invocation_context.py
+src/quanxin_life/application/agent_run_invocation.py
 src/quanxin_life/audit/project_ledger.py
 src/quanxin_life/tools/registry.py
 src/quanxin_life/api/service.py
@@ -687,7 +693,7 @@ migrations/versions/0011_record_batch_bindings.py
 migrations/versions/0012_project_tool_result_bindings.py
 ```
 
-Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 migration → 从持久 AgentRun 派生可信 context/allowlist → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
+Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 migration → `0013` exact-step 原子持久化与恢复协议 → 服务端冻结 step 输入、依赖和审批证据 → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
 
 - 导入 A100 套件；
 - 注册候选模型；
