@@ -243,9 +243,31 @@ class AdvancedDeepModelArtifactCatalogSource:
         registered = self._registry.resolve(self._registry_id)
         return tuple(sorted(item.artifact_id for item in registered.index.artifacts))
 
+    def resolve_all(self) -> tuple[VerifiedModelArtifactRegistration, ...]:
+        """Verify the managed bundle once and expose its exact 15 candidates."""
+
+        registered = self._registry.resolve(self._registry_id)
+        artifacts = sorted(
+            registered.index.artifacts,
+            key=lambda item: item.artifact_id,
+        )
+        if len(artifacts) != 15:
+            raise ValueError("Advanced deployment registry must contain 15 artifacts")
+        return tuple(
+            self._resolve_registered(registered, item.artifact_id)
+            for item in artifacts
+        )
+
     def resolve(self, artifact_id: str) -> VerifiedModelArtifactRegistration:
         normalized_id = _uuid(artifact_id)
         registered = self._registry.resolve(self._registry_id)
+        return self._resolve_registered(registered, normalized_id)
+
+    @staticmethod
+    def _resolve_registered(
+        registered: RegisteredAdvancedDeploymentBundle,
+        normalized_id: str,
+    ) -> VerifiedModelArtifactRegistration:
         artifact = next(
             (
                 item

@@ -631,6 +631,14 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 - 登记记录保留 21 个 `COMPLETED`、59 个 `EARLY_STOPPED`、A100/local input bundle 哈希差异、selection/config/source/data/split/feature 和 checkpoint SHA provenance；
 - importer 只解析 JSON、路径和 SHA，不读取测试指标选模、不调用 safetensors loader；外部字节篡改、矩阵替换、嵌套 junction、records junction swap 和并发首次登记均 fail closed；
 - 真实 Advanced Final 登记 `import_id=d201224870a28c655f66a810bc94f90ad28133e06f2fb4a7285195274c303d82`，`record_sha256=bb68dbe0dd2a80a6d40b0a5de059e186b61fb32331eec1f0d30ede680e5a8c7a`。
+- Advanced trusted Catalog source 新增一次复验、固定排序的 `resolve_all()`，完整 15 候选只触发一次 managed bundle 字节验证；
+- 产品 `ModelArtifactCatalogService` 新增 15 候选单事务批注册：先做全量 identity/digest/project/metadata 冲突检查，再一次 flush/commit；任一冲突、唯一约束或来源异常均整批回滚；
+- 带 Advanced provenance 的制品禁止再走 legacy 单 artifact 注册接口，防止管理员通过 1–14 次单项写入绕过原子批注册；
+- 相同并发批请求若发生唯一约束竞态，输家会在新事务中重新读取并核对全部 15 条；完全一致时幂等返回，任一缺失或上下文不同仍按冲突失败；
+- 批注册响应固定为 `REGISTERED_CANDIDATE / NOT_ACTIVATED`，不创建 active route、审批、回退或 ToolResult，也不复制 MAE/RMSE 等业务指标；
+- 新增 trusted-origin 管理 API `POST /v1/admin/model-artifacts/advanced-candidates`，请求只接受 `project_id`，不接受调用方注入 artifact IDs、路径、哈希或状态；
+- 产品 Catalog 本阶段不新增数据库 migration；现有 `model_artifacts/model_manifests` 已能保存 15 个候选及严格 provenance；
+- 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录。
 
 可复现源码入口：
 
@@ -638,9 +646,10 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 scripts/export_advanced_deployment_bundles.py
 scripts/register_advanced_deployment_bundles.py
 scripts/register_advanced_final_suite.py
+scripts/register_advanced_candidates_to_catalog.py
 ```
 
-Task 3 后续顺序：产品 Catalog 事务批量登记 → 追加式人工激活/回退账本 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
+Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册 → 追加式人工激活/回退账本 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
 
 - 导入 A100 套件；
 - 注册候选模型；

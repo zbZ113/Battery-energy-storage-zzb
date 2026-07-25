@@ -11,8 +11,9 @@ from datetime import UTC, datetime
 from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from quanxin_life.application.model_artifacts import ModelArtifactRegistry
 from quanxin_life.application.projects import ProjectService
@@ -256,6 +257,45 @@ class ModelArtifactCatalogRecord(ContractModel):
         return value.astimezone(UTC)
 
 
+class AdvancedModelArtifactCatalogBatchRecord(ContractModel):
+    """One exact inactive Advanced candidate batch registered to a project."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["advanced-model-artifact-catalog-batch-v1"] = (
+        "advanced-model-artifact-catalog-batch-v1"
+    )
+    project_id: str = Field(min_length=1)
+    deployment_bundle_manifest_sha256: Sha256
+    lifecycle_status: Literal["REGISTERED_CANDIDATE"] = "REGISTERED_CANDIDATE"
+    activation_status: Literal["NOT_ACTIVATED"] = "NOT_ACTIVATED"
+    artifact_count: Literal[15] = 15
+    artifacts: tuple[ModelArtifactCatalogRecord, ...] = Field(
+        min_length=15,
+        max_length=15,
+    )
+
+    @model_validator(mode="after")
+    def artifacts_are_one_sorted_inactive_batch(
+        self,
+    ) -> AdvancedModelArtifactCatalogBatchRecord:
+        artifact_ids = tuple(item.artifact_id for item in self.artifacts)
+        if artifact_ids != tuple(sorted(artifact_ids)) or len(set(artifact_ids)) != 15:
+            raise ValueError("Advanced catalog batch artifacts must be unique and sorted")
+        for artifact in self.artifacts:
+            provenance = artifact.advanced_provenance
+            if artifact.project_id != self.project_id or provenance is None:
+                raise ValueError("Advanced catalog batch project or provenance differs")
+            if (
+                provenance.deployment_bundle_manifest_sha256
+                != self.deployment_bundle_manifest_sha256
+                or provenance.lifecycle_status != self.lifecycle_status
+                or provenance.activation_status != self.activation_status
+            ):
+                raise ValueError("Advanced catalog batch lifecycle context differs")
+        return self
+
+
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("registered_at must include a timezone")
@@ -307,6 +347,25 @@ def _record(
     )
 
 
+def _advanced_batch_record(
+    *,
+    project_id: str,
+    records: list[ModelArtifactCatalogRecord],
+) -> AdvancedModelArtifactCatalogBatchRecord:
+    ordered = tuple(sorted(records, key=lambda item: item.artifact_id))
+    if not ordered or ordered[0].advanced_provenance is None:
+        raise ModelArtifactCatalogStateError(
+            "persisted Advanced model artifact provenance is missing"
+        )
+    return AdvancedModelArtifactCatalogBatchRecord(
+        project_id=project_id,
+        deployment_bundle_manifest_sha256=(
+            ordered[0].advanced_provenance.deployment_bundle_manifest_sha256
+        ),
+        artifacts=ordered,
+    )
+
+
 class ModelArtifactCatalogService:
     """Register verified identities and query them under project authorization."""
 
@@ -335,6 +394,10 @@ class ModelArtifactCatalogService:
         normalized_artifact_id = _identifier(artifact_id)
         timestamp = _utc(registered_at)
         source = self._load_source(normalized_artifact_id)
+        if source.metadata.advanced_provenance is not None:
+            raise ModelArtifactCatalogStateError(
+                "Advanced candidates must use atomic batch registration"
+            )
 
         with session_scope(self._session_factory) as session:
             project = session.scalar(
@@ -395,6 +458,120 @@ class ModelArtifactCatalogService:
             session.add_all((artifact, manifest))
             session.flush()
             return _record(artifact, manifest)
+
+    def register_advanced_candidates(
+        self,
+        principal: AuthPrincipal,
+        *,
+        project_id: str,
+        registered_at: datetime,
+    ) -> AdvancedModelArtifactCatalogBatchRecord:
+        """Register the exact trusted 15-artifact bundle in one SQL transaction."""
+
+        if principal.role is not UserRole.ADMIN:
+            raise ModelArtifactCatalogAccessError(
+                "only administrators may register model artifacts"
+            )
+        normalized_project_id = _identifier(project_id)
+        timestamp = _utc(registered_at)
+        sources = self._load_advanced_sources()
+        source_ids = tuple(item.artifact_id for item in sources)
+        source_digests = tuple(item.artifact_sha256 for item in sources)
+
+        try:
+            with session_scope(self._session_factory) as session:
+                project = session.scalar(
+                    ProjectService.visible_projects_statement(principal).where(
+                        Project.id == normalized_project_id,
+                        Project.status == ProjectStatus.ACTIVE.value,
+                    )
+                )
+                if project is None:
+                    raise ModelArtifactCatalogNotFoundError("project was not found")
+
+                persisted = tuple(
+                    session.scalars(
+                        select(ModelArtifact).where(
+                            (ModelArtifact.id.in_(source_ids))
+                            | (ModelArtifact.sha256.in_(source_digests))
+                        )
+                    )
+                )
+                by_id = {item.id: item for item in persisted}
+                by_digest = {item.sha256: item for item in persisted}
+                existing_ids = tuple(
+                    item.id for item in persisted if item.id in source_ids
+                )
+                manifests = {
+                    item.artifact_id: item
+                    for item in session.scalars(
+                        select(ModelManifest).where(
+                            ModelManifest.artifact_id.in_(existing_ids)
+                        )
+                    )
+                }
+                records: list[ModelArtifactCatalogRecord] = []
+                for source in sources:
+                    digest_owner = by_digest.get(source.artifact_sha256)
+                    if digest_owner is not None and digest_owner.id != source.artifact_id:
+                        raise ModelArtifactCatalogStateError(
+                            "verified artifact digest is already bound to another identity"
+                        )
+                    existing = by_id.get(source.artifact_id)
+                    if existing is not None:
+                        manifest = manifests.get(existing.id)
+                        if manifest is None:
+                            raise ModelArtifactCatalogStateError(
+                                "persisted model artifact manifest is missing"
+                            )
+                        self._assert_persisted_context(
+                            existing,
+                            manifest,
+                            project_id=normalized_project_id,
+                            source=source,
+                        )
+                        records.append(_record(existing, manifest))
+                        continue
+
+                    artifact = ModelArtifact(
+                        id=source.artifact_id,
+                        project_id=normalized_project_id,
+                        artifact_format=source.artifact_format,
+                        object_uri=source.object_uri,
+                        sha256=source.artifact_sha256,
+                        status="VERIFIED",
+                        created_at=timestamp,
+                    )
+                    manifest = ModelManifest(
+                        id=str(uuid4()),
+                        artifact_id=source.artifact_id,
+                        model_version=source.model_version,
+                        manifest_uri=source.manifest_uri,
+                        manifest_sha256=source.manifest_sha256,
+                        metadata_json=source.metadata.model_dump(mode="json"),
+                        created_at=timestamp,
+                    )
+                    session.add_all((artifact, manifest))
+                    records.append(_record(artifact, manifest))
+                session.flush()
+                return _advanced_batch_record(
+                    project_id=normalized_project_id,
+                    records=records,
+                )
+        except IntegrityError:
+            try:
+                return self._resolve_persisted_advanced_batch(
+                    principal,
+                    project_id=normalized_project_id,
+                    sources=sources,
+                )
+            except (
+                ModelArtifactCatalogNotFoundError,
+                ModelArtifactCatalogStateError,
+            ) as recovery_error:
+                raise ModelArtifactCatalogStateError(
+                    "concurrent Advanced artifact registration conflicted"
+                ) from recovery_error
 
     def list_artifacts(
         self,
@@ -487,6 +664,108 @@ class ModelArtifactCatalogService:
             )
         return source
 
+    def _load_advanced_sources(
+        self,
+    ) -> tuple[VerifiedModelArtifactRegistration, ...]:
+        resolver = getattr(self._source, "resolve_all", None)
+        if not callable(resolver):
+            raise ModelArtifactCatalogSourceError(
+                "verified Advanced model artifact batch source is unavailable"
+            )
+        try:
+            raw = tuple(
+                VerifiedModelArtifactRegistration.model_validate(item)
+                for item in resolver()
+            )
+        except (AttributeError, KeyError, TypeError, ValidationError, ValueError) as exc:
+            raise ModelArtifactCatalogSourceError(
+                "verified Advanced model artifact batch source is unavailable"
+            ) from exc
+        sources = tuple(sorted(raw, key=lambda item: item.artifact_id))
+        if len(sources) != 15:
+            raise ModelArtifactCatalogSourceError(
+                "verified Advanced model artifact source must contain exactly 15 artifacts"
+            )
+        ids = {item.artifact_id for item in sources}
+        digests = {item.artifact_sha256 for item in sources}
+        provenance = tuple(item.metadata.advanced_provenance for item in sources)
+        if len(ids) != 15 or len(digests) != 15 or any(item is None for item in provenance):
+            raise ModelArtifactCatalogSourceError(
+                "verified Advanced model artifact source is duplicated or incomplete"
+            )
+        advanced = tuple(item for item in provenance if item is not None)
+        bundle_hashes = {
+            item.deployment_bundle_manifest_sha256 for item in advanced
+        }
+        route_keys = {
+            (route.task, route.cutoff_cycle, route.role)
+            for item in advanced
+            for route in item.routes
+        }
+        route_count = sum(len(item.routes) for item in advanced)
+        if (
+            len(bundle_hashes) != 1
+            or route_count != 15
+            or len(route_keys) != 15
+            or any(
+                item.lifecycle_status != "REGISTERED_CANDIDATE"
+                or item.activation_status != "NOT_ACTIVATED"
+                for item in advanced
+            )
+        ):
+            raise ModelArtifactCatalogSourceError(
+                "verified Advanced model artifact lifecycle matrix is invalid"
+            )
+        return sources
+
+    def _resolve_persisted_advanced_batch(
+        self,
+        principal: AuthPrincipal,
+        *,
+        project_id: str,
+        sources: tuple[VerifiedModelArtifactRegistration, ...],
+    ) -> AdvancedModelArtifactCatalogBatchRecord:
+        source_ids = tuple(item.artifact_id for item in sources)
+        with session_scope(self._session_factory) as session:
+            project = session.scalar(
+                ProjectService.visible_projects_statement(principal).where(
+                    Project.id == project_id,
+                    Project.status == ProjectStatus.ACTIVE.value,
+                )
+            )
+            if project is None:
+                raise ModelArtifactCatalogNotFoundError("project was not found")
+            artifacts = {
+                item.id: item
+                for item in session.scalars(
+                    select(ModelArtifact).where(ModelArtifact.id.in_(source_ids))
+                )
+            }
+            manifests = {
+                item.artifact_id: item
+                for item in session.scalars(
+                    select(ModelManifest).where(
+                        ModelManifest.artifact_id.in_(source_ids)
+                    )
+                )
+            }
+            if len(artifacts) != 15 or len(manifests) != 15:
+                raise ModelArtifactCatalogStateError(
+                    "concurrent Advanced artifact batch is incomplete"
+                )
+            records = []
+            for source in sources:
+                artifact = artifacts[source.artifact_id]
+                manifest = manifests[source.artifact_id]
+                self._assert_persisted_context(
+                    artifact,
+                    manifest,
+                    project_id=project_id,
+                    source=source,
+                )
+                records.append(_record(artifact, manifest))
+            return _advanced_batch_record(project_id=project_id, records=records)
+
     @staticmethod
     def _assert_persisted_context(
         artifact: ModelArtifact,
@@ -522,6 +801,7 @@ class ModelArtifactCatalogService:
 
 
 __all__ = [
+    "AdvancedModelArtifactCatalogBatchRecord",
     "AdvancedModelArtifactProvenance",
     "AdvancedModelRouteProvenance",
     "ClassicModelArtifactCatalogSource",

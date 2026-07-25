@@ -14,6 +14,7 @@ from quanxin_life.api.service import create_available_tool_invocation_service
 from quanxin_life.application.model_artifact_catalog import (
     ClassicModelArtifactCatalogSource,
     ModelArtifactCatalogService,
+    VerifiedModelArtifactCatalogSource,
 )
 from quanxin_life.application.model_artifacts import (
     ArtifactFormat,
@@ -31,6 +32,9 @@ from quanxin_life.core import UserRole, UserStatus
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
 from quanxin_life.persistence.database import DatabaseConfig
 from quanxin_life.persistence.models import Project, User, UserProjectRole
+from tests.integration.application.test_model_artifact_catalog_service import (
+    _AdvancedBatchSource,
+)
 
 NOW = datetime(2026, 7, 18, 19, 0, tzinfo=UTC)
 ORIGIN = "https://app.example.test"
@@ -38,7 +42,11 @@ USERNAME = "artifact-admin@example.test"
 PASSWORD = "temporary artifact password 2026"
 
 
-def _client(tmp_path: Path) -> tuple[TestClient, str, str]:
+def _client(
+    tmp_path: Path,
+    *,
+    source: VerifiedModelArtifactCatalogSource | None = None,
+) -> tuple[TestClient, str, str]:
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
     artifact_path = artifact_root / "model.ubj"
@@ -117,7 +125,7 @@ def _client(tmp_path: Path) -> tuple[TestClient, str, str]:
     model_artifact_adapter = create_model_artifact_http_adapter(
         ModelArtifactCatalogService(
             session_factory,
-            source=ClassicModelArtifactCatalogSource(registry),
+            source=source or ClassicModelArtifactCatalogSource(registry),
         ),
         auth_adapter=auth_adapter,
     )
@@ -189,3 +197,58 @@ def test_unknown_verified_source_is_reported_without_catalog_mutation(
     assert response.status_code == 409
     assert response.json()["detail"] == "model_artifact_source_unavailable"
     assert client.get("/v1/model-artifacts").json() == []
+
+
+def test_advanced_batch_endpoint_accepts_only_project_scope_and_trusted_origin(
+    tmp_path: Path,
+) -> None:
+    client, project_id, artifact_id = _client(tmp_path)
+
+    blocked = client.post(
+        "/v1/admin/model-artifacts/advanced-candidates",
+        json={"project_id": project_id},
+    )
+    injected = client.post(
+        "/v1/admin/model-artifacts/advanced-candidates",
+        headers={"Origin": ORIGIN},
+        json={"project_id": project_id, "artifact_ids": [artifact_id]},
+    )
+    unavailable = client.post(
+        "/v1/admin/model-artifacts/advanced-candidates",
+        headers={"Origin": ORIGIN},
+        json={"project_id": project_id},
+    )
+
+    assert blocked.status_code == 403
+    assert injected.status_code == 422
+    assert unavailable.status_code == 409
+    assert unavailable.json()["detail"] == "model_artifact_source_unavailable"
+    assert client.get("/v1/model-artifacts").json() == []
+
+
+def test_advanced_batch_endpoint_returns_15_inactive_candidates_idempotently(
+    tmp_path: Path,
+) -> None:
+    source = _AdvancedBatchSource()
+    client, project_id, _ = _client(tmp_path, source=source)
+
+    first = client.post(
+        "/v1/admin/model-artifacts/advanced-candidates",
+        headers={"Origin": ORIGIN},
+        json={"project_id": project_id},
+    )
+    second = client.post(
+        "/v1/admin/model-artifacts/advanced-candidates",
+        headers={"Origin": ORIGIN},
+        json={"project_id": project_id},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert second.json() == first.json()
+    assert first.json()["artifact_count"] == 15
+    assert len(first.json()["artifacts"]) == 15
+    assert first.json()["lifecycle_status"] == "REGISTERED_CANDIDATE"
+    assert first.json()["activation_status"] == "NOT_ACTIVATED"
+    assert all(item["status"] == "VERIFIED" for item in first.json()["artifacts"])
+    assert source.resolve_all_calls == 2

@@ -20,6 +20,7 @@ from quanxin_life.application.lifetime_workflow import (
     run_lifetime_decision_workflow,
 )
 from quanxin_life.application.model_artifact_catalog import (
+    AdvancedModelArtifactCatalogBatchRecord,
     ClassicModelArtifactCatalogSource,
     ModelArtifactCatalogRecord,
     ModelArtifactCatalogService,
@@ -37,6 +38,7 @@ from quanxin_life.application.model_artifacts import (
 
 __all__ = [
     "CANONICAL_CYCLE_CSV_FIELDS",
+    "AdvancedModelArtifactCatalogBatchRecord",
     "ArtifactFormat",
     "ArtifactKind",
     "CanonicalCsvBatchRegistration",

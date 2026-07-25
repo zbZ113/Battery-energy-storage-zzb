@@ -9,6 +9,7 @@ from pydantic import Field
 
 from quanxin_life.api.auth import AuthHttpAdapter
 from quanxin_life.application.model_artifact_catalog import (
+    AdvancedModelArtifactCatalogBatchRecord,
     ModelArtifactCatalogAccessError,
     ModelArtifactCatalogNotFoundError,
     ModelArtifactCatalogRecord,
@@ -26,6 +27,12 @@ class RegisterModelArtifactRequest(ContractModel):
 
     project_id: str = Field(min_length=1, max_length=64)
     artifact_id: str = Field(min_length=1, max_length=64)
+
+
+class RegisterAdvancedModelCandidatesRequest(ContractModel):
+    """Project scope only; the exact 15 candidate identities remain server-side."""
+
+    project_id: str = Field(min_length=1, max_length=64)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +66,42 @@ def create_model_artifact_http_adapter(
                 principal,
                 project_id=payload.project_id,
                 artifact_id=payload.artifact_id,
+                registered_at=datetime.now(UTC),
+            )
+        except ModelArtifactCatalogAccessError as exc:
+            raise HTTPException(status_code=403, detail="role_not_allowed") from exc
+        except ModelArtifactCatalogNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="project_not_found") from exc
+        except ModelArtifactCatalogSourceError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="model_artifact_source_unavailable",
+            ) from exc
+        except ModelArtifactCatalogStateError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="model_artifact_catalog_conflict",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="invalid_model_artifact",
+            ) from exc
+
+    @router.post(
+        "/v1/admin/model-artifacts/advanced-candidates",
+        response_model=AdvancedModelArtifactCatalogBatchRecord,
+        status_code=201,
+        dependencies=[Depends(auth_adapter.require_trusted_origin)],
+    )
+    def register_advanced_model_candidates(
+        payload: RegisterAdvancedModelCandidatesRequest,
+        principal: Annotated[AuthPrincipal, Depends(admin)],
+    ) -> Any:
+        try:
+            return service.register_advanced_candidates(
+                principal,
+                project_id=payload.project_id,
                 registered_at=datetime.now(UTC),
             )
         except ModelArtifactCatalogAccessError as exc:

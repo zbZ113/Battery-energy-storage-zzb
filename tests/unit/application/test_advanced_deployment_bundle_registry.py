@@ -20,6 +20,7 @@ from quanxin_life.application.advanced_deployment_bundles import (
 from quanxin_life.application.advanced_deployment_registry import (
     AdvancedDeepModelArtifactCatalogSource,
     AdvancedDeploymentBundleRegistry,
+    RegisteredAdvancedDeploymentBundle,
 )
 from quanxin_life.application.deep_model_artifacts import (
     DeepArtifactFile,
@@ -263,6 +264,7 @@ def _build_bundle(root: Path) -> AdvancedDeploymentBundleIndex:
 
 def test_registers_inactive_bundle_atomically_and_resolves_catalog_candidates(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_root = tmp_path / "source"
     index = _build_bundle(source_root)
@@ -325,6 +327,22 @@ def test_registers_inactive_bundle_atomically_and_resolves_catalog_candidates(
     assert provenance.routes[0].checkpoint_model_sha256 == (
         route.checkpoint_model_sha256
     )
+
+    resolve_calls = 0
+    original_resolve = registry.resolve
+
+    def counted_resolve(registry_id: str) -> RegisteredAdvancedDeploymentBundle:
+        nonlocal resolve_calls
+        resolve_calls += 1
+        return original_resolve(registry_id)
+
+    monkeypatch.setattr(registry, "resolve", counted_resolve)
+    candidates = source.resolve_all()
+    assert len(candidates) == 15
+    assert tuple(item.artifact_id for item in candidates) == tuple(
+        sorted(item.artifact_id for item in index.artifacts)
+    )
+    assert resolve_calls == 1
 
 
 def test_registration_requires_external_manifest_trust_anchor(tmp_path: Path) -> None:
