@@ -601,6 +601,7 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 ```text
 server-results/advanced-final-20260723T015211Z/analysis/deployment-bundles/v1/
 server-results/advanced-final-20260723T015211Z/analysis/deployment-registry/v1/
+server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/v1/
 ```
 
 已完成内容：
@@ -624,15 +625,22 @@ server-results/advanced-final-20260723T015211Z/analysis/deployment-registry/v1/
 - 登记过程不调用 safetensors loader、不构造模型、不产生 active route、审批、回退或 ToolResult。
 - 真实 managed record `record_sha256=bacb8be304319e1815f1c44eabdff848f5ae58cd55cc86e8b18b05576ee1dc62`，连续登记保持同一时间与摘要；
 - Windows managed path 使用完整 SHA 校验身份、16 字符前缀落盘，避免长路径失效；`bundles/records/artifacts` junction、复制期 junction swap、naive UTC 时间和记录篡改均 fail closed。
+- 新增 Advanced Final 80-run 专用 importer，不复用只支持单一 RUL target 和三层目录的 legacy importer；
+- importer 以外部 transfer SHA、`output_index.json` 文件 SHA 和 Final output SHA 为信任锚，重新验证 2,654 个索引文件与 80 个 best checkpoint，但不复制 15 GB 结果树；
+- 80 个任务按 `4 family × 4 cutoff × 5 seed` 精确登记为 40 个 RUL 与 40 个 SOH，SOH 输出目标显式记录为 `soh_trajectory`，不伪装成 MATR 官方 cycle life；
+- 登记记录保留 21 个 `COMPLETED`、59 个 `EARLY_STOPPED`、A100/local input bundle 哈希差异、selection/config/source/data/split/feature 和 checkpoint SHA provenance；
+- importer 只解析 JSON、路径和 SHA，不读取测试指标选模、不调用 safetensors loader；外部字节篡改、矩阵替换、嵌套 junction、records junction swap 和并发首次登记均 fail closed；
+- 真实 Advanced Final 登记 `import_id=d201224870a28c655f66a810bc94f90ad28133e06f2fb4a7285195274c303d82`，`record_sha256=bb68dbe0dd2a80a6d40b0a5de059e186b61fb32331eec1f0d30ede680e5a8c7a`。
 
 可复现源码入口：
 
 ```text
 scripts/export_advanced_deployment_bundles.py
 scripts/register_advanced_deployment_bundles.py
+scripts/register_advanced_final_suite.py
 ```
 
-Task 3 后续顺序：Advanced Final 80-run 专用 importer 与产品 Catalog 事务批量登记 → 追加式人工激活/回退账本 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
+Task 3 后续顺序：产品 Catalog 事务批量登记 → 追加式人工激活/回退账本 → active-route resolver → RUL/SOH/Conformal ToolResult、API、Agent、报告和 UI 接入。
 
 - 导入 A100 套件；
 - 注册候选模型；
