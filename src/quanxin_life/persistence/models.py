@@ -326,6 +326,24 @@ class AgentStep(Base):
         UniqueConstraint("run_id", "step_id", name="uq_agent_step_run_step"),
         Index("ix_agent_steps_run_ordinal", "run_id", "ordinal"),
         Index("ix_agent_steps_status", "status"),
+        CheckConstraint(
+            "resolved_input_hash IS NULL OR length(resolved_input_hash) = 64",
+            name="ck_agent_step_resolved_input_hash_length",
+        ),
+        CheckConstraint(
+            "execution_snapshot_sha256 IS NULL OR "
+            "length(execution_snapshot_sha256) = 64",
+            name="ck_agent_step_execution_snapshot_sha256_length",
+        ),
+        CheckConstraint(
+            "dependency_evidence_sha256 IS NULL OR "
+            "length(dependency_evidence_sha256) = 64",
+            name="ck_agent_step_dependency_evidence_sha256_length",
+        ),
+        CheckConstraint(
+            "execution_claim_sha256 IS NULL OR length(execution_claim_sha256) = 64",
+            name="ck_agent_step_execution_claim_sha256_length",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -343,7 +361,12 @@ class AgentStep(Base):
     requires_human_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     claim_token: Mapped[str | None] = mapped_column(String(64))
+    execution_claim_sha256: Mapped[str | None] = mapped_column(String(64))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_input_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    resolved_input_hash: Mapped[str | None] = mapped_column(String(64))
+    execution_snapshot_sha256: Mapped[str | None] = mapped_column(String(64))
+    dependency_evidence_sha256: Mapped[str | None] = mapped_column(String(64))
     last_error_code: Mapped[str | None] = mapped_column(String(100))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -418,7 +441,8 @@ class ProjectToolResultBindingRecord(Base):
             "created_at",
         ),
         CheckConstraint(
-            "binding_schema_version = 'project-tool-result-binding-v1'",
+            "binding_schema_version IN "
+            "('project-tool-result-binding-v1', 'project-tool-result-binding-v2')",
             name="ck_project_tool_result_binding_schema_version",
         ),
         CheckConstraint(
@@ -434,6 +458,49 @@ class ProjectToolResultBindingRecord(Base):
             "length(binding_sha256) = 64",
             name="ck_project_tool_result_binding_hash_lengths",
         ),
+        CheckConstraint(
+            "(plan_hash IS NULL OR length(plan_hash) = 64) AND "
+            "(claim_token_sha256 IS NULL OR length(claim_token_sha256) = 64) AND "
+            "(execution_snapshot_sha256 IS NULL OR "
+            "length(execution_snapshot_sha256) = 64) AND "
+            "(dependency_evidence_sha256 IS NULL OR "
+            "length(dependency_evidence_sha256) = 64) AND "
+            "(approval_evidence_sha256 IS NULL OR "
+            "length(approval_evidence_sha256) = 64)",
+            name="ck_project_tool_result_binding_agent_hash_lengths",
+        ),
+        CheckConstraint(
+            "(binding_schema_version = 'project-tool-result-binding-v1' AND "
+            "invocation_source = 'HTTP' AND agent_run_id IS NULL AND "
+            "agent_step_id IS NULL AND step_id IS NULL AND plan_hash IS NULL AND "
+            "claim_token_sha256 IS NULL AND claim_attempt IS NULL AND "
+            "claim_lease_expires_at IS NULL AND execution_snapshot_sha256 IS NULL AND "
+            "dependency_evidence_sha256 IS NULL AND approval_required IS NULL AND "
+            "approval_request_id IS NULL AND approval_action_id IS NULL AND "
+            "approval_evidence_sha256 IS NULL) OR "
+            "(binding_schema_version = 'project-tool-result-binding-v2' AND "
+            "invocation_source = 'AGENT' AND agent_run_id IS NOT NULL AND "
+            "agent_step_id IS NOT NULL AND step_id IS NOT NULL AND "
+            "plan_hash IS NOT NULL AND claim_token_sha256 IS NOT NULL AND "
+            "claim_attempt IS NOT NULL AND claim_attempt > 0 AND "
+            "claim_lease_expires_at IS NOT NULL AND "
+            "execution_snapshot_sha256 IS NOT NULL AND "
+            "dependency_evidence_sha256 IS NOT NULL AND "
+            "approval_required IS NOT NULL AND approval_evidence_sha256 IS NOT NULL AND "
+            "((approval_required = 0 AND approval_request_id IS NULL AND "
+            "approval_action_id IS NULL) OR (approval_required = 1 AND "
+            "approval_request_id IS NOT NULL AND approval_action_id IS NOT NULL)))",
+            name="ck_project_tool_result_binding_exact_agent_contract",
+        ),
+        UniqueConstraint(
+            "agent_step_id", name="uq_project_tool_result_binding_agent_step"
+        ),
+        UniqueConstraint(
+            "agent_run_id",
+            "step_id",
+            name="uq_project_tool_result_binding_run_step",
+        ),
+        Index("ix_project_tool_result_bindings_agent_step", "agent_step_id"),
     )
 
     result_id: Mapped[str] = mapped_column(
@@ -452,6 +519,24 @@ class ProjectToolResultBindingRecord(Base):
     actor_role: Mapped[str] = mapped_column(String(32), nullable=False)
     invocation_source: Mapped[str] = mapped_column(String(32), nullable=False)
     agent_run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id"))
+    agent_step_id: Mapped[str | None] = mapped_column(ForeignKey("agent_steps.id"))
+    step_id: Mapped[str | None] = mapped_column(String(200))
+    plan_hash: Mapped[str | None] = mapped_column(String(64))
+    claim_token_sha256: Mapped[str | None] = mapped_column(String(64))
+    claim_attempt: Mapped[int | None] = mapped_column(Integer)
+    claim_lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    execution_snapshot_sha256: Mapped[str | None] = mapped_column(String(64))
+    dependency_evidence_sha256: Mapped[str | None] = mapped_column(String(64))
+    approval_required: Mapped[bool | None] = mapped_column(Boolean)
+    approval_request_id: Mapped[str | None] = mapped_column(
+        ForeignKey("approval_requests.id")
+    )
+    approval_action_id: Mapped[str | None] = mapped_column(
+        ForeignKey("approval_actions.id")
+    )
+    approval_evidence_sha256: Mapped[str | None] = mapped_column(String(64))
     tool_name: Mapped[str] = mapped_column(String(200), nullable=False)
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     result_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -746,12 +831,19 @@ class ApprovalRequestRow(Base):
     __table_args__ = (
         UniqueConstraint("run_id", "step_id", name="uq_approval_request_run_step"),
         Index("ix_approval_requests_run_status", "run_id", "status"),
+        CheckConstraint(
+            "execution_snapshot_sha256 IS NULL OR "
+            "length(execution_snapshot_sha256) = 64",
+            name="ck_approval_request_execution_snapshot_length",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), nullable=False)
     approval_kind: Mapped[str] = mapped_column(String(50), nullable=False)
     source_plan_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_step_id: Mapped[str | None] = mapped_column(ForeignKey("agent_steps.id"))
+    execution_snapshot_sha256: Mapped[str | None] = mapped_column(String(64))
     step_id: Mapped[str] = mapped_column(String(200), nullable=False)
     impact_scope: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(

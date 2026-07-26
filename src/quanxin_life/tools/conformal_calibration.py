@@ -15,7 +15,11 @@ from uuid import UUID, uuid4
 
 from pydantic import ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from quanxin_life.audit import AuditLedger
+from quanxin_life.audit.project_ledger import (
+    BoundProjectResultResolver,
+    ProjectResultLedger,
+    RegisteredResultResolver,
+)
 from quanxin_life.core import (
     LifePrediction,
     NormalizedConformalCalibration,
@@ -34,6 +38,7 @@ from quanxin_life.tools.registry import (
     RegisteredTool,
     StandardToolName,
     ToolDefinition,
+    ToolExecutionScope,
     ToolRegistry,
 )
 from quanxin_life.uncertainty import (
@@ -444,7 +449,7 @@ def _merge_provenance(*chains: Sequence[ProvenanceRecord]) -> list[ProvenanceRec
 def _issue_normalized_interval(
     input_value: CalibratePredictionIntervalToolInput,
     *,
-    audit_ledger: AuditLedger,
+    audit_ledger: RegisteredResultResolver,
     difficulty_scale_resolver: VerifiedPredictionDifficultyScaleResolver,
     clock: Clock,
 ) -> ToolResult:
@@ -520,7 +525,7 @@ def execute_calibrate_prediction_interval_tool(
     input_value: CalibratePredictionIntervalToolInput,
     *,
     resolver: VerifiedNormalizedCalibrationCohortResolver,
-    audit_ledger: AuditLedger | None = None,
+    audit_ledger: RegisteredResultResolver | None = None,
     difficulty_scale_resolver: VerifiedPredictionDifficultyScaleResolver | None = None,
     clock: Clock = _utc_now,
 ) -> ToolResult:
@@ -574,7 +579,7 @@ def register_calibrate_prediction_interval_tool(
     registry: ToolRegistry,
     *,
     resolver: VerifiedNormalizedCalibrationCohortResolver,
-    audit_ledger: AuditLedger | None = None,
+    audit_ledger: RegisteredResultResolver | None = None,
     difficulty_scale_resolver: VerifiedPredictionDifficultyScaleResolver | None = None,
     clock: Clock = _utc_now,
 ) -> RegisteredTool[CalibratePredictionIntervalToolInput]:
@@ -591,6 +596,39 @@ def register_calibrate_prediction_interval_tool(
                 audit_ledger=audit_ledger,
                 difficulty_scale_resolver=difficulty_scale_resolver,
                 clock=clock,
+            ),
+        )
+    )
+
+
+def register_project_calibrate_prediction_interval_tool(
+    registry: ToolRegistry,
+    *,
+    resolver: VerifiedNormalizedCalibrationCohortResolver,
+    project_audit_ledger: ProjectResultLedger,
+    difficulty_scale_resolver: VerifiedPredictionDifficultyScaleResolver | None = None,
+    clock: Clock = _utc_now,
+) -> RegisteredTool[CalibratePredictionIntervalToolInput]:
+    """Register Conformal calibration/issuance with project-bound upstream IDs."""
+
+    return registry.register(
+        ToolDefinition(
+            tool_name=StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+            tool_version=CONFORMAL_CALIBRATION_TOOL_VERSION,
+            input_model=CalibratePredictionIntervalToolInput,
+            executor=None,
+            execution_scope=ToolExecutionScope.PROJECT,
+            project_executor=lambda input_value, context: (
+                execute_calibrate_prediction_interval_tool(
+                    input_value,
+                    resolver=resolver,
+                    audit_ledger=BoundProjectResultResolver(
+                        project_audit_ledger,
+                        context,
+                    ),
+                    difficulty_scale_resolver=difficulty_scale_resolver,
+                    clock=clock,
+                )
             ),
         )
     )

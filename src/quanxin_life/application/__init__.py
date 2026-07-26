@@ -2,8 +2,11 @@
 
 from quanxin_life.application.assembly import (
     CompetitionToolDependencies,
+    ProjectPredictionToolDependencies,
     create_competition_tool_invocation_service,
     create_competition_tool_registry,
+    create_project_prediction_tool_invocation_service,
+    create_project_prediction_tool_registry,
 )
 from quanxin_life.application.ingestion import (
     CANONICAL_CYCLE_CSV_FIELDS,
@@ -74,6 +77,7 @@ __all__ = [
     "ProjectInvocationContextService",
     "ProjectInvocationNotFoundError",
     "ProjectInvocationSource",
+    "ProjectPredictionToolDependencies",
     "RecordBatchBindingAccessError",
     "RecordBatchBindingNotFoundError",
     "RecordBatchBindingRecord",
@@ -86,6 +90,8 @@ __all__ = [
     "VerifiedProjectInvocationContext",
     "create_competition_tool_invocation_service",
     "create_competition_tool_registry",
+    "create_project_prediction_tool_invocation_service",
+    "create_project_prediction_tool_registry",
     "load_verified_xgboost_life_predictor",
     "run_lifetime_decision_workflow",
 ]

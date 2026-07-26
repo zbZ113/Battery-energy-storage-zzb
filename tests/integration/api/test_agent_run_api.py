@@ -37,6 +37,7 @@ from quanxin_life.core import (
     ApprovalKind,
     UserRole,
     UserStatus,
+    sha256_canonical,
 )
 from quanxin_life.core.product import AgentIntent
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
@@ -53,6 +54,28 @@ ORIGIN = "https://app.example.test"
 USERNAME = "agent-user@example.test"
 PASSWORD = "agent API passphrase 2026"
 NOW = datetime(2026, 7, 16, 11, 0, tzinfo=UTC)
+
+
+def _freeze_approval_step(
+    session_factory: SessionFactory,
+    run_id: str,
+) -> None:
+    with session_factory.begin() as session:
+        step = session.query(AgentStep).filter_by(run_id=run_id, step_id="features").one()
+        resolved = {"record_batch_id": "approval-api-fixture"}
+        step.resolved_input_json = resolved
+        step.resolved_input_hash = sha256_canonical(resolved)
+        step.dependency_evidence_sha256 = sha256_canonical(
+            {"schema_version": "test-dependency-evidence-v1", "step_id": step.step_id}
+        )
+        step.execution_snapshot_sha256 = sha256_canonical(
+            {
+                "schema_version": "test-execution-snapshot-v1",
+                "agent_step_id": step.id,
+                "input_hash": step.resolved_input_hash,
+                "dependency_evidence_sha256": step.dependency_evidence_sha256,
+            }
+        )
 
 
 class FixedPlanner:
@@ -292,7 +315,7 @@ def test_cancelled_run_exposes_a_replayable_terminal_sse_timeline(
 def test_approval_and_rejection_routes_resume_or_stop_the_run(
     agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
 ) -> None:
-    client, queue, service, _ = agent_client
+    client, queue, service, session_factory = agent_client
     project_id, dataset_id = _create_scope(client)
 
     def create_run(key: str) -> dict[str, object]:
@@ -310,6 +333,7 @@ def test_approval_and_rejection_routes_resume_or_stop_the_run(
         return response.json()
 
     first = create_run("approve-api-key-0001")
+    _freeze_approval_step(session_factory, str(first["run_id"]))
     approval_now = datetime.now(UTC)
     first_approval = service.request_approval(
         str(first["run_id"]),
@@ -333,6 +357,7 @@ def test_approval_and_rejection_routes_resume_or_stop_the_run(
     assert len(queue.calls) == 2
 
     second = create_run("reject-api-key-0001")
+    _freeze_approval_step(session_factory, str(second["run_id"]))
     second_approval = service.request_approval(
         str(second["run_id"]),
         step_id="features",

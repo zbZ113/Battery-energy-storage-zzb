@@ -14,10 +14,16 @@ from quanxin_life.agents.supervisor import (
     SupervisorPlanningResult,
 )
 from quanxin_life.api.service import ToolInvocationService
+from quanxin_life.application.agent_run_invocation import (
+    PersistentAgentRunInvocationResolver,
+)
 from quanxin_life.application.agent_runs import AgentRunService
 from quanxin_life.application.datasets import DatasetService
+from quanxin_life.application.invocation_context import (
+    ProjectInvocationContextService,
+)
 from quanxin_life.application.projects import ProjectService
-from quanxin_life.audit import AuditLedger
+from quanxin_life.audit import AuditLedger, SqlProjectAuditLedger
 from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import (
     AgentFailurePolicy,
@@ -41,13 +47,20 @@ from quanxin_life.persistence import Base, create_engine_from_config, create_ses
 from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
 from quanxin_life.persistence.models import (
     AgentRun,
+    AgentRunDispatch,
     AgentStep,
+    ProjectToolResultBindingRecord,
     ProvenanceRecordRow,
     SessionRecord,
     ToolResultRecord,
     User,
 )
-from quanxin_life.tools import StandardToolName, ToolDefinition, ToolRegistry
+from quanxin_life.tools import (
+    StandardToolName,
+    ToolDefinition,
+    ToolExecutionScope,
+    ToolRegistry,
+)
 
 NOW = datetime(2026, 7, 16, 13, 0, tzinfo=UTC)
 
@@ -166,6 +179,54 @@ class _CountingTools:
         payload = value.model_dump(mode="json")
         self.calls.append((StandardToolName.PREDICT_CYCLE_LIFE.value, payload))
         return _tool_result(StandardToolName.PREDICT_CYCLE_LIFE, payload)
+
+    def project_service(
+        self,
+        session_factory: SessionFactory,
+    ) -> tuple[ToolInvocationService, PersistentAgentRunInvocationResolver]:
+        context_service = ProjectInvocationContextService(
+            session_factory,
+            clock=lambda: NOW,
+        )
+        resolver = PersistentAgentRunInvocationResolver(
+            session_factory,
+            context_service=context_service,
+            clock=lambda: NOW,
+        )
+        registry = ToolRegistry(project_context_validator=context_service)
+        registry.register(
+            ToolDefinition(
+                tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+                tool_version="worker-tool-v1",
+                input_model=_FeaturesInput,
+                executor=None,
+                execution_scope=ToolExecutionScope.PROJECT,
+                project_executor=lambda value, context: self._features(value),
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                tool_name=StandardToolName.PREDICT_CYCLE_LIFE,
+                tool_version="worker-tool-v1",
+                input_model=_PredictionInput,
+                executor=None,
+                execution_scope=ToolExecutionScope.PROJECT,
+                project_executor=lambda value, context: self._prediction(value),
+            )
+        )
+        ledger = SqlProjectAuditLedger(
+            session_factory,
+            context_validator=context_service,
+            clock=lambda: NOW,
+        )
+        return (
+            ToolInvocationService(
+                registry=registry,
+                project_audit_ledger=ledger,
+                agent_run_invocation_validator=resolver,
+            ),
+            resolver,
+        )
 
 
 def _tool_result(tool_name: StandardToolName, input_value: dict[str, object]) -> ToolResult:
@@ -297,6 +358,29 @@ def _worker(
     )
 
 
+def _project_worker(
+    run_service: AgentRunService,
+    session_factory: SessionFactory,
+    tools: _CountingTools,
+):
+    from quanxin_life.application.agent_run_execution import AgentRunExecutionWorker
+
+    with session_factory.begin() as session:
+        dispatch = session.scalar(select(AgentRunDispatch))
+        assert dispatch is not None
+        dispatch.status = "DISPATCHED"
+        dispatch.task_id = "project-worker-task"
+    service, resolver = tools.project_service(session_factory)
+    return AgentRunExecutionWorker(
+        session_factory,
+        run_service=run_service,
+        tool_service=service,
+        context_resolver=_DatasetArtifactResolver(),
+        agent_run_invocation_resolver=resolver,
+        clock=lambda: NOW,
+    )
+
+
 def test_worker_executes_each_step_once_and_resumes_duplicate_delivery_without_rerun(
     tmp_path: Path,
 ) -> None:
@@ -338,6 +422,75 @@ def test_worker_executes_each_step_once_and_resumes_duplicate_delivery_without_r
         "STEP_COMPLETED",
         "RUN_COMPLETED",
     ]
+
+
+def test_project_worker_atomically_binds_each_step_and_duplicate_delivery_does_not_rerun(
+    tmp_path: Path,
+) -> None:
+    run_service, member, session_factory, run_id, tools = _setup(tmp_path)
+    worker = _project_worker(run_service, session_factory, tools)
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+
+    completed = worker.execute(run_id=run_id, plan_hash=plan_hash)
+    repeated = worker.execute(run_id=run_id, plan_hash=plan_hash)
+
+    assert repeated == completed
+    assert completed.status is AgentRunStatus.COMPLETED
+    assert len(tools.calls) == 2
+    with session_factory() as session:
+        steps = tuple(
+            session.scalars(
+                select(AgentStep)
+                .where(AgentStep.run_id == run_id)
+                .order_by(AgentStep.ordinal)
+            )
+        )
+        bindings = tuple(
+            session.scalars(
+                select(ProjectToolResultBindingRecord)
+                .where(ProjectToolResultBindingRecord.agent_run_id == run_id)
+                .order_by(ProjectToolResultBindingRecord.step_id)
+            )
+        )
+    assert len(bindings) == len(steps) == 2
+    assert {binding.agent_step_id for binding in bindings} == {
+        step.id for step in steps
+    }
+    assert all(
+        binding.binding_schema_version == "project-tool-result-binding-v2"
+        for binding in bindings
+    )
+
+
+def test_project_worker_resumes_after_restart_from_atomically_committed_step(
+    tmp_path: Path,
+) -> None:
+    run_service, member, session_factory, run_id, tools = _setup(tmp_path)
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+
+    first = _project_worker(run_service, session_factory, tools).advance_once(
+        run_id=run_id,
+        plan_hash=plan_hash,
+    )
+    completed = _project_worker(run_service, session_factory, tools).execute(
+        run_id=run_id,
+        plan_hash=plan_hash,
+    )
+
+    assert first.status is AgentRunStatus.RUNNING
+    assert first.completed_step_ids == ("features",)
+    assert completed.status is AgentRunStatus.COMPLETED
+    assert completed.completed_step_ids == ("features", "predict")
+    assert len(tools.calls) == 2
+    with session_factory() as session:
+        bindings = tuple(
+            session.scalars(
+                select(ProjectToolResultBindingRecord).where(
+                    ProjectToolResultBindingRecord.agent_run_id == run_id
+                )
+            )
+        )
+    assert len(bindings) == 2
 
 
 def test_worker_can_advance_exactly_one_professional_agent_step_at_a_time(
@@ -486,6 +639,20 @@ def test_worker_pauses_for_approval_then_resumes_the_same_plan(tmp_path: Path) -
             select(ApprovalRequestRow).where(ApprovalRequestRow.run_id == run_id)
         )
         assert approval is not None
+        step = session.scalar(
+            select(AgentStep).where(
+                AgentStep.run_id == run_id,
+                AgentStep.step_id == "features",
+            )
+        )
+        assert step is not None
+        assert step.resolved_input_json == {
+            "record_batch_id": "verified-worker-record-batch-v1"
+        }
+        assert step.resolved_input_hash == sha256_canonical(step.resolved_input_json)
+        assert step.execution_snapshot_sha256 is not None
+        assert approval.agent_step_id == step.id
+        assert approval.execution_snapshot_sha256 == step.execution_snapshot_sha256
         approval_id = approval.id
     run_service.approve_run(
         member,

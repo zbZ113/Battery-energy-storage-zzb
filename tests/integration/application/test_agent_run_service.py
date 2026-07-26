@@ -32,14 +32,38 @@ from quanxin_life.core import (
     ApprovalStatus,
     UserRole,
     UserStatus,
+    sha256_canonical,
 )
 from quanxin_life.core.product import AgentIntent
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
 from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
-from quanxin_life.persistence.models import SessionRecord, User
+from quanxin_life.persistence.models import AgentStep, SessionRecord, User
 from quanxin_life.tools import StandardToolName
 
 NOW = datetime(2026, 7, 16, 10, 0, tzinfo=UTC)
+
+
+def _freeze_approval_step(
+    session_factory: SessionFactory,
+    run_id: str,
+    step_id: str,
+) -> None:
+    with session_factory.begin() as session:
+        step = session.query(AgentStep).filter_by(run_id=run_id, step_id=step_id).one()
+        resolved = {"record_batch_id": "approval-service-fixture"}
+        step.resolved_input_json = resolved
+        step.resolved_input_hash = sha256_canonical(resolved)
+        step.dependency_evidence_sha256 = sha256_canonical(
+            {"schema_version": "test-dependency-evidence-v1", "step_id": step_id}
+        )
+        step.execution_snapshot_sha256 = sha256_canonical(
+            {
+                "schema_version": "test-execution-snapshot-v1",
+                "agent_step_id": step.id,
+                "input_hash": step.resolved_input_hash,
+                "dependency_evidence_sha256": step.dependency_evidence_sha256,
+            }
+        )
 
 
 def _principal(user_id: str, role: UserRole) -> AuthPrincipal:
@@ -256,7 +280,7 @@ def test_reusing_an_idempotency_key_for_a_different_request_conflicts(
         SessionFactory,
     ],
 ) -> None:
-    service, _, projects, datasets, principals, _ = run_context
+    service, _, projects, datasets, principals, _session_factory = run_context
     member = principals[UserRole.MEMBER]
     project_id, dataset_id = _project_and_frozen_dataset(projects, datasets, member)
     service.create_run(
@@ -405,7 +429,7 @@ def test_approval_pauses_run_and_approve_or_reject_is_audited_and_idempotent(
         SessionFactory,
     ],
 ) -> None:
-    service, _, projects, datasets, principals, _ = run_context
+    service, _, projects, datasets, principals, session_factory = run_context
     member = principals[UserRole.MEMBER]
     project_id, dataset_id = _project_and_frozen_dataset(projects, datasets, member)
     created = service.create_run(
@@ -416,6 +440,7 @@ def test_approval_pauses_run_and_approve_or_reject_is_audited_and_idempotent(
         now=NOW,
     )
     service.dispatch_pending(created.run_id, queue=RecordingQueue(), now=NOW)
+    _freeze_approval_step(session_factory, created.run_id, "features")
 
     approval = service.request_approval(
         created.run_id,
@@ -445,6 +470,7 @@ def test_approval_pauses_run_and_approve_or_reject_is_audited_and_idempotent(
         now=NOW,
     ) == approved
 
+    _freeze_approval_step(session_factory, created.run_id, "features-retry")
     second = service.request_approval(
         created.run_id,
         step_id="features-retry",
@@ -479,7 +505,7 @@ def test_cancel_marks_pending_approval_cancelled_and_expired_approval_cannot_res
         SessionFactory,
     ],
 ) -> None:
-    service, _, projects, datasets, principals, _ = run_context
+    service, _, projects, datasets, principals, session_factory = run_context
     member = principals[UserRole.MEMBER]
     project_id, dataset_id = _project_and_frozen_dataset(projects, datasets, member)
     created = service.create_run(
@@ -489,6 +515,7 @@ def test_cancel_marks_pending_approval_cancelled_and_expired_approval_cannot_res
         available_tools=(StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,),
         now=NOW,
     )
+    _freeze_approval_step(session_factory, created.run_id, "features")
     approval = service.request_approval(
         created.run_id,
         step_id="features",
@@ -509,6 +536,7 @@ def test_cancel_marks_pending_approval_cancelled_and_expired_approval_cannot_res
         ApprovalStatus.EXPIRED
     )
 
+    _freeze_approval_step(session_factory, created.run_id, "features-retry")
     another = service.request_approval(
         created.run_id,
         step_id="features-retry",

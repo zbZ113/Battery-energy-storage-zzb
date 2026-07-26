@@ -126,6 +126,16 @@ class ToolInvocationService:
             raise ToolAuthorizationError(
                 f"Tool '{invocation.tool_name.value}' is not permitted for this Agent step"
             )
+        if (
+            self.registry.canonical_input_hash(
+                invocation.tool_name,
+                invocation.input_value,
+            )
+            != verified.input_hash
+        ):
+            raise ToolAuthorizationError(
+                "project Agent tool input does not match the frozen step grant"
+            )
         result = self.registry.execute_in_project(
             invocation.tool_name,
             invocation.input_value,
@@ -139,9 +149,10 @@ class ToolInvocationService:
             raise ToolAuthorizationError(
                 "project Agent invocation grant changed during execution"
             )
-        return self.project_audit_ledger.register_result(
-            verified_after_execution.project_context,
-            result,
+        return self.project_audit_ledger.commit_agent_step_result(
+            grant=verified_after_execution,
+            result=result,
+            grant_validator=self.agent_run_invocation_validator,
         )
 
     def _register_result(self, result: ToolResult) -> ToolResult:

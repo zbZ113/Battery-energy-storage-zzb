@@ -8,13 +8,17 @@ from uuid import uuid4
 
 import pytest
 from pydantic import Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from quanxin_life.agents.supervisor import (
     SupervisorPlanningRequest,
     SupervisorPlanningResult,
 )
 from quanxin_life.api.service import ToolInvocation, ToolInvocationService
+from quanxin_life.application.agent_run_invocation import (
+    PersistentAgentRunInvocationResolver,
+    VerifiedAgentRunInvocationGrant,
+)
 from quanxin_life.application.agent_runs import AgentRunService
 from quanxin_life.application.datasets import DatasetService
 from quanxin_life.application.invocation_context import (
@@ -22,7 +26,7 @@ from quanxin_life.application.invocation_context import (
     ProjectInvocationSource,
 )
 from quanxin_life.application.projects import ProjectService
-from quanxin_life.audit import AuditLedgerError
+from quanxin_life.audit import AuditLedgerError, ProjectAuditLedger
 from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import (
     AgentIntent,
@@ -30,6 +34,8 @@ from quanxin_life.core import (
     AgentPlanningMode,
     AgentPlanStep,
     AgentRole,
+    ApprovalKind,
+    ApprovalStatus,
     ProjectStatus,
     ProvenanceRecord,
     SessionStatus,
@@ -43,9 +49,12 @@ from quanxin_life.core.schemas import ContractModel
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
 from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
 from quanxin_life.persistence.models import (
+    AgentEvent,
     AgentRun,
     AgentRunDispatch,
     AgentStep,
+    ApprovalAction,
+    ApprovalRequestRow,
     Project,
     ProjectToolResultBindingRecord,
     SessionRecord,
@@ -62,6 +71,8 @@ from quanxin_life.tools import (
 
 NOW = datetime(2026, 7, 25, 9, 0, tzinfo=UTC)
 CLAIM_TOKEN = "c" * 64
+FROZEN_INPUT = {"record_batch_id": "opaque-record-batch"}
+FROZEN_INPUT_HASH = sha256_canonical(FROZEN_INPUT)
 
 
 class _ProjectInput(ContractModel):
@@ -94,6 +105,7 @@ class _Planner:
                     role=AgentRole.LIFETIME,
                     tool_name=StandardToolName.PREDICT_CYCLE_LIFE.value,
                     input_references={"record_batch_id": "intent.dataset_ids[0]"},
+                    requires_approval=True,
                 ),
                 AgentPlanStep(
                     step_id="predict-soh",
@@ -117,6 +129,8 @@ class _Fixture:
     step_id: str
     plan_hash: str
     claim_token: str
+    approval_request_id: str
+    approval_action_id: str
 
 
 @pytest.fixture
@@ -209,6 +223,60 @@ def invocation_fixture(tmp_path: Path) -> _Fixture:
         step.claim_token = CLAIM_TOKEN
         step.started_at = NOW
         step.lease_expires_at = NOW + timedelta(minutes=10)
+        step.resolved_input_json = FROZEN_INPUT
+        step.resolved_input_hash = FROZEN_INPUT_HASH
+        step.execution_claim_sha256 = sha256_canonical({"claim_token": CLAIM_TOKEN})
+        step_spec_sha256 = PersistentAgentRunInvocationResolver._step_spec_sha256(
+            step
+        )
+        dependency_evidence_sha256 = sha256_canonical(
+            {
+                "schema_version": "agent-step-dependency-evidence-v1",
+                "dependencies": [],
+            }
+        )
+        execution_snapshot_sha256 = sha256_canonical(
+            {
+                "schema_version": "agent-step-execution-snapshot-v1",
+                "agent_run_id": run.run_id,
+                "agent_step_row_id": step.id,
+                "step_id": step.step_id,
+                "plan_hash": run.plan.plan_hash,
+                "tool_name": step.tool_name,
+                "input_hash": FROZEN_INPUT_HASH,
+                "step_spec_sha256": step_spec_sha256,
+                "dependency_evidence_sha256": dependency_evidence_sha256,
+            }
+        )
+        step.dependency_evidence_sha256 = dependency_evidence_sha256
+        step.execution_snapshot_sha256 = execution_snapshot_sha256
+        approval_request_id = str(uuid4())
+        approval_action_id = str(uuid4())
+        session.add(
+            ApprovalRequestRow(
+                id=approval_request_id,
+                run_id=run.run_id,
+                approval_kind=ApprovalKind.FORMAL_DECISION.value,
+                source_plan_hash=run.plan.plan_hash,
+                agent_step_id=step.id,
+                execution_snapshot_sha256=execution_snapshot_sha256,
+                step_id=step.step_id,
+                impact_scope="Execute the frozen project Agent step",
+                status=ApprovalStatus.APPROVED.value,
+                created_at=NOW - timedelta(minutes=2),
+                expires_at=NOW + timedelta(hours=1),
+            )
+        )
+        session.add(
+            ApprovalAction(
+                id=approval_action_id,
+                approval_request_id=approval_request_id,
+                actor_user_id=principal.user_id,
+                action=ApprovalStatus.APPROVED.value,
+                reason="Reviewed frozen execution evidence",
+                acted_at=NOW - timedelta(minutes=1),
+            )
+        )
     return _Fixture(
         session_factory=session_factory,
         context_service=ProjectInvocationContextService(
@@ -221,6 +289,8 @@ def invocation_fixture(tmp_path: Path) -> _Fixture:
         step_id="predict-life",
         plan_hash=run.plan.plan_hash,
         claim_token=CLAIM_TOKEN,
+        approval_request_id=approval_request_id,
+        approval_action_id=approval_action_id,
     )
 
 
@@ -264,6 +334,97 @@ def test_grant_is_frozen_and_derived_from_persisted_run_plan_step_and_dispatch(
 
     with pytest.raises((AttributeError, TypeError)):
         grant.step_id = "predict-soh"
+
+
+def test_grant_binds_frozen_input_claim_dependencies_and_approval_evidence(
+    invocation_fixture: _Fixture,
+) -> None:
+    grant = _resolve(invocation_fixture)
+
+    assert grant.input_hash == FROZEN_INPUT_HASH
+    assert grant.claim_attempt == 1
+    assert grant.claim_lease_expires_at == NOW + timedelta(minutes=10)
+    assert len(grant.step_spec_sha256) == 64
+    assert len(grant.dependency_evidence_sha256) == 64
+    assert grant.approval_required is True
+    assert grant.approval_request_id == invocation_fixture.approval_request_id
+    assert grant.approval_action_id == invocation_fixture.approval_action_id
+    assert len(grant.approval_evidence_sha256) == 64
+
+
+def test_resolver_rejects_a_step_with_unfinished_dependencies(
+    invocation_fixture: _Fixture,
+) -> None:
+    with invocation_fixture.session_factory.begin() as session:
+        run = session.get(AgentRun, invocation_fixture.run_id)
+        dispatch = session.scalar(
+            select(AgentRunDispatch).where(
+                AgentRunDispatch.run_id == invocation_fixture.run_id
+            )
+        )
+        first = session.scalar(
+            select(AgentStep).where(
+                AgentStep.run_id == invocation_fixture.run_id,
+                AgentStep.step_id == "predict-life",
+            )
+        )
+        second = session.scalar(
+            select(AgentStep).where(
+                AgentStep.run_id == invocation_fixture.run_id,
+                AgentStep.step_id == "predict-soh",
+            )
+        )
+        assert run is not None and dispatch is not None
+        assert first is not None and second is not None
+        plan = AgentPlan.model_validate(run.plan_json)
+        changed_steps = tuple(
+            item.model_copy(update={"depends_on": ("predict-life",)})
+            if item.step_id == "predict-soh"
+            else item
+            for item in plan.steps
+        )
+        changed_plan = AgentPlan.build(
+            plan_version=plan.plan_version,
+            intent_id=plan.intent_id,
+            planning_mode=plan.planning_mode,
+            steps=changed_steps,
+            created_at=plan.created_at,
+        )
+        run.plan_json = changed_plan.model_dump(mode="json")
+        run.plan_hash = changed_plan.plan_hash
+        dispatch.plan_hash = changed_plan.plan_hash
+        first.status = "PENDING"
+        first.claim_token = None
+        first.lease_expires_at = None
+        second.depends_on_json = ["predict-life"]
+        second.status = "RUNNING"
+        second.attempts = 1
+        second.claim_token = CLAIM_TOKEN
+        second.lease_expires_at = NOW + timedelta(minutes=10)
+        second.resolved_input_json = FROZEN_INPUT
+        second.resolved_input_hash = FROZEN_INPUT_HASH
+        second.execution_claim_sha256 = sha256_canonical(
+            {"claim_token": CLAIM_TOKEN}
+        )
+
+    with pytest.raises(RuntimeError, match="depend"):
+        _resolver(invocation_fixture).resolve(
+            invocation_fixture.run_id,
+            "predict-soh",
+            CLAIM_TOKEN,
+        )
+
+
+def test_resolver_rejects_approved_status_without_approval_action(
+    invocation_fixture: _Fixture,
+) -> None:
+    with invocation_fixture.session_factory.begin() as session:
+        action = session.get(ApprovalAction, invocation_fixture.approval_action_id)
+        assert action is not None
+        session.delete(action)
+
+    with pytest.raises(RuntimeError, match="approval"):
+        _resolve(invocation_fixture)
 
 
 @pytest.mark.parametrize(
@@ -418,12 +579,27 @@ def _project_registry(
     return registry
 
 
-def _project_ledger(fixture: _Fixture):
+def _project_ledger(fixture: _Fixture, *, now: datetime = NOW):
     from quanxin_life.audit.sql_project_ledger import SqlProjectAuditLedger
 
     return SqlProjectAuditLedger(
         fixture.session_factory,
         context_validator=fixture.context_service,
+        clock=lambda: now,
+    )
+
+
+def _execute_granted_result(
+    fixture: _Fixture,
+    grant: VerifiedAgentRunInvocationGrant,
+    calls: list[StandardToolName],
+) -> ToolResult:
+    registry = _project_registry(fixture, calls)
+    return registry.execute_in_project(
+        StandardToolName.PREDICT_CYCLE_LIFE,
+        FROZEN_INPUT,
+        context=grant.project_context,
+        allowed_tool_names=grant.allowed_tool_names,
     )
 
 
@@ -476,6 +652,41 @@ def test_generic_project_service_rejects_agent_context_without_grant(
     assert calls == []
 
 
+def test_memory_project_ledger_rejects_direct_agent_result_registration(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    grant = _resolve(invocation_fixture)
+    result = _execute_granted_result(invocation_fixture, grant, calls)
+    ledger = ProjectAuditLedger(
+        context_validator=invocation_fixture.context_service,
+    )
+
+    with pytest.raises(AuditLedgerError, match="exact Agent step"):
+        ledger.register_result(grant.project_context, result)
+
+    with pytest.raises(ValueError, match="not registered"):
+        ledger.resolve_registered_result(grant.project_context, result.result_id)
+
+
+def test_sql_project_ledger_rejects_direct_agent_result_registration(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    grant = _resolve(invocation_fixture)
+    result = _execute_granted_result(invocation_fixture, grant, calls)
+
+    with pytest.raises(AuditLedgerError, match="exact Agent step"):
+        _project_ledger(invocation_fixture).register_result(
+            grant.project_context,
+            result,
+        )
+
+    with invocation_fixture.session_factory() as session:
+        assert list(session.scalars(select(ToolResultRecord))) == []
+        assert list(session.scalars(select(ProjectToolResultBindingRecord))) == []
+
+
 def test_project_agent_service_rejects_another_tool_before_executor(
     invocation_fixture: _Fixture,
 ) -> None:
@@ -492,6 +703,33 @@ def test_project_agent_service_rejects_another_tool_before_executor(
             ToolInvocation(
                 tool_name=StandardToolName.PREDICT_SOH_TRAJECTORY,
                 input_value={"record_batch_id": "opaque-record-batch"},
+            ),
+            grant=resolver.resolve(
+                invocation_fixture.run_id,
+                invocation_fixture.step_id,
+                invocation_fixture.claim_token,
+            ),
+        )
+
+    assert calls == []
+
+
+def test_project_agent_service_rejects_input_not_bound_to_grant_before_executor(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    resolver = _resolver(invocation_fixture)
+    service = ToolInvocationService(
+        registry=_project_registry(invocation_fixture, calls),
+        project_audit_ledger=_project_ledger(invocation_fixture),
+        agent_run_invocation_validator=resolver,
+    )
+
+    with pytest.raises(ToolAuthorizationError, match="input"):
+        service.invoke_for_project_agent(
+            ToolInvocation(
+                tool_name=StandardToolName.PREDICT_CYCLE_LIFE,
+                input_value={"record_batch_id": "substituted-record-batch"},
             ),
             grant=resolver.resolve(
                 invocation_fixture.run_id,
@@ -578,5 +816,255 @@ def test_project_agent_service_rejects_result_when_claim_changes_during_executio
 
     assert calls == [StandardToolName.PREDICT_CYCLE_LIFE]
     with invocation_fixture.session_factory() as session:
+        assert list(session.scalars(select(ToolResultRecord))) == []
+        assert list(session.scalars(select(ProjectToolResultBindingRecord))) == []
+
+
+def test_agent_step_result_commit_is_exact_and_atomic(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    resolver = _resolver(invocation_fixture)
+    grant = resolver.resolve(
+        invocation_fixture.run_id,
+        invocation_fixture.step_id,
+        invocation_fixture.claim_token,
+    )
+    result = _execute_granted_result(invocation_fixture, grant, calls)
+    ledger = _project_ledger(invocation_fixture)
+
+    committed = ledger.commit_agent_step_result(
+        grant=grant,
+        result=result,
+        grant_validator=resolver,
+    )
+
+    assert committed == result
+    binding = ledger.resolve_binding(grant.project_context, result.result_id)
+    assert binding.agent_run_id == invocation_fixture.run_id
+    assert binding.agent_step_id == grant.agent_step_row_id
+    assert binding.step_id == grant.step_id
+    assert binding.plan_hash == grant.plan_hash
+    assert binding.claim_attempt == grant.claim_attempt
+    assert binding.execution_snapshot_sha256 == grant.execution_snapshot_sha256
+    assert binding.approval_request_id == invocation_fixture.approval_request_id
+    with invocation_fixture.session_factory() as session:
+        step = session.get(AgentStep, grant.agent_step_row_id)
+        result_row = session.get(ToolResultRecord, result.result_id)
+        events = tuple(
+            session.scalars(
+                select(AgentEvent).where(AgentEvent.run_id == invocation_fixture.run_id)
+            )
+        )
+        assert step is not None and result_row is not None
+        assert step.status == "COMPLETED"
+        assert step.claim_token is None
+        assert step.execution_claim_sha256 == sha256_canonical(
+            {"claim_token": CLAIM_TOKEN}
+        )
+        assert result_row.agent_step_id == grant.agent_step_row_id
+        assert [event.event_type for event in events].count("STEP_COMPLETED") == 1
+
+
+def test_stale_agent_step_claim_cannot_commit_or_clear_the_new_claim(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    resolver = _resolver(invocation_fixture)
+    grant = resolver.resolve(
+        invocation_fixture.run_id,
+        invocation_fixture.step_id,
+        invocation_fixture.claim_token,
+    )
+    result = _execute_granted_result(invocation_fixture, grant, calls)
+    replacement_claim = "e" * 64
+    replacement_digest = sha256_canonical({"claim_token": replacement_claim})
+    with invocation_fixture.session_factory.begin() as session:
+        step = session.get(AgentStep, grant.agent_step_row_id)
+        assert step is not None
+        step.attempts = 2
+        step.claim_token = replacement_claim
+        step.execution_claim_sha256 = replacement_digest
+        step.lease_expires_at = NOW + timedelta(minutes=20)
+
+    with pytest.raises(RuntimeError, match="claim"):
+        _project_ledger(invocation_fixture).commit_agent_step_result(
+            grant=grant,
+            result=result,
+            grant_validator=resolver,
+        )
+
+    with invocation_fixture.session_factory() as session:
+        step = session.get(AgentStep, grant.agent_step_row_id)
+        assert step is not None
+        assert step.status == "RUNNING"
+        assert step.claim_token == replacement_claim
+        assert step.execution_claim_sha256 == replacement_digest
+        assert list(session.scalars(select(ToolResultRecord))) == []
+        assert list(session.scalars(select(ProjectToolResultBindingRecord))) == []
+
+
+def test_expired_agent_step_lease_cannot_commit_result(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    resolver = _resolver(invocation_fixture)
+    grant = resolver.resolve(
+        invocation_fixture.run_id,
+        invocation_fixture.step_id,
+        invocation_fixture.claim_token,
+    )
+    result = _execute_granted_result(invocation_fixture, grant, calls)
+
+    with pytest.raises(AuditLedgerError, match="claim"):
+        _project_ledger(
+            invocation_fixture,
+            now=NOW + timedelta(minutes=11),
+        ).commit_agent_step_result(
+            grant=grant,
+            result=result,
+            grant_validator=resolver,
+        )
+
+    with invocation_fixture.session_factory() as session:
+        step = session.get(AgentStep, grant.agent_step_row_id)
+        assert step is not None and step.status == "RUNNING"
+        assert list(session.scalars(select(ToolResultRecord))) == []
+        assert list(session.scalars(select(ProjectToolResultBindingRecord))) == []
+
+
+def test_agent_step_commit_rolls_back_every_row_when_binding_insert_fails(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    resolver = _resolver(invocation_fixture)
+    grant = resolver.resolve(
+        invocation_fixture.run_id,
+        invocation_fixture.step_id,
+        invocation_fixture.claim_token,
+    )
+    result = _execute_granted_result(invocation_fixture, grant, calls)
+    with invocation_fixture.session_factory.begin() as session:
+        session.execute(
+            text(
+                "CREATE TRIGGER reject_agent_binding BEFORE INSERT ON "
+                "project_tool_result_bindings BEGIN "
+                "SELECT RAISE(ABORT, 'injected binding failure'); END"
+            )
+        )
+
+    with pytest.raises(AuditLedgerError, match="integrity"):
+        _project_ledger(invocation_fixture).commit_agent_step_result(
+            grant=grant,
+            result=result,
+            grant_validator=resolver,
+        )
+
+    with invocation_fixture.session_factory() as session:
+        step = session.get(AgentStep, grant.agent_step_row_id)
+        assert step is not None
+        assert step.status == "RUNNING"
+        assert step.claim_token == CLAIM_TOKEN
+        assert list(session.scalars(select(ToolResultRecord))) == []
+        assert list(session.scalars(select(ProjectToolResultBindingRecord))) == []
+        events = tuple(
+            session.scalars(
+                select(AgentEvent).where(AgentEvent.run_id == invocation_fixture.run_id)
+            )
+        )
+        assert [event.event_type for event in events].count("STEP_COMPLETED") == 0
+
+
+def test_atomic_commit_recomputes_approval_evidence_after_outer_revalidation(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    resolver = _resolver(invocation_fixture)
+    grant = resolver.resolve(
+        invocation_fixture.run_id,
+        invocation_fixture.step_id,
+        invocation_fixture.claim_token,
+    )
+    result = _execute_granted_result(invocation_fixture, grant, calls)
+
+    class _MutatingValidator:
+        def revalidate(
+            self,
+            supplied: VerifiedAgentRunInvocationGrant,
+        ) -> VerifiedAgentRunInvocationGrant:
+            verified = resolver.revalidate(supplied)
+            with invocation_fixture.session_factory.begin() as session:
+                action = session.get(
+                    ApprovalAction,
+                    invocation_fixture.approval_action_id,
+                )
+                assert action is not None
+                action.reason = "tampered after outer revalidation"
+            return verified
+
+        def revalidate_in_session(
+            self,
+            session: object,
+            supplied: VerifiedAgentRunInvocationGrant,
+        ) -> VerifiedAgentRunInvocationGrant:
+            return resolver.revalidate_in_session(session, supplied)
+
+    with pytest.raises(AuditLedgerError, match="approval"):
+        _project_ledger(invocation_fixture).commit_agent_step_result(
+            grant=grant,
+            result=result,
+            grant_validator=_MutatingValidator(),
+        )
+
+    with invocation_fixture.session_factory() as session:
+        step = session.get(AgentStep, grant.agent_step_row_id)
+        assert step is not None and step.status == "RUNNING"
+        assert list(session.scalars(select(ToolResultRecord))) == []
+        assert list(session.scalars(select(ProjectToolResultBindingRecord))) == []
+
+
+def test_atomic_commit_recomputes_frozen_input_hash_after_outer_revalidation(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    resolver = _resolver(invocation_fixture)
+    grant = resolver.resolve(
+        invocation_fixture.run_id,
+        invocation_fixture.step_id,
+        invocation_fixture.claim_token,
+    )
+    result = _execute_granted_result(invocation_fixture, grant, calls)
+
+    class _MutatingValidator:
+        def revalidate(
+            self,
+            supplied: VerifiedAgentRunInvocationGrant,
+        ) -> VerifiedAgentRunInvocationGrant:
+            verified = resolver.revalidate(supplied)
+            with invocation_fixture.session_factory.begin() as session:
+                step = session.get(AgentStep, grant.agent_step_row_id)
+                assert step is not None
+                step.resolved_input_json = {
+                    "record_batch_id": "tampered-after-outer-revalidation"
+                }
+            return verified
+
+        def revalidate_in_session(
+            self,
+            session: object,
+            supplied: VerifiedAgentRunInvocationGrant,
+        ) -> VerifiedAgentRunInvocationGrant:
+            return resolver.revalidate_in_session(session, supplied)
+
+    with pytest.raises(AuditLedgerError, match="input"):
+        _project_ledger(invocation_fixture).commit_agent_step_result(
+            grant=grant,
+            result=result,
+            grant_validator=_MutatingValidator(),
+        )
+
+    with invocation_fixture.session_factory() as session:
+        step = session.get(AgentStep, grant.agent_step_row_id)
+        assert step is not None and step.status == "RUNNING"
         assert list(session.scalars(select(ToolResultRecord))) == []
         assert list(session.scalars(select(ProjectToolResultBindingRecord))) == []

@@ -297,6 +297,47 @@ class ToolRegistry:
             allowed_tool_names=normalized_allowlist,
         )
 
+    def canonical_input_hash(
+        self,
+        tool_name: StandardToolName | str,
+        input_value: Mapping[str, Any] | ContractModel,
+    ) -> str:
+        """Hash the complete Pydantic-normalized input for one registered tool."""
+
+        return sha256_canonical(
+            self.canonical_input_value(tool_name, input_value)
+        )
+
+    def canonical_input_value(
+        self,
+        tool_name: StandardToolName | str,
+        input_value: Mapping[str, Any] | ContractModel,
+    ) -> dict[str, Any]:
+        """Return the complete JSON input after registered Pydantic validation."""
+
+        normalized_name = self._coerce_tool_name(tool_name)
+        registered = self._tools.get(normalized_name)
+        if registered is None:
+            raise UnknownToolError(
+                f"No implementation is registered for tool '{normalized_name.value}'"
+            )
+        validated = self._validate_input(registered, input_value)
+        return validated.model_dump(mode="json")
+
+    def execution_scope(
+        self,
+        tool_name: StandardToolName | str,
+    ) -> ToolExecutionScope:
+        """Return the immutable execution boundary for one registered tool."""
+
+        normalized_name = self._coerce_tool_name(tool_name)
+        registered = self._tools.get(normalized_name)
+        if registered is None:
+            raise UnknownToolError(
+                f"No implementation is registered for tool '{normalized_name.value}'"
+            )
+        return registered.definition.execution_scope
+
     def _execute_registered(
         self,
         registered: RegisteredTool[ContractModel],

@@ -18,7 +18,11 @@ from uuid import UUID, uuid4
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from quanxin_life.audit import AuditLedger
+from quanxin_life.audit.project_ledger import (
+    BoundProjectResultResolver,
+    ProjectResultLedger,
+    RegisteredResultResolver,
+)
 from quanxin_life.core import ToolResult, sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.models.hybrid_degradation import (
@@ -35,6 +39,7 @@ from quanxin_life.tools.registry import (
     RegisteredTool,
     StandardToolName,
     ToolDefinition,
+    ToolExecutionScope,
     ToolRegistry,
 )
 
@@ -153,7 +158,7 @@ class TrajectoryPredictionEvidence(ContractModel):
 def _resolve_feature_evidence(
     input_value: PredictSOHTrajectoryToolInput,
     *,
-    audit_ledger: AuditLedger,
+    audit_ledger: RegisteredResultResolver,
 ) -> tuple[ToolResult, TrajectoryPredictionEvidence]:
     """Resolve the only accepted numerical payload from the public audit ledger."""
 
@@ -267,7 +272,7 @@ def execute_predict_soh_trajectory_tool(
     input_value: PredictSOHTrajectoryToolInput,
     *,
     predictor: HybridDegradationPredictor,
-    audit_ledger: AuditLedger,
+    audit_ledger: RegisteredResultResolver,
     clock: Callable[[], datetime] | None = None,
 ) -> ToolResult:
     """Expose finite-horizon model evidence from one ledger-bound feature result."""
@@ -331,7 +336,7 @@ def register_predict_soh_trajectory_tool(
     registry: ToolRegistry,
     *,
     predictor: HybridDegradationPredictor,
-    audit_ledger: AuditLedger,
+    audit_ledger: RegisteredResultResolver,
     clock: Callable[[], datetime] | None = None,
 ) -> RegisteredTool[PredictSOHTrajectoryToolInput]:
     """Register the only in-memory, ledger-bound trajectory-tool implementation."""
@@ -345,6 +350,35 @@ def register_predict_soh_trajectory_tool(
                 input_value,
                 predictor=predictor,
                 audit_ledger=audit_ledger,
+                clock=clock,
+            ),
+        )
+    )
+
+
+def register_project_predict_soh_trajectory_tool(
+    registry: ToolRegistry,
+    *,
+    predictor: HybridDegradationPredictor,
+    project_audit_ledger: ProjectResultLedger,
+    clock: Callable[[], datetime] | None = None,
+) -> RegisteredTool[PredictSOHTrajectoryToolInput]:
+    """Register the existing SOH predictor with same-project evidence only."""
+
+    return registry.register(
+        ToolDefinition(
+            tool_name=StandardToolName.PREDICT_SOH_TRAJECTORY,
+            tool_version=TRAJECTORY_PREDICTION_TOOL_VERSION,
+            input_model=PredictSOHTrajectoryToolInput,
+            executor=None,
+            execution_scope=ToolExecutionScope.PROJECT,
+            project_executor=lambda input_value, context: execute_predict_soh_trajectory_tool(
+                input_value,
+                predictor=predictor,
+                audit_ledger=BoundProjectResultResolver(
+                    project_audit_ledger,
+                    context,
+                ),
                 clock=clock,
             ),
         )

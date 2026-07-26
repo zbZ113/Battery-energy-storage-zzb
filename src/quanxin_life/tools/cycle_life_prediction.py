@@ -17,7 +17,11 @@ from uuid import UUID, uuid4
 
 from pydantic import ConfigDict, Field, ValidationError, field_validator
 
-from quanxin_life.audit import AuditLedger
+from quanxin_life.audit.project_ledger import (
+    BoundProjectResultResolver,
+    ProjectResultLedger,
+    RegisteredResultResolver,
+)
 from quanxin_life.core import (
     LifePrediction,
     PredictionTarget,
@@ -36,6 +40,7 @@ from quanxin_life.tools.registry import (
     RegisteredTool,
     StandardToolName,
     ToolDefinition,
+    ToolExecutionScope,
     ToolRegistry,
 )
 
@@ -278,7 +283,7 @@ def execute_predict_cycle_life_tool(
     input_value: PredictCycleLifeToolInput,
     *,
     predictor: CycleLifePredictor,
-    audit_ledger: AuditLedger,
+    audit_ledger: RegisteredResultResolver,
     model_artifact_registry: ModelArtifactResolver | None = None,
     clock: Clock = _utc_now,
 ) -> ToolResult:
@@ -346,7 +351,7 @@ def register_predict_cycle_life_tool(
     registry: ToolRegistry,
     *,
     predictor: CycleLifePredictor,
-    audit_ledger: AuditLedger,
+    audit_ledger: RegisteredResultResolver,
     model_artifact_registry: ModelArtifactResolver | None = None,
     clock: Clock = _utc_now,
 ) -> RegisteredTool[PredictCycleLifeToolInput]:
@@ -361,6 +366,37 @@ def register_predict_cycle_life_tool(
                 input_value,
                 predictor=predictor,
                 audit_ledger=audit_ledger,
+                model_artifact_registry=model_artifact_registry,
+                clock=clock,
+            ),
+        )
+    )
+
+
+def register_project_predict_cycle_life_tool(
+    registry: ToolRegistry,
+    *,
+    predictor: CycleLifePredictor,
+    project_audit_ledger: ProjectResultLedger,
+    model_artifact_registry: ModelArtifactResolver | None = None,
+    clock: Clock = _utc_now,
+) -> RegisteredTool[PredictCycleLifeToolInput]:
+    """Register the same numerical predictor behind project-bound evidence."""
+
+    return registry.register(
+        ToolDefinition(
+            tool_name=StandardToolName.PREDICT_CYCLE_LIFE,
+            tool_version=CYCLE_LIFE_PREDICTION_TOOL_VERSION,
+            input_model=PredictCycleLifeToolInput,
+            executor=None,
+            execution_scope=ToolExecutionScope.PROJECT,
+            project_executor=lambda input_value, context: execute_predict_cycle_life_tool(
+                input_value,
+                predictor=predictor,
+                audit_ledger=BoundProjectResultResolver(
+                    project_audit_ledger,
+                    context,
+                ),
                 model_artifact_registry=model_artifact_registry,
                 clock=clock,
             ),

@@ -15,7 +15,11 @@ from quanxin_life.agents.execution_adapter import (
     compile_agent_step,
 )
 from quanxin_life.agents.orchestrator import WorkflowStatus, run_constrained_workflow
-from quanxin_life.api.service import ToolInvocationService
+from quanxin_life.api.service import ToolInvocation, ToolInvocationService
+from quanxin_life.application.agent_run_invocation import (
+    AgentRunInvocationAccessError,
+    PersistentAgentRunInvocationResolver,
+)
 from quanxin_life.application.agent_runs import AgentRunService
 from quanxin_life.audit import AuditLedgerError
 from quanxin_life.core import (
@@ -40,11 +44,16 @@ from quanxin_life.persistence.models import (
     AgentRun,
     AgentRunDispatch,
     AgentStep,
+    ApprovalAction,
     ApprovalRequestRow,
     ProvenanceRecordRow,
     ToolResultRecord,
 )
-from quanxin_life.tools import StandardToolName
+from quanxin_life.tools import (
+    StandardToolName,
+    ToolExecutionScope,
+    ToolRegistryError,
+)
 
 Clock = Callable[[], datetime]
 _TERMINAL_STATUSES = frozenset(
@@ -70,11 +79,17 @@ class AgentRunExecutionWorker:
         run_service: AgentRunService,
         tool_service: ToolInvocationService,
         context_resolver: AgentExecutionContextResolver,
+        agent_run_invocation_resolver: (
+            PersistentAgentRunInvocationResolver | None
+        ) = None,
         clock: Clock,
         approval_ttl: timedelta = timedelta(hours=1),
         lease_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
-        if tool_service.audit_ledger is None:
+        if (
+            tool_service.audit_ledger is None
+            and tool_service.project_audit_ledger is None
+        ):
             raise TypeError("Agent run execution requires a shared audit ledger")
         if approval_ttl <= timedelta(0):
             raise ValueError("approval_ttl must be positive")
@@ -84,6 +99,7 @@ class AgentRunExecutionWorker:
         self._run_service = run_service
         self._tool_service = tool_service
         self._context_resolver = context_resolver
+        self._agent_run_invocation_resolver = agent_run_invocation_resolver
         self._clock = clock
         self._approval_ttl = approval_ttl
         self._lease_ttl = lease_ttl
@@ -136,6 +152,35 @@ class AgentRunExecutionWorker:
             )
             return self._state(run_id)
 
+        try:
+            compiled = compile_agent_step(
+                run_id=run_id,
+                intent=intent,
+                plan=plan,
+                step_id=next_row.step_id,
+                context_resolver=self._context_resolver,
+                completed_results=completed_results,
+            )
+            canonical_input = self._tool_service.registry.canonical_input_value(
+                compiled.tool_name,
+                compiled.input_value,
+            )
+            compiled = compiled.model_copy(update={"input_value": canonical_input})
+            self._freeze_step_execution(
+                run_id=run_id,
+                plan_hash=plan_hash,
+                step_row_id=next_row.id,
+                input_value=canonical_input,
+            )
+        except (AgentExecutionReferenceError, TypeError, ValueError, ToolRegistryError) as exc:
+            self._fail_run(
+                run_id,
+                next_row.id,
+                None,
+                type(exc).__name__,
+            )
+            return self._state(run_id)
+
         if next_row.requires_human_approval and not self._is_step_approved(
             run_id, next_row.step_id, plan_hash
         ):
@@ -147,21 +192,39 @@ class AgentRunExecutionWorker:
             return self._state(run_id)
 
         try:
-            compiled = compile_agent_step(
-                run_id=run_id,
-                intent=intent,
-                plan=plan,
-                step_id=next_row.step_id,
-                context_resolver=self._context_resolver,
-                completed_results=completed_results,
+            execution_scope = self._tool_service.registry.execution_scope(
+                compiled.tool_name
             )
-            outcome = run_constrained_workflow(
-                service=self._tool_service,
-                request_id=run_id,
-                steps=(compiled,),
-                approved_step_ids=(compiled.step_id,),
-            )
-        except (AgentExecutionReferenceError, AuditLedgerError, TypeError, ValueError) as exc:
+            if execution_scope is ToolExecutionScope.PROJECT:
+                resolver = self._agent_run_invocation_resolver
+                if resolver is None:
+                    raise AgentRunExecutionError(
+                        "project Agent execution resolver is unavailable"
+                    )
+                grant = resolver.resolve(run_id, compiled.step_id, claim_token)
+                self._tool_service.invoke_for_project_agent(
+                    ToolInvocation(
+                        tool_name=compiled.tool_name,
+                        input_value=compiled.input_value,
+                    ),
+                    grant=grant,
+                )
+                outcome = None
+            else:
+                outcome = run_constrained_workflow(
+                    service=self._tool_service,
+                    request_id=run_id,
+                    steps=(compiled,),
+                    approved_step_ids=(compiled.step_id,),
+                )
+        except (
+            AgentExecutionReferenceError,
+            AgentRunInvocationAccessError,
+            AuditLedgerError,
+            ToolRegistryError,
+            TypeError,
+            ValueError,
+        ) as exc:
             self._fail_run(
                 run_id,
                 next_row.id,
@@ -170,7 +233,10 @@ class AgentRunExecutionWorker:
             )
             return self._state(run_id)
 
-        if outcome.status is not WorkflowStatus.COMPLETED or len(outcome.tool_results) != 1:
+        if outcome is not None and (
+            outcome.status is not WorkflowStatus.COMPLETED
+            or len(outcome.tool_results) != 1
+        ):
             self._handle_step_failure(
                 run_id,
                 next_row.id,
@@ -178,13 +244,14 @@ class AgentRunExecutionWorker:
                 outcome.failure_code or "CONSTRAINED_STEP_FAILED",
             )
             return self._state(run_id)
-        self._persist_step_result(
-            run_id=run_id,
-            plan_hash=plan_hash,
-            step_row_id=next_row.id,
-            claim_token=claim_token,
-            result=outcome.tool_results[0],
-        )
+        if outcome is not None:
+            self._persist_step_result(
+                run_id=run_id,
+                plan_hash=plan_hash,
+                step_row_id=next_row.id,
+                claim_token=claim_token,
+                result=outcome.tool_results[0],
+            )
         _, _, refreshed_steps, _ = self._load_run(run_id, plan_hash)
         if all(
             step.status == AgentStepStatus.COMPLETED.value
@@ -316,10 +383,23 @@ class AgentRunExecutionWorker:
                     raise AgentRunExecutionError(
                         "persisted ToolResult input hash does not match trusted references"
                     )
-                ledger = self._tool_service.audit_ledger
-                if ledger is None:  # pragma: no cover - constructor invariant
-                    raise AgentRunExecutionError("Agent audit ledger is unavailable")
-                registered = ledger.ensure_result(result)
+                project_ledger = self._tool_service.project_audit_ledger
+                resolver = self._agent_run_invocation_resolver
+                if project_ledger is not None and resolver is not None:
+                    context = resolver.context_service.resolve_agent_run(run_id)
+                    registered = project_ledger.resolve_registered_result(
+                        context,
+                        result.result_id,
+                    )
+                    if registered != result:
+                        raise AgentRunExecutionError(
+                            "persisted project ToolResult differs from its binding"
+                        )
+                else:
+                    ledger = self._tool_service.audit_ledger
+                    if ledger is None:  # pragma: no cover - constructor invariant
+                        raise AgentRunExecutionError("Agent audit ledger is unavailable")
+                    registered = ledger.ensure_result(result)
                 completed[step.step_id] = registered
         return completed
 
@@ -357,6 +437,77 @@ class AgentRunExecutionWorker:
             created_at=_database_utc(row.created_at),
         )
 
+    def _freeze_step_execution(
+        self,
+        *,
+        run_id: str,
+        plan_hash: str,
+        step_row_id: str,
+        input_value: Mapping[str, object],
+    ) -> None:
+        """Persist one immutable server-compiled input and dependency snapshot."""
+
+        input_payload = dict(input_value)
+        input_hash = sha256_canonical(input_payload)
+        with session_scope(self._session_factory) as session:
+            run = session.scalar(
+                select(AgentRun).where(AgentRun.id == run_id).with_for_update()
+            )
+            rows = tuple(
+                session.scalars(
+                    select(AgentStep)
+                    .where(AgentStep.run_id == run_id)
+                    .order_by(AgentStep.ordinal)
+                ).all()
+            )
+            step = next((item for item in rows if item.id == step_row_id), None)
+            if run is None or step is None or run.plan_hash != plan_hash:
+                raise AgentRunExecutionError(
+                    "Agent step execution snapshot cannot be frozen"
+                )
+            step_spec_sha256 = (
+                PersistentAgentRunInvocationResolver._step_spec_sha256(step)
+            )
+            dependency_evidence_sha256 = (
+                PersistentAgentRunInvocationResolver._dependency_evidence_sha256(
+                    session,
+                    row=step,
+                    rows=rows,
+                )
+            )
+            execution_snapshot_sha256 = sha256_canonical(
+                {
+                    "schema_version": "agent-step-execution-snapshot-v1",
+                    "agent_run_id": run_id,
+                    "agent_step_row_id": step.id,
+                    "step_id": step.step_id,
+                    "plan_hash": plan_hash,
+                    "tool_name": step.tool_name,
+                    "input_hash": input_hash,
+                    "step_spec_sha256": step_spec_sha256,
+                    "dependency_evidence_sha256": dependency_evidence_sha256,
+                }
+            )
+            frozen = (
+                step.resolved_input_json,
+                step.resolved_input_hash,
+                step.execution_snapshot_sha256,
+                step.dependency_evidence_sha256,
+            )
+            expected = (
+                input_payload,
+                input_hash,
+                execution_snapshot_sha256,
+                dependency_evidence_sha256,
+            )
+            if any(value is not None for value in frozen) and frozen != expected:
+                raise AgentRunExecutionError(
+                    "Agent step execution snapshot has changed"
+                )
+            step.resolved_input_json = input_payload
+            step.resolved_input_hash = input_hash
+            step.execution_snapshot_sha256 = execution_snapshot_sha256
+            step.dependency_evidence_sha256 = dependency_evidence_sha256
     def _claim_step(
         self,
         run_id: str,
@@ -395,6 +546,9 @@ class AgentRunExecutionWorker:
             step.status = AgentStepStatus.RUNNING.value
             step.attempts += 1
             step.claim_token = claim_token
+            step.execution_claim_sha256 = sha256_canonical(
+                {"claim_token": claim_token}
+            )
             step.lease_expires_at = now + self._lease_ttl
             step.last_error_code = None
             step.started_at = now
@@ -433,6 +587,11 @@ class AgentRunExecutionWorker:
             if (
                 step.status != AgentStepStatus.RUNNING.value
                 or step.claim_token != claim_token
+                or step.execution_claim_sha256
+                != sha256_canonical({"claim_token": claim_token})
+                or step.lease_expires_at is None
+                or not _lease_is_active(step.lease_expires_at, now)
+                or step.resolved_input_hash != result.input_hash
             ):
                 raise AgentRunExecutionError("Agent step execution claim is stale")
             existing = session.scalar(
@@ -503,6 +662,30 @@ class AgentRunExecutionWorker:
             if row.source_plan_hash != plan_hash:
                 raise AgentRunExecutionError("Agent approval references a stale plan")
             if row.status == ApprovalStatus.APPROVED.value:
+                step = session.scalar(
+                    select(AgentStep).where(
+                        AgentStep.run_id == run_id,
+                        AgentStep.step_id == step_id,
+                    )
+                )
+                action = session.scalar(
+                    select(ApprovalAction).where(
+                        ApprovalAction.approval_request_id == row.id
+                    )
+                )
+                if (
+                    step is None
+                    or action is None
+                    or row.agent_step_id != step.id
+                    or row.execution_snapshot_sha256
+                    != step.execution_snapshot_sha256
+                    or action.action != ApprovalStatus.APPROVED.value
+                    or _database_utc(action.acted_at)
+                    >= _database_utc(row.expires_at)
+                ):
+                    raise AgentRunExecutionError(
+                        "Agent approval evidence does not match the frozen step"
+                    )
                 return True
             if row.status == ApprovalStatus.PENDING.value:
                 return False

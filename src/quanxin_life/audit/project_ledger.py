@@ -10,6 +10,10 @@ from quanxin_life.audit.numeric_firewall import AuditLedger
 from quanxin_life.core import ToolResult, UserRole
 
 if TYPE_CHECKING:
+    from quanxin_life.application.agent_run_invocation import (
+        AgentRunInvocationValidator,
+        VerifiedAgentRunInvocationGrant,
+    )
     from quanxin_life.application.invocation_context import (
         ProjectInvocationSource,
         VerifiedProjectInvocationContext,
@@ -23,6 +27,10 @@ class ProjectContextValidator(Protocol):
     ) -> VerifiedProjectInvocationContext: ...
 
 
+class RegisteredResultResolver(Protocol):
+    def resolve_registered_result(self, result_id: str) -> ToolResult: ...
+
+
 class ProjectResultLedger(Protocol):
     """Shared boundary implemented by in-memory and persistent project ledgers."""
 
@@ -33,6 +41,20 @@ class ProjectResultLedger(Protocol):
         self,
         context: VerifiedProjectInvocationContext,
         result: ToolResult,
+    ) -> ToolResult: ...
+
+    def commit_agent_step_result(
+        self,
+        *,
+        grant: VerifiedAgentRunInvocationGrant,
+        result: ToolResult,
+        grant_validator: AgentRunInvocationValidator,
+    ) -> ToolResult: ...
+
+    def resolve_registered_result(
+        self,
+        context: VerifiedProjectInvocationContext,
+        result_id: str,
     ) -> ToolResult: ...
 
 
@@ -49,6 +71,12 @@ class ProjectToolResultBinding:
     agent_run_id: str | None
     tool_name: str
     input_hash: str
+    agent_step_id: str | None = None
+    step_id: str | None = None
+    plan_hash: str | None = None
+    claim_attempt: int | None = None
+    execution_snapshot_sha256: str | None = None
+    approval_request_id: str | None = None
 
 
 class ProjectAuditLedger:
@@ -74,6 +102,15 @@ class ProjectAuditLedger:
         """Register one result and its server-derived project/actor binding."""
 
         verified = self._require_context(context)
+        from quanxin_life.application.invocation_context import (
+            ProjectInvocationSource,
+        )
+        from quanxin_life.audit.numeric_firewall import AuditLedgerError
+
+        if verified.invocation_source is ProjectInvocationSource.AGENT:
+            raise AuditLedgerError(
+                "AGENT project results require an exact Agent step commit"
+            )
         binding = ProjectToolResultBinding(
             result_id=result.result_id,
             project_id=verified.project_id,
@@ -89,6 +126,20 @@ class ProjectAuditLedger:
             registered = self._ledger.register_result(result)
             self._bindings[registered.result_id] = binding
         return registered
+
+    def commit_agent_step_result(
+        self,
+        *,
+        grant: VerifiedAgentRunInvocationGrant,
+        result: ToolResult,
+        grant_validator: AgentRunInvocationValidator,
+    ) -> ToolResult:
+        del grant, result, grant_validator
+        from quanxin_life.audit.numeric_firewall import AuditLedgerError
+
+        raise AuditLedgerError(
+            "persistent project ledger is required for Agent step commits"
+        )
 
     def resolve_registered_result(
         self,
@@ -131,8 +182,21 @@ class ProjectAuditLedger:
         return self._context_validator.revalidate(context)
 
 
+@dataclass(frozen=True, slots=True)
+class BoundProjectResultResolver:
+    """Expose only same-project result resolution to one numerical tool."""
+
+    ledger: ProjectResultLedger
+    context: VerifiedProjectInvocationContext
+
+    def resolve_registered_result(self, result_id: str) -> ToolResult:
+        return self.ledger.resolve_registered_result(self.context, result_id)
+
+
 __all__ = [
+    "BoundProjectResultResolver",
     "ProjectAuditLedger",
     "ProjectResultLedger",
     "ProjectToolResultBinding",
+    "RegisteredResultResolver",
 ]

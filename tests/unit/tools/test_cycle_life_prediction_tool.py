@@ -405,3 +405,23 @@ def test_cycle_life_tool_rejects_tampered_early_feature_tool_versions(
             predictor=fitted_predictor,
             audit_ledger=AuditLedger((old_model,)),
         )
+
+
+def test_cycle_life_tool_can_be_registered_only_in_project_scope(
+    fitted_predictor: XGBoostLifePredictor,
+) -> None:
+    import quanxin_life.tools.cycle_life_prediction as module
+    from quanxin_life.tools import ToolExecutionScope, ToolRegistry
+
+    registry = ToolRegistry()
+    module.register_project_predict_cycle_life_tool(
+        registry,
+        predictor=fitted_predictor,
+        project_audit_ledger=object(),
+    )
+
+    assert registry.list_schemas() == ()
+    assert [
+        item.tool_name
+        for item in registry.list_schemas(execution_scope=ToolExecutionScope.PROJECT)
+    ] == [StandardToolName.PREDICT_CYCLE_LIFE]

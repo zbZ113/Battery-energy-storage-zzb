@@ -461,6 +461,15 @@ class AgentRunService:
             )
             if step is None or not step.requires_human_approval:
                 raise AgentRunStateError("Agent step is not approved for a human gate")
+            if (
+                step.resolved_input_json is None
+                or not step.resolved_input_hash
+                or not step.execution_snapshot_sha256
+                or not step.dependency_evidence_sha256
+            ):
+                raise AgentRunStateError(
+                    "Agent approval requires a frozen execution snapshot"
+                )
             existing = session.scalar(
                 select(ApprovalRequestRow).where(
                     ApprovalRequestRow.run_id == run.id,
@@ -473,6 +482,9 @@ class AgentRunService:
                     persisted.approval_kind is request.approval_kind
                     and persisted.impact_scope == request.impact_scope
                     and persisted.expires_at == request.expires_at
+                    and existing.agent_step_id == step.id
+                    and existing.execution_snapshot_sha256
+                    == step.execution_snapshot_sha256
                 ):
                     return persisted
                 raise AgentRunConflictError("approval gate already exists for this step")
@@ -481,6 +493,8 @@ class AgentRunService:
                 run_id=run.id,
                 approval_kind=request.approval_kind.value,
                 source_plan_hash=request.source_plan_hash,
+                agent_step_id=step.id,
+                execution_snapshot_sha256=step.execution_snapshot_sha256,
                 step_id=request.step_id,
                 impact_scope=request.impact_scope,
                 status=request.status.value,

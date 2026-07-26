@@ -233,3 +233,21 @@ def test_calibration_tool_is_not_available_without_a_context_bound_resolver() ->
     assert StandardToolName.CALIBRATE_PREDICTION_INTERVAL not in {
         schema.tool_name for schema in schemas
     }
+
+
+def test_conformal_tool_can_be_registered_only_in_project_scope() -> None:
+    import quanxin_life.tools.conformal_calibration as module
+    from quanxin_life.tools import ToolExecutionScope, ToolRegistry
+
+    registry = ToolRegistry()
+    module.register_project_calibrate_prediction_interval_tool(
+        registry,
+        resolver=_Resolver(_cohort()),
+        project_audit_ledger=object(),
+    )
+
+    assert registry.list_schemas() == ()
+    assert [
+        item.tool_name
+        for item in registry.list_schemas(execution_scope=ToolExecutionScope.PROJECT)
+    ] == [StandardToolName.CALIBRATE_PREDICTION_INTERVAL]

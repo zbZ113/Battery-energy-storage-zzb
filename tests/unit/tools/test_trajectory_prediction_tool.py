@@ -499,3 +499,23 @@ def test_trajectory_tool_consumes_the_real_early_feature_tool_output(
         "nominal_capacity_ah",
         "temperature_mean_c",
     ]
+
+
+def test_trajectory_tool_can_be_registered_only_in_project_scope(
+    fitted_predictor: HybridDegradationPredictor,
+) -> None:
+    import quanxin_life.tools.trajectory_prediction as module
+    from quanxin_life.tools import ToolExecutionScope, ToolRegistry
+
+    registry = ToolRegistry()
+    module.register_project_predict_soh_trajectory_tool(
+        registry,
+        predictor=fitted_predictor,
+        project_audit_ledger=object(),
+    )
+
+    assert registry.list_schemas() == ()
+    assert [
+        item.tool_name
+        for item in registry.list_schemas(execution_scope=ToolExecutionScope.PROJECT)
+    ] == [StandardToolName.PREDICT_SOH_TRAJECTORY]

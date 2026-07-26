@@ -9,8 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from quanxin_life.api.service import ToolInvocationService
+from quanxin_life.application.agent_run_invocation import AgentRunInvocationValidator
 from quanxin_life.application.model_artifacts import ModelArtifactRegistry
-from quanxin_life.audit import AuditLedger
+from quanxin_life.audit import AuditLedger, ProjectResultLedger
+from quanxin_life.audit.project_ledger import ProjectContextValidator
 from quanxin_life.models import HybridDegradationPredictor
 from quanxin_life.online import IndividualTrajectoryCalibrator
 from quanxin_life.tools.audited_report import register_generate_audited_report_tool
@@ -27,10 +29,12 @@ from quanxin_life.tools.conformal_calibration import (
     VerifiedNormalizedCalibrationCohortResolver,
     VerifiedPredictionDifficultyScaleResolver,
     register_calibrate_prediction_interval_tool,
+    register_project_calibrate_prediction_interval_tool,
 )
 from quanxin_life.tools.cycle_life_prediction import (
     CycleLifePredictor,
     register_predict_cycle_life_tool,
+    register_project_predict_cycle_life_tool,
 )
 from quanxin_life.tools.data_quality import register_validate_battery_data_tool
 from quanxin_life.tools.early_cycle_features import (
@@ -57,7 +61,10 @@ from quanxin_life.tools.target_domain_adaptation import (
     VerifiedAdaptationCohortResolver,
     register_adapt_to_target_domain_tool,
 )
-from quanxin_life.tools.trajectory_prediction import register_predict_soh_trajectory_tool
+from quanxin_life.tools.trajectory_prediction import (
+    register_predict_soh_trajectory_tool,
+    register_project_predict_soh_trajectory_tool,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +106,34 @@ class CompetitionToolDependencies:
         )
         if any(dependency is None for dependency in required):
             raise TypeError("Required competition tool dependencies must not be None")
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectPredictionToolDependencies:
+    """Trusted dependencies for project-scoped RUL, SOH and Conformal tools."""
+
+    project_audit_ledger: ProjectResultLedger
+    project_context_validator: ProjectContextValidator
+    agent_run_invocation_resolver: AgentRunInvocationValidator
+    cycle_life_predictor: CycleLifePredictor
+    hybrid_degradation_predictor: HybridDegradationPredictor
+    normalized_calibration_cohort_resolver: VerifiedNormalizedCalibrationCohortResolver
+    prediction_difficulty_scale_resolver: (
+        VerifiedPredictionDifficultyScaleResolver | None
+    )
+    model_artifact_registry: ModelArtifactRegistry | None = None
+
+    def __post_init__(self) -> None:
+        required = (
+            self.project_audit_ledger,
+            self.project_context_validator,
+            self.agent_run_invocation_resolver,
+            self.cycle_life_predictor,
+            self.hybrid_degradation_predictor,
+            self.normalized_calibration_cohort_resolver,
+        )
+        if any(dependency is None for dependency in required):
+            raise TypeError("Required project prediction dependencies must not be None")
 
 
 def create_competition_tool_registry(
@@ -182,4 +217,44 @@ def create_competition_tool_invocation_service(
     return ToolInvocationService(
         registry=registry,
         audit_ledger=dependencies.audit_ledger,
+    )
+
+
+def create_project_prediction_tool_registry(
+    dependencies: ProjectPredictionToolDependencies,
+) -> ToolRegistry:
+    """Register only project-isolated formal prediction tools."""
+
+    registry = ToolRegistry(
+        project_context_validator=dependencies.project_context_validator
+    )
+    register_project_predict_cycle_life_tool(
+        registry,
+        predictor=dependencies.cycle_life_predictor,
+        project_audit_ledger=dependencies.project_audit_ledger,
+        model_artifact_registry=dependencies.model_artifact_registry,
+    )
+    register_project_predict_soh_trajectory_tool(
+        registry,
+        predictor=dependencies.hybrid_degradation_predictor,
+        project_audit_ledger=dependencies.project_audit_ledger,
+    )
+    register_project_calibrate_prediction_interval_tool(
+        registry,
+        resolver=dependencies.normalized_calibration_cohort_resolver,
+        project_audit_ledger=dependencies.project_audit_ledger,
+        difficulty_scale_resolver=dependencies.prediction_difficulty_scale_resolver,
+    )
+    return registry
+
+
+def create_project_prediction_tool_invocation_service(
+    dependencies: ProjectPredictionToolDependencies,
+) -> ToolInvocationService:
+    """Assemble formal project prediction execution without GLOBAL exposure."""
+
+    return ToolInvocationService(
+        registry=create_project_prediction_tool_registry(dependencies),
+        project_audit_ledger=dependencies.project_audit_ledger,
+        agent_run_invocation_validator=dependencies.agent_run_invocation_resolver,
     )

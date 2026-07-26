@@ -11,7 +11,12 @@ from quanxin_life.application import (
     create_competition_tool_invocation_service,
     create_competition_tool_registry,
 )
-from quanxin_life.tools import StandardToolName, ToolRegistry, create_available_tool_registry
+from quanxin_life.tools import (
+    StandardToolName,
+    ToolExecutionScope,
+    ToolRegistry,
+    create_available_tool_registry,
+)
 
 
 def _stub_dependencies() -> CompetitionToolDependencies:
@@ -73,3 +78,37 @@ def test_available_registry_remains_the_three_tool_core() -> None:
         StandardToolName.AUDIT_DATASET_SPLIT,
         StandardToolName.CHECK_OPERATING_CONDITION,
     }
+
+
+def test_project_prediction_assembly_exposes_only_project_scoped_numeric_tools() -> None:
+    import quanxin_life.application.assembly as module
+
+    stub = cast(Any, object())
+    dependencies = module.ProjectPredictionToolDependencies(
+        project_audit_ledger=stub,
+        project_context_validator=stub,
+        agent_run_invocation_resolver=stub,
+        cycle_life_predictor=stub,
+        hybrid_degradation_predictor=stub,
+        normalized_calibration_cohort_resolver=stub,
+        prediction_difficulty_scale_resolver=None,
+    )
+
+    service = module.create_project_prediction_tool_invocation_service(dependencies)
+
+    assert service.registry.list_schemas() == ()
+    assert {
+        item.tool_name
+        for item in service.registry.list_schemas(
+            execution_scope=ToolExecutionScope.PROJECT
+        )
+    } == {
+        StandardToolName.PREDICT_CYCLE_LIFE,
+        StandardToolName.PREDICT_SOH_TRAJECTORY,
+        StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+    }
+    assert service.project_audit_ledger is dependencies.project_audit_ledger
+    assert (
+        service.agent_run_invocation_validator
+        is dependencies.agent_run_invocation_resolver
+    )
