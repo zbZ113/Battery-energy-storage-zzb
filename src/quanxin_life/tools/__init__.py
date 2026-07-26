@@ -1,5 +1,13 @@
 """Shared typed tool registry for all service and agent entry points."""
 
+from quanxin_life.tools.advanced_input import (
+    ADVANCED_INPUT_EVIDENCE_TYPE,
+    ADVANCED_INPUT_TRANSFORM_VERSION,
+    PREPARE_ADVANCED_INPUT_TOOL_VERSION,
+    PrepareAdvancedInputToolInput,
+    execute_prepare_advanced_input_tool,
+    register_project_prepare_advanced_input_tool,
+)
 from quanxin_life.tools.batch_decision import (
     BATCH_DECISION_TOOL_VERSION,
     BatchDecisionToolInput,
@@ -87,6 +95,8 @@ from quanxin_life.tools.target_domain_adaptation import (
 )
 
 __all__ = [
+    "ADVANCED_INPUT_EVIDENCE_TYPE",
+    "ADVANCED_INPUT_TRANSFORM_VERSION",
     "BATCH_DECISION_TOOL_VERSION",
     "BATTERY_EVIDENCE_ARTIFACT_TYPE",
     "BATTERY_EVIDENCE_RETRIEVAL_TOOL_VERSION",
@@ -95,6 +105,7 @@ __all__ = [
     "EXPERIMENT_RECOMMENDATION_EVIDENCE_TYPE",
     "NEXT_EXPERIMENT_RECOMMENDATION_TOOL_VERSION",
     "PHYSICS_CHECK_TOOL_VERSION",
+    "PREPARE_ADVANCED_INPUT_TOOL_VERSION",
     "SCENARIO_CONVERSION_WARNING",
     "SCENARIO_LIFETIME_ARTIFACT_TYPE",
     "SCENARIO_LIFETIME_TOOL_VERSION",
@@ -114,6 +125,7 @@ __all__ = [
     "McpToolAdapter",
     "McpToolCallRequest",
     "McpTransport",
+    "PrepareAdvancedInputToolInput",
     "RecommendNextExperimentToolInput",
     "RegisteredTool",
     "RetrieveBatteryEvidenceToolInput",
@@ -136,6 +148,7 @@ __all__ = [
     "execute_audit_dataset_split_tool",
     "execute_batch_decision_tool",
     "execute_check_operating_condition_tool",
+    "execute_prepare_advanced_input_tool",
     "execute_recommend_next_experiment_tool",
     "execute_retrieve_battery_evidence_tool",
     "execute_scenario_lifetime_tool",
@@ -145,6 +158,7 @@ __all__ = [
     "register_audit_dataset_split_tool",
     "register_batch_decision_tool",
     "register_check_operating_condition_tool",
+    "register_project_prepare_advanced_input_tool",
     "register_recommend_next_experiment_tool",
     "register_retrieve_battery_evidence_tool",
     "register_scenario_lifetime_tool",

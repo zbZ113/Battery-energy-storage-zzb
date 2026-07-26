@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -112,6 +112,7 @@ def _artifact(route: object, model: torch.nn.Module) -> VerifiedAdvancedRuntimeA
     return VerifiedAdvancedRuntimeArtifact(
         artifact_id=route.artifact.artifact_id,
         artifact_manifest_sha256=route.artifact.manifest_sha256,
+        model_version=route.artifact.model_version,
         artifact_kind=DeepArtifactKind.CYCLEPATCH_DIRECT,
         output_target=AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE,
         model=model,
@@ -187,12 +188,37 @@ def test_resolver_revalidates_exact_route_and_artifact_before_returning_runtime(
     assert runtime.model is model
     assert runtime.output_target is AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE
     assert runtime.artifact_id == route.artifact.artifact_id
+    assert runtime.model_version == route.artifact.model_version
     assert route_service.calls == [
         (AdvancedModelTask.RUL, 20, AdvancedModelRouteRole.DEFAULT),
         (AdvancedModelTask.RUL, 20, AdvancedModelRouteRole.DEFAULT),
     ]
     assert provider.calls == 2
     assert context_service.calls == 2
+
+
+def test_resolver_rejects_loaded_artifact_model_version_mismatch() -> None:
+    route = _route()
+    artifact = replace(
+        _artifact(route, torch.nn.Identity()),
+        model_version="tampered-model-version",
+    )
+    resolver = ActiveAdvancedRuntimeResolver(
+        context_service=_ContextService(),
+        route_service=_RouteService([route]),
+        runtime_provider=_RuntimeProvider([artifact]),
+    )
+
+    with pytest.raises(
+        AdvancedRuntimeStateError,
+        match=r"artifact.*active route",
+    ):
+        resolver.resolve(
+            _context(),
+            task=AdvancedModelTask.RUL,
+            cutoff_cycle=20,
+            role=AdvancedModelRouteRole.DEFAULT,
+        )
 
 
 def test_resolver_rejects_route_change_during_model_resolution() -> None:
@@ -252,6 +278,7 @@ def test_runtime_contract_never_exposes_filesystem_paths() -> None:
             output_target=AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE,
             artifact_id=str(uuid4()),
             artifact_manifest_sha256="a" * 64,
+            model_version="cyclepatch-direct-cutoff-20-seed-38",
             decision_event_id=str(uuid4()),
             ledger_sequence_number=1,
             ledger_head_sha256="b" * 64,

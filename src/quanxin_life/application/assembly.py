@@ -15,6 +15,10 @@ from quanxin_life.audit import AuditLedger, ProjectResultLedger
 from quanxin_life.audit.project_ledger import ProjectContextValidator
 from quanxin_life.models import HybridDegradationPredictor
 from quanxin_life.online import IndividualTrajectoryCalibrator
+from quanxin_life.tools.advanced_input import (
+    ProjectEarlyCycleBatchResolver,
+    register_project_prepare_advanced_input_tool,
+)
 from quanxin_life.tools.audited_report import register_generate_audited_report_tool
 from quanxin_life.tools.batch_decision import (
     VerifiedBatchDecisionPolicyResolver,
@@ -115,6 +119,7 @@ class ProjectPredictionToolDependencies:
     project_audit_ledger: ProjectResultLedger
     project_context_validator: ProjectContextValidator
     agent_run_invocation_resolver: AgentRunInvocationValidator
+    advanced_input_batch_resolver: ProjectEarlyCycleBatchResolver
     cycle_life_predictor: CycleLifePredictor
     hybrid_degradation_predictor: HybridDegradationPredictor
     normalized_calibration_cohort_resolver: VerifiedNormalizedCalibrationCohortResolver
@@ -128,6 +133,7 @@ class ProjectPredictionToolDependencies:
             self.project_audit_ledger,
             self.project_context_validator,
             self.agent_run_invocation_resolver,
+            self.advanced_input_batch_resolver,
             self.cycle_life_predictor,
             self.hybrid_degradation_predictor,
             self.normalized_calibration_cohort_resolver,
@@ -227,6 +233,10 @@ def create_project_prediction_tool_registry(
 
     registry = ToolRegistry(
         project_context_validator=dependencies.project_context_validator
+    )
+    register_project_prepare_advanced_input_tool(
+        registry,
+        batch_resolver=dependencies.advanced_input_batch_resolver,
     )
     register_project_predict_cycle_life_tool(
         registry,

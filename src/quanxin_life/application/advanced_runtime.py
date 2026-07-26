@@ -71,6 +71,7 @@ class VerifiedAdvancedRuntimeArtifact:
 
     artifact_id: str
     artifact_manifest_sha256: str
+    model_version: str
     artifact_kind: DeepArtifactKind
     output_target: AdvancedOutputTarget
     model: torch.nn.Module
@@ -175,6 +176,7 @@ class ManagedAdvancedRuntimeProvider:
         return VerifiedAdvancedRuntimeArtifact(
             artifact_id=manifest.artifact_id,
             artifact_manifest_sha256=manifest.manifest_sha256,
+            model_version=route.artifact.model_version,
             artifact_kind=manifest.artifact_kind,
             output_target=inference_context.output_target,
             model=isolated_model,
@@ -267,6 +269,7 @@ class VerifiedRULRuntime:
     output_target: AdvancedOutputTarget
     artifact_id: str
     artifact_manifest_sha256: str
+    model_version: str
     decision_event_id: str
     ledger_sequence_number: int
     ledger_head_sha256: str
@@ -282,6 +285,7 @@ class VerifiedSOHRuntime:
     output_target: AdvancedOutputTarget
     artifact_id: str
     artifact_manifest_sha256: str
+    model_version: str
     decision_event_id: str
     ledger_sequence_number: int
     ledger_head_sha256: str
@@ -360,6 +364,7 @@ class ActiveAdvancedRuntimeResolver:
                 artifact_manifest_sha256=(
                     second_artifact.artifact_manifest_sha256
                 ),
+                model_version=second_artifact.model_version,
                 decision_event_id=second_route.decision_event_id,
                 ledger_sequence_number=second_route.ledger_sequence_number,
                 ledger_head_sha256=second_route.ledger_head_sha256,
@@ -373,6 +378,7 @@ class ActiveAdvancedRuntimeResolver:
             output_target=second_artifact.output_target,
             artifact_id=second_artifact.artifact_id,
             artifact_manifest_sha256=second_artifact.artifact_manifest_sha256,
+            model_version=second_artifact.model_version,
             decision_event_id=second_route.decision_event_id,
             ledger_sequence_number=second_route.ledger_sequence_number,
             ledger_head_sha256=second_route.ledger_head_sha256,
@@ -629,6 +635,7 @@ def _validate_artifact(
         artifact.artifact_id != route.artifact.artifact_id
         or artifact.artifact_manifest_sha256
         != route.artifact.manifest_sha256
+        or artifact.model_version != route.artifact.model_version
         or artifact.artifact_kind is not expected_kind
         or artifact.output_target is not expected_target
     ):
@@ -661,6 +668,7 @@ def _artifact_identity(
     return (
         artifact.artifact_id,
         artifact.artifact_manifest_sha256,
+        artifact.model_version,
         artifact.artifact_kind,
         artifact.output_target,
     )
@@ -675,6 +683,7 @@ def _runtime_identity(runtime: VerifiedAdvancedRuntime) -> tuple[object, ...]:
         runtime.output_target,
         runtime.artifact_id,
         runtime.artifact_manifest_sha256,
+        runtime.model_version,
         runtime.decision_event_id,
         runtime.ledger_sequence_number,
         runtime.ledger_head_sha256,

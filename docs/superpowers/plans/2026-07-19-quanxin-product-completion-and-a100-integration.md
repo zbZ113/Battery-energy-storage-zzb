@@ -669,10 +669,11 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 - dependency evidence 只接受 ordinal 更早且已完成的显式依赖，每个依赖必须存在唯一持久 ToolResult，并绑定 result、provenance 与可用 project binding 摘要；审批请求必须绑定 exact `agent_step_id + execution_snapshot_sha256 + plan_hash` 和唯一、未过期的 APPROVED action；
 - fenced-claim 恢复协议已覆盖 active lease 拒绝抢占、expired lease 重新 claim、旧 claim 禁止提交或清除新 claim、原子写入失败回滚、Worker 重启续跑和重复队列投递不重跑；原始 claim token 不进入 binding 或事件；
 - Worker 已按 `GLOBAL / PROJECT` execution scope 分流；PROJECT step 只接受由当前持久 claim 派生的 per-step grant，并通过 `invoke_for_project_agent` 在执行前后复验；普通 project service 以及内存/SQL ledger 的 legacy `register_result` 均拒绝 AGENT context，不能绕过 exact-step commit；
-- 已新增 RUL、SOH、Conformal 的显式 PROJECT wrapper 与 assembly 骨架，但当前数值依赖仍是 legacy/in-memory predictor 和 normalized EOL80 Conformal；active-route-aware runtime resolver 已连接 managed Advanced deep artifacts，但尚未接入 Advanced 输入适配和正式 PROJECT ToolResult，因此正式 Advanced RUL/SOH/Conformal 数值链仍未贯通；
+- 已新增 RUL、SOH、Conformal 的显式 PROJECT wrapper 与 assembly 骨架，但当前数值依赖仍是 legacy/in-memory predictor 和 normalized EOL80 Conformal；active-route-aware runtime resolver 已连接 managed Advanced deep artifacts，PROJECT Advanced raw-input attestation ToolResult 也已接入 assembly，但 target-aware RUL/SOH 与正式 Split Conformal 数值链仍未贯通；
 - Advanced Deep artifact 已升级为 v2 自包含推理制品：四类 Advanced 模型均绑定完整 train-only normalizer statistics 与显式 output target；BatLiNet 额外绑定 safetensors reference batch、reference library 和逐文件 SHA-256；加载时重新核对 feature/inference context、normalizer、reference metadata 与制品字节，legacy v1 仍可解析但不能冒充自包含 v2 runtime；
 - Advanced deployment bundle/index 已支持 v2，并将 output target 精确传播到 route、artifact 与 Catalog schema；真实 rebuild 固定生成 v2，BatLiNet round-trip 使用包内 reference batch；既有 v1 bundle、registry 与 Catalog 测试夹具保持可解析兼容；
 - 新增 active-route-aware Advanced runtime resolver：每次调用重新验证 project context、精确 active route、managed bundle、deployment route、Catalog provenance 和 v2 artifact 全部字节；模型准备前后双重解析并在推理后支持复验，route/artifact 中途切换、v1 bundle、文件篡改或 provenance 漂移均 fail closed；四类真实 v2 safetensors loader 均已覆盖，缓存只保留私有冻结模板，每次返回隔离的无梯度推理实例，runtime 契约不暴露文件系统路径；
+- PROJECT registry 已新增 Advanced raw-input attestation：复用 `extract_early_cycle_features` 标准工具名但采用独立 `advanced-input-tool-v1` 契约，只接受同项目服务端 `record_batch_id`；现场复验 FROZEN dataset/canonical records 后构建 label-free multichannel sequence，ToolResult 只记录 source、transform config 与 raw sequence SHA-256、固定轴和版本，不包含标签、RUL、SOH、区间、模型预测张量或 active route；后续数值工具必须重新解析 batch、核对 raw sequence hash，再用现场 active runtime 的 train-only normalizer materialize；
 - 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录，也未修改任何真实产品数据库。
 
 可复现源码入口：
@@ -684,6 +685,7 @@ scripts/register_advanced_final_suite.py
 scripts/register_advanced_candidates_to_catalog.py
 src/quanxin_life/application/model_route_activation.py
 src/quanxin_life/application/advanced_runtime.py
+src/quanxin_life/tools/advanced_input.py
 src/quanxin_life/application/invocation_context.py
 src/quanxin_life/application/agent_run_execution.py
 src/quanxin_life/application/agent_run_invocation.py
@@ -706,13 +708,14 @@ migrations/versions/0012_project_tool_result_bindings.py
 migrations/versions/0013_exact_agent_step_bindings.py
 ```
 
-Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 `0009`–`0013` migrations → project Advanced input ToolResult → target-aware RUL/SOH/Split Conformal 正式工具 → API、Agent、报告和 UI 接入。
+Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 `0009`–`0013` migrations → target-aware RUL/SOH/Split Conformal 正式工具 → API、Agent、报告和 UI 接入。
 
 - [x] A100 Final importer、deployment bundle、managed candidate registry 与 activation ledger 源码和离线制品；
 - [ ] 在目标产品数据库执行 `0009`–`0013` migrations、15 候选批注册和人工 route activation；该步骤需要明确数据库环境、ACTIVE project 与已初始化 ADMIN；
 - [x] exact AgentStep、原子 ledger、fenced-claim 恢复、冻结输入/依赖/审批与 PROJECT Worker 可信执行基础设施；
 - [x] Advanced artifact v2 自包含 inference context、BatLiNet reference batch、显式 output target 与 deployment bundle/index v2；
 - [x] active-route-aware runtime resolver、managed v2 字节复验、四类正式 loader 与隔离推理实例；
+- [x] project Advanced raw-input ToolResult、同项目 record batch 复验、label-free sequence/config SHA-256 与 PROJECT assembly；
 - [ ] Advanced RUL/SOH/Split Conformal 真实数值链，包括正式 safetensors runtime 与 target-aware ToolResult；
 - [ ] 将真实模型结果接入 API、Agent、报告、UI 与 Next.js 单电芯纵向流程。
 

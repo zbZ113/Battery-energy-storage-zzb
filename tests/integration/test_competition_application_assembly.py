@@ -88,6 +88,7 @@ def test_project_prediction_assembly_exposes_only_project_scoped_numeric_tools()
         project_audit_ledger=stub,
         project_context_validator=stub,
         agent_run_invocation_resolver=stub,
+        advanced_input_batch_resolver=stub,
         cycle_life_predictor=stub,
         hybrid_degradation_predictor=stub,
         normalized_calibration_cohort_resolver=stub,
@@ -103,6 +104,7 @@ def test_project_prediction_assembly_exposes_only_project_scoped_numeric_tools()
             execution_scope=ToolExecutionScope.PROJECT
         )
     } == {
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
         StandardToolName.PREDICT_CYCLE_LIFE,
         StandardToolName.PREDICT_SOH_TRAJECTORY,
         StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
