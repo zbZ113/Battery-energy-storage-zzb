@@ -20,6 +20,7 @@ import torch
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from quanxin_life.application.deep_model_artifacts import (
+    AdvancedOutputTarget,
     DeepArtifactFile,
     DeepArtifactFileRole,
     DeepArtifactKind,
@@ -125,6 +126,7 @@ class AdvancedDeploymentSourceRoute(ContractModel):
         "current_hybrid",
         "hybridpatch_v2",
     ]
+    output_target: AdvancedOutputTarget | None = None
     candidate_id: str = Field(min_length=1)
     data_version: str = Field(min_length=1)
     split_version: str = Field(min_length=1)
@@ -178,6 +180,13 @@ class AdvancedDeploymentSourceRoute(ContractModel):
         is_batlinet = self.family == "cyclepatch_batlinet"
         if is_batlinet != (self.reference_library_sha256 is not None):
             raise ValueError("reference_library_sha256 is required only for BatLiNet")
+        expected_target = (
+            AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE
+            if rul
+            else AdvancedOutputTarget.SOH_TRAJECTORY
+        )
+        if self.output_target is not None and self.output_target is not expected_target:
+            raise ValueError("deployment route task and output target do not match")
         return self
 
 
@@ -188,6 +197,7 @@ class AdvancedDeploymentArtifact(ContractModel):
 
     artifact_id: str = Field(min_length=1)
     artifact_kind: DeepArtifactKind
+    output_target: AdvancedOutputTarget | None = None
     artifact_manifest_sha256: Sha256
     source_checkpoint_manifest_sha256: Sha256
     source_checkpoint_model_sha256: Sha256
@@ -200,7 +210,7 @@ class AdvancedDeploymentArtifact(ContractModel):
     normalization_sha256: Sha256
     target_scaler_context_sha256: Sha256 | None = None
     reference_library_sha256: Sha256 | None = None
-    files: tuple[DeepArtifactFile, ...] = Field(min_length=3, max_length=4)
+    files: tuple[DeepArtifactFile, ...] = Field(min_length=3, max_length=6)
     round_trip_verified: Literal[True] = True
 
     @model_validator(mode="after")
@@ -222,6 +232,13 @@ class AdvancedDeploymentArtifact(ContractModel):
         is_batlinet = self.artifact_kind is DeepArtifactKind.CYCLEPATCH_BATLINET
         if is_batlinet != (self.reference_library_sha256 is not None):
             raise ValueError("reference library context is required only for BatLiNet")
+        expected_target = (
+            AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE
+            if is_rul
+            else AdvancedOutputTarget.SOH_TRAJECTORY
+        )
+        if self.output_target is not None and self.output_target is not expected_target:
+            raise ValueError("deployment artifact kind and output target do not match")
         return self
 
 
@@ -230,7 +247,10 @@ class AdvancedDeploymentBundleIndex(ContractModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["advanced-deployment-bundle-index-v1"] = (
+    schema_version: Literal[
+        "advanced-deployment-bundle-index-v1",
+        "advanced-deployment-bundle-index-v2",
+    ] = (
         "advanced-deployment-bundle-index-v1"
     )
     activation_status: Literal["NOT_ACTIVATED"] = "NOT_ACTIVATED"
@@ -276,6 +296,11 @@ class AdvancedDeploymentBundleIndex(ContractModel):
         if {row.deep_artifact_id for row in self.routes} != artifact_ids:
             raise ValueError("deployment routes and artifacts do not form a closed set")
         artifact_by_id = {item.artifact_id: item for item in self.artifacts}
+        is_v2 = self.schema_version == "advanced-deployment-bundle-index-v2"
+        if is_v2 != all(
+            item.output_target is not None for item in self.artifacts
+        ) or is_v2 != all(row.output_target is not None for row in self.routes):
+            raise ValueError("deployment bundle schema and output targets do not match")
         expected_kinds = {
             "cyclepatch_direct": DeepArtifactKind.CYCLEPATCH_DIRECT,
             "cyclepatch_batlinet": DeepArtifactKind.CYCLEPATCH_BATLINET,
@@ -302,6 +327,7 @@ class AdvancedDeploymentBundleIndex(ContractModel):
                 or artifact.normalization_sha256 != route.normalization_sha256
                 or artifact.reference_library_sha256
                 != route.reference_library_sha256
+                or artifact.output_target is not route.output_target
             ):
                 raise ValueError("deployment route and artifact contexts do not match")
             if route.selection_manifest_sha256 != self.selection_manifest_sha256:
@@ -314,7 +340,27 @@ class AdvancedDeploymentBundleIndex(ContractModel):
         ):
             raise ValueError("deployment artifacts do not share the indexed versions")
         payload = self.model_dump(mode="json", exclude={"manifest_sha256"})
-        if sha256_canonical(payload) != self.manifest_sha256:
+        accepted_hashes = {sha256_canonical(payload)}
+        if self.schema_version == "advanced-deployment-bundle-index-v1":
+            legacy_payload = dict(payload)
+            legacy_payload["routes"] = [
+                {
+                    key: value
+                    for key, value in route.items()
+                    if key != "output_target"
+                }
+                for route in payload["routes"]
+            ]
+            legacy_payload["artifacts"] = [
+                {
+                    key: value
+                    for key, value in artifact.items()
+                    if key != "output_target"
+                }
+                for artifact in payload["artifacts"]
+            ]
+            accepted_hashes.add(sha256_canonical(legacy_payload))
+        if self.manifest_sha256 not in accepted_hashes:
             raise ValueError("deployment bundle manifest_sha256 does not match")
         return self
 
@@ -432,6 +478,7 @@ def export_advanced_deployment_bundles(
                 AdvancedDeploymentArtifact(
                     artifact_id=manifest.artifact_id,
                     artifact_kind=manifest.artifact_kind,
+                    output_target=manifest.output_target,
                     artifact_manifest_sha256=manifest.manifest_sha256,
                     source_checkpoint_manifest_sha256=checkpoint_hash,
                     source_checkpoint_model_sha256=str(
@@ -470,13 +517,24 @@ def export_advanced_deployment_bundles(
                     "deep_artifact_manifest_sha256": by_checkpoint[
                         str(route["checkpoint_manifest_sha256"])
                     ].manifest_sha256,
+                    "output_target": by_checkpoint[
+                        str(route["checkpoint_manifest_sha256"])
+                    ].output_target,
                 }
             )
             for route in source_routes
         )
         created_at = datetime.now(UTC)
+        index_schema_version = (
+            "advanced-deployment-bundle-index-v2"
+            if all(
+                manifest.schema_version == "deep-model-artifact-v2"
+                for manifest in by_checkpoint.values()
+            )
+            else "advanced-deployment-bundle-index-v1"
+        )
         payload: dict[str, Any] = {
-            "schema_version": "advanced-deployment-bundle-index-v1",
+            "schema_version": index_schema_version,
             "activation_status": "NOT_ACTIVATED",
             "created_at": created_at.isoformat().replace("+00:00", "Z"),
             "source_commit": final_index.source_commit,
@@ -726,6 +784,8 @@ def _rebuild_and_export_artifact(
             normalization_sha256=manifest.context.normalization_sha256,
             candidate_config_sha256=manifest.context.candidate_config_sha256,
             target_scaler=task.target_scaler,
+            normalizer=rebuilt.data.scalar_normalizer,
+            output_target=AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE,
         )
     elif family == "cyclepatch_batlinet":
         if manifest.context.reference_library_sha256 is None:
@@ -749,7 +809,13 @@ def _rebuild_and_export_artifact(
             normalization_sha256=manifest.context.normalization_sha256,
             candidate_config_sha256=manifest.context.candidate_config_sha256,
             reference_library=task.reference_library,
+            reference_batch=_reference_batch(
+                rebuilt.data.scalar_train.early_batch,
+                task.reference_library.cell_ids,
+            ),
             target_scaler=task.target_scaler,
+            normalizer=rebuilt.data.scalar_normalizer,
+            output_target=AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE,
         )
     elif family == "hybridpatch_v2":
         deep_manifest = export_hybridpatch_v2_artifact(
@@ -765,6 +831,8 @@ def _rebuild_and_export_artifact(
             condition_names=early.condition_names,
             normalization_sha256=manifest.context.normalization_sha256,
             candidate_config_sha256=manifest.context.candidate_config_sha256,
+            normalizer=rebuilt.data.hybrid_normalizer,
+            output_target=AdvancedOutputTarget.SOH_TRAJECTORY,
         )
     elif family == "current_hybrid":
         deep_manifest = export_current_hybrid_artifact(
@@ -783,6 +851,8 @@ def _rebuild_and_export_artifact(
             prediction_cycles=task.train_batch.prediction_cycles,
             variable_names=VARIABLE_NAMES,
             aggregation_version="masked-variable-mean-v1",
+            normalizer=rebuilt.data.hybrid_normalizer,
+            output_target=AdvancedOutputTarget.SOH_TRAJECTORY,
         )
     else:  # pragma: no cover - route contract closes this branch
         raise ValueError(f"unsupported Advanced model family: {family}")
@@ -968,7 +1038,7 @@ def _verify_round_trip(
                 ),
                 expected_target_scaler_context_sha256=task.target_scaler.context_sha256,
             )
-            actual = loaded_batlinet.predict_raw(target, reference)
+            actual = loaded_batlinet.predict_raw(target)
         elif family == "hybridpatch_v2":
             inputs = data.hybrid_validation.inputs
             expected = task.model(inputs).predicted_soh

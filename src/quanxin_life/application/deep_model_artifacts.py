@@ -26,7 +26,10 @@ from torch import Tensor
 from quanxin_life.core import PredictionTarget
 from quanxin_life.core.hashing import sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
-from quanxin_life.features.early_cycle_sequence import VARIABLE_NAMES
+from quanxin_life.features.early_cycle_sequence import (
+    VARIABLE_NAMES,
+    EarlyCycleNormalizer,
+)
 from quanxin_life.models.batlinet import (
     BatLiNetConfig,
     CycleLifeReferenceLibrary,
@@ -71,6 +74,13 @@ class DeepArtifactFileRole(StrEnum):
     ARCHITECTURE = "architecture"
     FEATURE_CONFIG = "feature-config"
     REFERENCE_LIBRARY = "reference-library"
+    INFERENCE_CONTEXT = "inference-context"
+    REFERENCE_BATCH = "reference-batch"
+
+
+class AdvancedOutputTarget(StrEnum):
+    MATR_OFFICIAL_CYCLE_LIFE = "matr_official_cycle_life"
+    SOH_TRAJECTORY = "soh_trajectory"
 
 
 class DeepArtifactFile(ContractModel):
@@ -94,10 +104,13 @@ class DeepArtifactFile(ContractModel):
 class DeepModelArtifactManifest(ContractModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["deep-model-artifact-v1"] = "deep-model-artifact-v1"
+    schema_version: Literal[
+        "deep-model-artifact-v1", "deep-model-artifact-v2"
+    ] = "deep-model-artifact-v1"
     artifact_id: str
     artifact_kind: DeepArtifactKind
-    files: tuple[DeepArtifactFile, ...] = Field(min_length=3, max_length=4)
+    output_target: AdvancedOutputTarget | None = None
+    files: tuple[DeepArtifactFile, ...] = Field(min_length=3, max_length=6)
     created_at: datetime
     manifest_sha256: Sha256
 
@@ -126,6 +139,17 @@ class DeepModelArtifactManifest(ContractModel):
         }
         if self.artifact_kind is DeepArtifactKind.CYCLEPATCH_BATLINET:
             required.add(DeepArtifactFileRole.REFERENCE_LIBRARY)
+        if self.schema_version == "deep-model-artifact-v2":
+            if self.artifact_kind in {DeepArtifactKind.CPMLP, DeepArtifactKind.HYBRID}:
+                raise ValueError("deep artifact v2 is reserved for Advanced models")
+            required.add(DeepArtifactFileRole.INFERENCE_CONTEXT)
+            if self.artifact_kind is DeepArtifactKind.CYCLEPATCH_BATLINET:
+                required.add(DeepArtifactFileRole.REFERENCE_BATCH)
+            expected_target = _output_target_for_kind(self.artifact_kind)
+            if self.output_target is not expected_target:
+                raise ValueError("artifact kind and output_target do not match")
+        elif self.output_target is not None:
+            raise ValueError("deep artifact v1 cannot declare output_target")
         if len(set(roles)) != len(roles) or set(roles) != required:
             raise ValueError("deep artifact files do not match the approved model kind")
         return self
@@ -334,6 +358,7 @@ class _AdvancedFeatureBase(ContractModel):
     condition_names: tuple[str, ...] = Field(min_length=1)
     normalization_sha256: Sha256
     candidate_config_sha256: Sha256
+    inference_context_sha256: Sha256 | None = None
 
     @model_validator(mode="after")
     def condition_schema_is_valid(self) -> _AdvancedFeatureBase:
@@ -341,6 +366,112 @@ class _AdvancedFeatureBase(ContractModel):
             not name.strip() for name in self.condition_names
         ):
             raise ValueError("condition_names must be unique and nonblank")
+        return self
+
+
+class EarlyCycleNormalizerArtifactConfig(ContractModel):
+    """Complete train-only normalization statistics required for inference."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["early-cycle-normalizer-artifact-v1"] = (
+        "early-cycle-normalizer-artifact-v1"
+    )
+    dataset_id: Literal["MATR"] = "MATR"
+    data_version: str = Field(min_length=1)
+    feature_version: str = Field(min_length=1)
+    cutoff_cycle: Literal[20, 50, 100, 150]
+    cycle_indices: tuple[int, ...] = Field(min_length=1)
+    sample_count: Literal[150]
+    condition_names: tuple[str, ...] = Field(min_length=1)
+    variable_means: tuple[float, ...]
+    variable_stds: tuple[float, ...]
+    condition_means: tuple[float, ...]
+    condition_stds: tuple[float, ...]
+    training_cell_ids_sha256: Sha256
+    statistics_sha256: Sha256
+
+    @model_validator(mode="after")
+    def statistics_are_valid(self) -> EarlyCycleNormalizerArtifactConfig:
+        self.to_runtime()
+        return self
+
+    @classmethod
+    def from_runtime(
+        cls,
+        normalizer: EarlyCycleNormalizer,
+    ) -> EarlyCycleNormalizerArtifactConfig:
+        return cls.model_validate(
+            {
+                "dataset_id": normalizer.dataset_id,
+                "data_version": normalizer.data_version,
+                "feature_version": normalizer.feature_version,
+                "cutoff_cycle": normalizer.cutoff_cycle,
+                "cycle_indices": normalizer.cycle_indices,
+                "sample_count": normalizer.sample_count,
+                "condition_names": normalizer.condition_names,
+                "variable_means": normalizer.variable_means,
+                "variable_stds": normalizer.variable_stds,
+                "condition_means": normalizer.condition_means,
+                "condition_stds": normalizer.condition_stds,
+                "training_cell_ids_sha256": normalizer.training_cell_ids_sha256,
+                "statistics_sha256": normalizer.statistics_sha256,
+            }
+        )
+
+    def to_runtime(self) -> EarlyCycleNormalizer:
+        return EarlyCycleNormalizer(
+            dataset_id=self.dataset_id,
+            data_version=self.data_version,
+            feature_version=self.feature_version,
+            cutoff_cycle=self.cutoff_cycle,
+            cycle_indices=self.cycle_indices,
+            sample_count=self.sample_count,
+            condition_names=self.condition_names,
+            variable_means=self.variable_means,
+            variable_stds=self.variable_stds,
+            condition_means=self.condition_means,
+            condition_stds=self.condition_stds,
+            training_cell_ids_sha256=self.training_cell_ids_sha256,
+            statistics_sha256=self.statistics_sha256,
+        )
+
+
+class BatLiNetReferenceBatchMetadata(ContractModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["batlinet-reference-batch-v1"] = (
+        "batlinet-reference-batch-v1"
+    )
+    dataset_id: Literal["MATR"] = "MATR"
+    data_version: str = Field(min_length=1)
+    feature_version: str = Field(min_length=1)
+    normalization_statistics_sha256: Sha256
+    cell_ids: tuple[str, ...] = Field(min_length=1)
+    condition_names: tuple[str, ...] = Field(min_length=1)
+    reference_library_sha256: Sha256
+    tensor_file_sha256: Sha256
+
+
+class AdvancedInferenceContext(ContractModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["advanced-inference-context-v1"] = (
+        "advanced-inference-context-v1"
+    )
+    output_target: AdvancedOutputTarget
+    normalizer: EarlyCycleNormalizerArtifactConfig
+    reference_batch: BatLiNetReferenceBatchMetadata | None = None
+    inference_context_sha256: Sha256
+
+    @model_validator(mode="after")
+    def context_hash_is_valid(self) -> AdvancedInferenceContext:
+        payload = self.model_dump(
+            mode="json",
+            exclude={"inference_context_sha256"},
+        )
+        if sha256_canonical(payload) != self.inference_context_sha256:
+            raise ValueError("inference_context_sha256 does not match its contents")
         return self
 
 
@@ -702,11 +833,13 @@ class LoadedCyclePatchDirect(torch.nn.Module):
         self,
         network: CyclePatchLifeRegressor,
         feature: AdvancedFeatureConfig,
+        normalizer: EarlyCycleNormalizerArtifactConfig | None = None,
     ) -> None:
         super().__init__()
         self.network = network
         self.feature = feature
         self.target_scaler = feature.target_scaler.to_runtime()
+        self.normalizer = None if normalizer is None else normalizer.to_runtime()
 
     def forward(self, batch: EarlyCycleBatch) -> Tensor:
         return self.predict_raw(batch)
@@ -728,12 +861,16 @@ class LoadedCyclePatchBatLiNet(torch.nn.Module):
         network: CyclePatchBatLiNet,
         feature: BatLiNetFeatureConfig,
         reference_library: CycleLifeReferenceLibraryConfig,
+        reference_batch: EarlyCycleBatch | None = None,
+        normalizer: EarlyCycleNormalizerArtifactConfig | None = None,
     ) -> None:
         super().__init__()
         self.network = network
         self.feature = feature
         self.target_scaler = feature.target_scaler.to_runtime()
         self.reference_library = reference_library.to_runtime()
+        self.reference_batch = reference_batch
+        self.normalizer = None if normalizer is None else normalizer.to_runtime()
 
     def encode(self, batch: EarlyCycleBatch) -> Tensor:
         _validate_advanced_batch(batch, self.feature)
@@ -755,8 +892,11 @@ class LoadedCyclePatchBatLiNet(torch.nn.Module):
     def predict_standardized(
         self,
         target_batch: EarlyCycleBatch,
-        reference_batch: EarlyCycleBatch,
+        reference_batch: EarlyCycleBatch | None = None,
     ) -> Tensor:
+        reference_batch = reference_batch or self.reference_batch
+        if reference_batch is None:
+            raise ValueError("a self-contained or explicitly approved reference batch is required")
         _validate_advanced_batch(target_batch, self.feature)
         reference_labels = self._validated_reference_labels(reference_batch)
         target_embeddings = self.network.encode(target_batch)
@@ -770,7 +910,7 @@ class LoadedCyclePatchBatLiNet(torch.nn.Module):
     def predict_raw(
         self,
         target_batch: EarlyCycleBatch,
-        reference_batch: EarlyCycleBatch,
+        reference_batch: EarlyCycleBatch | None = None,
     ) -> Tensor:
         return self.target_scaler.inverse_transform(
             self.predict_standardized(target_batch, reference_batch)
@@ -804,10 +944,12 @@ class LoadedHybridPatchV2(torch.nn.Module):
         self,
         network: HybridPatchV2Predictor,
         feature: HybridPatchV2FeatureConfig,
+        normalizer: EarlyCycleNormalizerArtifactConfig | None = None,
     ) -> None:
         super().__init__()
         self.network = network
         self.feature = feature
+        self.normalizer = None if normalizer is None else normalizer.to_runtime()
 
     def forward(self, inputs: HybridPatchV2Inputs) -> HybridPatchV2Output:
         _validate_advanced_batch(inputs.early_batch, self.feature)
@@ -832,6 +974,8 @@ def export_cyclepatch_direct_artifact(
     normalization_sha256: str,
     candidate_config_sha256: str,
     target_scaler: CycleLifeTargetScaler,
+    normalizer: EarlyCycleNormalizer | None = None,
+    output_target: AdvancedOutputTarget | str | None = None,
 ) -> DeepModelArtifactManifest:
     _require_inference_network(network, CyclePatchLifeRegressor)
     config = network.encoder.config
@@ -862,6 +1006,11 @@ def export_cyclepatch_direct_artifact(
     )
     _validate_scalar_scaler_context(feature.target_scaler, feature.cutoff_cycle)
     _validate_condition_count(architecture.condition_count, feature.condition_names)
+    normalized_target = _optional_output_target(
+        DeepArtifactKind.CYCLEPATCH_DIRECT,
+        output_target,
+        normalizer,
+    )
     return _export_deep_artifact(
         network=network,
         artifact_root=artifact_root,
@@ -870,6 +1019,8 @@ def export_cyclepatch_direct_artifact(
         architecture=architecture.model_dump(mode="json"),
         feature_config=feature.model_dump(mode="json"),
         created_at=created_at,
+        normalizer=normalizer,
+        output_target=normalized_target,
     )
 
 
@@ -898,13 +1049,21 @@ def load_cyclepatch_direct_artifact(
     _validate_target_scaler_context(
         feature.target_scaler, expected_target_scaler_context_sha256
     )
+    normalizer = None
+    if manifest.schema_version == "deep-model-artifact-v2":
+        context, _reference_batch = _load_self_contained_inference_context(
+            files,
+            manifest,
+            feature,
+        )
+        normalizer = context.normalizer
     _validate_condition_count(architecture.condition_count, feature.condition_names)
     network = CyclePatchLifeRegressor(
         _cyclepatch_config_from(architecture),
         condition_count=architecture.condition_count,
     )
     _load_verified_state(network, files[DeepArtifactFileRole.WEIGHTS])
-    return LoadedCyclePatchDirect(network.eval(), feature).eval()
+    return LoadedCyclePatchDirect(network.eval(), feature, normalizer).eval()
 
 
 def export_cyclepatch_batlinet_artifact(
@@ -923,6 +1082,9 @@ def export_cyclepatch_batlinet_artifact(
     candidate_config_sha256: str,
     reference_library: CycleLifeReferenceLibrary,
     target_scaler: CycleLifeTargetScaler,
+    reference_batch: EarlyCycleBatch | None = None,
+    normalizer: EarlyCycleNormalizer | None = None,
+    output_target: AdvancedOutputTarget | str | None = None,
 ) -> DeepModelArtifactManifest:
     _require_inference_network(network, CyclePatchBatLiNet)
     config = network.config
@@ -965,6 +1127,13 @@ def export_cyclepatch_batlinet_artifact(
         architecture.reference_count,
     )
     _validate_condition_count(architecture.condition_count, feature.condition_names)
+    normalized_target = _optional_output_target(
+        DeepArtifactKind.CYCLEPATCH_BATLINET,
+        output_target,
+        normalizer,
+    )
+    if normalized_target is not None and reference_batch is None:
+        raise ValueError("BatLiNet artifact v2 requires a reference batch")
     return _export_deep_artifact(
         network=network,
         artifact_root=artifact_root,
@@ -974,6 +1143,10 @@ def export_cyclepatch_batlinet_artifact(
         feature_config=feature.model_dump(mode="json"),
         reference_library=reference_config.model_dump(mode="json"),
         created_at=created_at,
+        normalizer=normalizer,
+        output_target=normalized_target,
+        reference_batch=reference_batch,
+        reference_library_sha256=reference_config.library_sha256,
     )
 
 
@@ -1015,6 +1188,16 @@ def load_cyclepatch_batlinet_artifact(
         feature.target_scaler,
         architecture.reference_count,
     )
+    reference_batch = None
+    normalizer = None
+    if manifest.schema_version == "deep-model-artifact-v2":
+        context, reference_batch = _load_self_contained_inference_context(
+            files,
+            manifest,
+            feature,
+            reference_library=reference_library,
+        )
+        normalizer = context.normalizer
     _validate_condition_count(architecture.condition_count, feature.condition_names)
     network = CyclePatchBatLiNet(
         BatLiNetConfig(
@@ -1027,7 +1210,13 @@ def load_cyclepatch_batlinet_artifact(
         condition_count=architecture.condition_count,
     )
     _load_verified_state(network, files[DeepArtifactFileRole.WEIGHTS])
-    return LoadedCyclePatchBatLiNet(network.eval(), feature, reference_library).eval()
+    return LoadedCyclePatchBatLiNet(
+        network.eval(),
+        feature,
+        reference_library,
+        reference_batch,
+        normalizer,
+    ).eval()
 
 
 def export_hybridpatch_v2_artifact(
@@ -1044,6 +1233,8 @@ def export_hybridpatch_v2_artifact(
     condition_names: tuple[str, ...],
     normalization_sha256: str,
     candidate_config_sha256: str,
+    normalizer: EarlyCycleNormalizer | None = None,
+    output_target: AdvancedOutputTarget | str | None = None,
 ) -> DeepModelArtifactManifest:
     _require_inference_network(network, HybridPatchV2Predictor)
     config = network.config
@@ -1081,6 +1272,11 @@ def export_hybridpatch_v2_artifact(
         }
     )
     _validate_condition_count(architecture.condition_count, feature.condition_names)
+    normalized_target = _optional_output_target(
+        DeepArtifactKind.HYBRIDPATCH_V2,
+        output_target,
+        normalizer,
+    )
     return _export_deep_artifact(
         network=network,
         artifact_root=artifact_root,
@@ -1089,6 +1285,8 @@ def export_hybridpatch_v2_artifact(
         architecture=architecture.model_dump(mode="json"),
         feature_config=feature.model_dump(mode="json"),
         created_at=created_at,
+        normalizer=normalizer,
+        output_target=normalized_target,
     )
 
 
@@ -1115,6 +1313,14 @@ def load_hybridpatch_v2_artifact(
     )
     if architecture.max_prediction_cycle != feature.max_prediction_cycle:
         raise ValueError("HybridPatch-v2 prediction boundary does not match feature context")
+    normalizer = None
+    if manifest.schema_version == "deep-model-artifact-v2":
+        context, _reference_batch = _load_self_contained_inference_context(
+            files,
+            manifest,
+            feature,
+        )
+        normalizer = context.normalizer
     _validate_condition_count(architecture.condition_count, feature.condition_names)
     network = HybridPatchV2Predictor(
         HybridPatchV2Config(
@@ -1132,7 +1338,7 @@ def load_hybridpatch_v2_artifact(
         condition_count=architecture.condition_count,
     )
     _load_verified_state(network, files[DeepArtifactFileRole.WEIGHTS])
-    return LoadedHybridPatchV2(network.eval(), feature).eval()
+    return LoadedHybridPatchV2(network.eval(), feature, normalizer).eval()
 
 
 class LoadedCurrentHybrid(torch.nn.Module):
@@ -1142,10 +1348,12 @@ class LoadedCurrentHybrid(torch.nn.Module):
         self,
         network: _HybridNetwork,
         feature: CurrentHybridFeatureConfig,
+        normalizer: EarlyCycleNormalizerArtifactConfig | None = None,
     ) -> None:
         super().__init__()
         self.network = network
         self.feature = feature
+        self.normalizer = None if normalizer is None else normalizer.to_runtime()
         cycle_positions = normalise_prediction_cycle_positions(
             prediction_cycles=feature.prediction_cycles,
             cutoff_cycle=feature.cutoff_cycle,
@@ -1206,6 +1414,8 @@ def export_current_hybrid_artifact(
     aggregation_version: str,
     normalization_sha256: str,
     candidate_config_sha256: str,
+    normalizer: EarlyCycleNormalizer | None = None,
+    output_target: AdvancedOutputTarget | str | None = None,
 ) -> DeepModelArtifactManifest:
     _require_inference_network(network, _HybridNetwork)
     input_layer = network.encoder[0]
@@ -1237,6 +1447,11 @@ def export_current_hybrid_artifact(
         raise ValueError("variable_names do not match Current Hybrid input_dim")
     if architecture.horizon != len(feature.prediction_cycles):
         raise ValueError("prediction_cycles do not match Current Hybrid horizon")
+    normalized_target = _optional_output_target(
+        DeepArtifactKind.CURRENT_HYBRID,
+        output_target,
+        normalizer,
+    )
     return _export_deep_artifact(
         network=network,
         artifact_root=artifact_root,
@@ -1245,6 +1460,8 @@ def export_current_hybrid_artifact(
         architecture=architecture.model_dump(mode="json"),
         feature_config=feature.model_dump(mode="json"),
         created_at=created_at,
+        normalizer=normalizer,
+        output_target=normalized_target,
     )
 
 
@@ -1284,13 +1501,21 @@ def load_current_hybrid_artifact(
         raise ValueError("variable_names do not match Current Hybrid input_dim")
     if architecture.horizon != len(feature.prediction_cycles):
         raise ValueError("prediction_cycles do not match Current Hybrid horizon")
+    normalizer = None
+    if manifest.schema_version == "deep-model-artifact-v2":
+        context, _reference_batch = _load_self_contained_inference_context(
+            files,
+            manifest,
+            feature,
+        )
+        normalizer = context.normalizer
     network = _HybridNetwork(
         input_dim=architecture.input_dim,
         horizon=architecture.horizon,
         hidden_dim=architecture.hidden_dim,
     )
     _load_verified_state(network, files[DeepArtifactFileRole.WEIGHTS])
-    return LoadedCurrentHybrid(network.eval(), feature).eval()
+    return LoadedCurrentHybrid(network.eval(), feature, normalizer).eval()
 
 
 def _advanced_files(
@@ -1304,6 +1529,78 @@ def _advanced_files(
             f"artifact kind is not an approved {expected_kind.value} model"
         )
     return _verify_deep_artifact(artifact_root, manifest)
+
+
+def _advanced_feature_from_files(
+    files: dict[DeepArtifactFileRole, Path],
+    kind: DeepArtifactKind,
+) -> _AdvancedFeatureBase:
+    payload = _read_strict_json(files[DeepArtifactFileRole.FEATURE_CONFIG])
+    feature_types: dict[DeepArtifactKind, type[_AdvancedFeatureBase]] = {
+        DeepArtifactKind.CYCLEPATCH_DIRECT: AdvancedFeatureConfig,
+        DeepArtifactKind.CYCLEPATCH_BATLINET: BatLiNetFeatureConfig,
+        DeepArtifactKind.CURRENT_HYBRID: CurrentHybridFeatureConfig,
+        DeepArtifactKind.HYBRIDPATCH_V2: HybridPatchV2FeatureConfig,
+    }
+    feature_type = feature_types.get(kind)
+    if feature_type is None:
+        raise ValueError("artifact is not an Advanced deployment model")
+    return feature_type.model_validate(payload)
+
+
+def _load_self_contained_inference_context(
+    files: dict[DeepArtifactFileRole, Path],
+    manifest: DeepModelArtifactManifest,
+    feature: _AdvancedFeatureBase,
+    *,
+    reference_library: CycleLifeReferenceLibraryConfig | None = None,
+) -> tuple[AdvancedInferenceContext, EarlyCycleBatch | None]:
+    if manifest.schema_version != "deep-model-artifact-v2":
+        raise ValueError("self-contained Advanced runtime requires artifact v2")
+    context = AdvancedInferenceContext.model_validate(
+        _read_strict_json(files[DeepArtifactFileRole.INFERENCE_CONTEXT])
+    )
+    if (
+        manifest.output_target is not context.output_target
+        or context.output_target is not _output_target_for_kind(manifest.artifact_kind)
+        or feature.inference_context_sha256 != context.inference_context_sha256
+    ):
+        raise ValueError("inference context does not match the artifact manifest")
+    normalizer = context.normalizer
+    if (
+        normalizer.dataset_id != feature.dataset_id
+        or normalizer.data_version != feature.data_version
+        or normalizer.feature_version != feature.feature_version
+        or normalizer.cutoff_cycle != feature.cutoff_cycle
+        or normalizer.condition_names != feature.condition_names
+        or normalizer.statistics_sha256 != feature.normalization_sha256
+    ):
+        raise ValueError("inference normalizer does not match feature context")
+    if manifest.artifact_kind is not DeepArtifactKind.CYCLEPATCH_BATLINET:
+        if context.reference_batch is not None:
+            raise ValueError("reference batch is only valid for BatLiNet")
+        return context, None
+    if reference_library is None or context.reference_batch is None:
+        raise ValueError("BatLiNet self-contained reference batch is missing")
+    metadata = context.reference_batch
+    reference_file = next(
+        item
+        for item in manifest.files
+        if item.role is DeepArtifactFileRole.REFERENCE_BATCH
+    )
+    if (
+        metadata.tensor_file_sha256 != reference_file.sha256
+        or metadata.reference_library_sha256 != reference_library.library_sha256
+        or metadata.cell_ids != reference_library.cell_ids
+        or metadata.normalization_statistics_sha256
+        != feature.normalization_sha256
+    ):
+        raise ValueError("reference batch metadata does not match BatLiNet context")
+    reference_batch = _load_reference_batch(
+        files[DeepArtifactFileRole.REFERENCE_BATCH],
+        metadata,
+    )
+    return context, reference_batch
 
 
 def _require_inference_network(
@@ -1383,6 +1680,70 @@ def _validate_reference_scaler_context(
         raise ValueError("reference library training labels do not match target scaler")
 
 
+def _output_target_for_kind(kind: DeepArtifactKind) -> AdvancedOutputTarget:
+    if kind in {
+        DeepArtifactKind.CYCLEPATCH_DIRECT,
+        DeepArtifactKind.CYCLEPATCH_BATLINET,
+    }:
+        return AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE
+    if kind in {
+        DeepArtifactKind.CURRENT_HYBRID,
+        DeepArtifactKind.HYBRIDPATCH_V2,
+    }:
+        return AdvancedOutputTarget.SOH_TRAJECTORY
+    raise ValueError("artifact kind is not an Advanced deployment model")
+
+
+def _optional_output_target(
+    kind: DeepArtifactKind,
+    output_target: AdvancedOutputTarget | str | None,
+    normalizer: EarlyCycleNormalizer | None,
+) -> AdvancedOutputTarget | None:
+    if output_target is None and normalizer is None:
+        return None
+    if output_target is None or normalizer is None:
+        raise ValueError("artifact v2 requires both normalizer and output_target")
+    try:
+        normalized = AdvancedOutputTarget(output_target)
+    except ValueError as exc:
+        raise ValueError("output_target is not supported") from exc
+    if normalized is not _output_target_for_kind(kind):
+        raise ValueError("artifact kind and output_target do not match")
+    return normalized
+
+
+def _validate_normalizer_context(
+    normalizer: EarlyCycleNormalizer,
+    *,
+    dataset_id: str,
+    data_version: str,
+    feature_version: str,
+    cutoff_cycle: int,
+    condition_names: tuple[str, ...],
+    normalization_sha256: str,
+) -> EarlyCycleNormalizerArtifactConfig:
+    config = EarlyCycleNormalizerArtifactConfig.from_runtime(normalizer)
+    expected = (
+        dataset_id,
+        data_version,
+        feature_version,
+        cutoff_cycle,
+        condition_names,
+        normalization_sha256,
+    )
+    actual = (
+        config.dataset_id,
+        config.data_version,
+        config.feature_version,
+        config.cutoff_cycle,
+        config.condition_names,
+        config.statistics_sha256,
+    )
+    if actual != expected:
+        raise ValueError("normalizer does not match the Advanced artifact context")
+    return config
+
+
 def _validate_advanced_batch(
     batch: EarlyCycleBatch,
     feature: _AdvancedFeatureBase,
@@ -1411,6 +1772,10 @@ def _export_deep_artifact(
     feature_config: dict[str, Any],
     created_at: datetime,
     reference_library: dict[str, Any] | None = None,
+    normalizer: EarlyCycleNormalizer | None = None,
+    output_target: AdvancedOutputTarget | None = None,
+    reference_batch: EarlyCycleBatch | None = None,
+    reference_library_sha256: str | None = None,
 ) -> DeepModelArtifactManifest:
     try:
         normalized_id = str(UUID(artifact_id))
@@ -1421,6 +1786,26 @@ def _export_deep_artifact(
     requires_reference = artifact_kind is DeepArtifactKind.CYCLEPATCH_BATLINET
     if requires_reference != (reference_library is not None):
         raise ValueError("reference library presence does not match artifact kind")
+    is_v2 = normalizer is not None or output_target is not None
+    if is_v2 != (normalizer is not None and output_target is not None):
+        raise ValueError("artifact v2 inference context is incomplete")
+    if is_v2:
+        assert normalizer is not None and output_target is not None
+        _validate_normalizer_context(
+            normalizer,
+            dataset_id=str(feature_config.get("dataset_id", "")),
+            data_version=str(feature_config.get("data_version", "")),
+            feature_version=str(feature_config.get("feature_version", "")),
+            cutoff_cycle=int(feature_config.get("cutoff_cycle", -1)),
+            condition_names=tuple(feature_config.get("condition_names", ())),
+            normalization_sha256=str(
+                feature_config.get("normalization_sha256", "")
+            ),
+        )
+        if requires_reference != (reference_batch is not None):
+            raise ValueError("reference batch presence does not match artifact kind")
+    elif reference_batch is not None:
+        raise ValueError("reference batch requires artifact v2")
     root = _validated_root(artifact_root)
     target = root / normalized_id
     if target.exists() or target.is_symlink():
@@ -1434,18 +1819,82 @@ def _export_deep_artifact(
         architecture_path = temporary / "architecture.json"
         feature_path = temporary / "feature_config.json"
         reference_path = temporary / "reference_library.json"
+        inference_context_path = temporary / "inference_context.json"
+        reference_batch_path = temporary / "reference_batch.safetensors"
         _save_safetensors(network, weights_path)
         _write_json(architecture_path, architecture)
-        _write_json(feature_path, feature_config)
-        registered_files = [
-            (DeepArtifactFileRole.WEIGHTS, weights_path),
-            (DeepArtifactFileRole.ARCHITECTURE, architecture_path),
-            (DeepArtifactFileRole.FEATURE_CONFIG, feature_path),
-        ]
+        registered_files = []
         if reference_library is not None:
             _write_json(reference_path, reference_library)
+        reference_metadata = None
+        if reference_batch is not None:
+            if reference_library_sha256 is None:
+                raise ValueError("reference batch requires reference library SHA-256")
+            _save_reference_batch(reference_batch, reference_batch_path)
+            reference_batch_sha256 = _sha256_file(reference_batch_path)
+            reference_metadata = BatLiNetReferenceBatchMetadata.model_validate(
+                {
+                    "dataset_id": reference_batch.dataset_id,
+                    "data_version": reference_batch.data_version,
+                    "feature_version": reference_batch.feature_version,
+                    "normalization_statistics_sha256": (
+                        reference_batch.normalization_statistics_sha256
+                    ),
+                    "cell_ids": reference_batch.cell_ids,
+                    "condition_names": reference_batch.condition_names,
+                    "reference_library_sha256": reference_library_sha256,
+                    "tensor_file_sha256": reference_batch_sha256,
+                }
+            )
+        if is_v2:
+            assert normalizer is not None and output_target is not None
+            context_payload = {
+                "schema_version": "advanced-inference-context-v1",
+                "output_target": output_target.value,
+                "normalizer": EarlyCycleNormalizerArtifactConfig.from_runtime(
+                    normalizer
+                ).model_dump(mode="json"),
+                "reference_batch": (
+                    None
+                    if reference_metadata is None
+                    else reference_metadata.model_dump(mode="json")
+                ),
+            }
+            inference_context = AdvancedInferenceContext.model_validate(
+                {
+                    **context_payload,
+                    "inference_context_sha256": sha256_canonical(context_payload),
+                }
+            )
+            _write_json(
+                inference_context_path,
+                inference_context.model_dump(mode="json"),
+            )
+            feature_config = {
+                **feature_config,
+                "inference_context_sha256": (
+                    inference_context.inference_context_sha256
+                ),
+            }
+        _write_json(feature_path, feature_config)
+        registered_files.extend(
+            [
+                (DeepArtifactFileRole.WEIGHTS, weights_path),
+                (DeepArtifactFileRole.ARCHITECTURE, architecture_path),
+                (DeepArtifactFileRole.FEATURE_CONFIG, feature_path),
+            ]
+        )
+        if reference_library is not None:
             registered_files.append(
                 (DeepArtifactFileRole.REFERENCE_LIBRARY, reference_path)
+            )
+        if is_v2:
+            registered_files.append(
+                (DeepArtifactFileRole.INFERENCE_CONTEXT, inference_context_path)
+            )
+        if reference_batch is not None:
+            registered_files.append(
+                (DeepArtifactFileRole.REFERENCE_BATCH, reference_batch_path)
             )
         files = tuple(
             DeepArtifactFile(
@@ -1457,12 +1906,16 @@ def _export_deep_artifact(
             for role, path in registered_files
         )
         manifest_payload = {
-            "schema_version": "deep-model-artifact-v1",
+            "schema_version": (
+                "deep-model-artifact-v2" if is_v2 else "deep-model-artifact-v1"
+            ),
             "artifact_id": normalized_id,
             "artifact_kind": artifact_kind.value,
             "files": [item.model_dump(mode="json") for item in files],
             "created_at": created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"),
         }
+        if output_target is not None:
+            manifest_payload["output_target"] = output_target.value
         manifest = DeepModelArtifactManifest.model_validate(
             {
                 **manifest_payload,
@@ -1483,7 +1936,13 @@ def _verify_deep_artifact(
 ) -> dict[DeepArtifactFileRole, Path]:
     root = _validated_root(artifact_root)
     payload = manifest.model_dump(mode="json", exclude={"manifest_sha256"})
-    if sha256_canonical(payload) != manifest.manifest_sha256:
+    accepted_hashes = {sha256_canonical(payload)}
+    if manifest.schema_version == "deep-model-artifact-v1":
+        legacy_payload = {
+            key: value for key, value in payload.items() if key != "output_target"
+        }
+        accepted_hashes.add(sha256_canonical(legacy_payload))
+    if manifest.manifest_sha256 not in accepted_hashes:
         raise ValueError("manifest SHA-256 does not match its contents")
     artifact_directory = root / manifest.artifact_id
     if artifact_directory.is_symlink():
@@ -1526,6 +1985,86 @@ def verify_deep_model_artifact(
     """Reverify every registered byte without constructing a model."""
 
     _verify_deep_artifact(artifact_root, manifest)
+
+
+def verify_self_contained_advanced_artifact(
+    artifact_root: Path,
+    manifest: DeepModelArtifactManifest,
+) -> AdvancedInferenceContext:
+    """Verify that an Advanced artifact contains all preprocessing state."""
+
+    if manifest.schema_version != "deep-model-artifact-v2":
+        raise ValueError("self-contained Advanced runtime requires artifact v2")
+    files = _verify_deep_artifact(artifact_root, manifest)
+    feature = _advanced_feature_from_files(files, manifest.artifact_kind)
+    reference_library = None
+    if manifest.artifact_kind is DeepArtifactKind.CYCLEPATCH_BATLINET:
+        reference_library = CycleLifeReferenceLibraryConfig.model_validate(
+            _read_strict_json(files[DeepArtifactFileRole.REFERENCE_LIBRARY])
+        )
+    context, _reference_batch = _load_self_contained_inference_context(
+        files,
+        manifest,
+        feature,
+        reference_library=reference_library,
+    )
+    return context
+
+
+def _save_reference_batch(batch: EarlyCycleBatch, path: Path) -> None:
+    try:
+        from safetensors.torch import save_file
+    except ImportError as exc:
+        raise RuntimeError("safetensors is required for reference batch export") from exc
+    tensors = {
+        "values": batch.values.detach().cpu().contiguous(),
+        "cycle_indices": batch.cycle_indices.detach().cpu().contiguous(),
+        "cycle_mask": batch.cycle_mask.detach().cpu().contiguous(),
+        "sample_mask": batch.sample_mask.detach().cpu().contiguous(),
+        "condition_values": batch.condition_values.detach().cpu().contiguous(),
+        "condition_mask": batch.condition_mask.detach().cpu().contiguous(),
+    }
+    save_file(tensors, str(path))
+
+
+def _load_reference_batch(
+    path: Path,
+    metadata: BatLiNetReferenceBatchMetadata,
+) -> EarlyCycleBatch:
+    try:
+        from safetensors.torch import load_file
+    except ImportError as exc:
+        raise RuntimeError("safetensors is required for reference batch loading") from exc
+    tensors = load_file(str(path), device="cpu")
+    expected = {
+        "values",
+        "cycle_indices",
+        "cycle_mask",
+        "sample_mask",
+        "condition_values",
+        "condition_mask",
+    }
+    if set(tensors) != expected:
+        raise ValueError("reference batch safetensors keys are invalid")
+    try:
+        return EarlyCycleBatch(
+            dataset_id=metadata.dataset_id,
+            data_version=metadata.data_version,
+            feature_version=metadata.feature_version,
+            normalization_statistics_sha256=(
+                metadata.normalization_statistics_sha256
+            ),
+            cell_ids=metadata.cell_ids,
+            condition_names=metadata.condition_names,
+            values=tensors["values"],
+            cycle_indices=tensors["cycle_indices"],
+            cycle_mask=tensors["cycle_mask"],
+            sample_mask=tensors["sample_mask"],
+            condition_values=tensors["condition_values"],
+            condition_mask=tensors["condition_mask"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("reference batch tensors are invalid") from exc
 
 
 def _save_safetensors(network: torch.nn.Module, path: Path) -> None:

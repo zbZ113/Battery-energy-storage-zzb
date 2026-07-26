@@ -319,7 +319,11 @@ class AdvancedDeepModelArtifactCatalogSource:
                 data_version=artifact.data_version,
                 feature_version=artifact.feature_version,
                 split_version=artifact.split_version,
-                schema_version="deep-model-artifact-v1",
+                schema_version=(
+                    "deep-model-artifact-v2"
+                    if artifact.output_target is not None
+                    else "deep-model-artifact-v1"
+                ),
                 cutoff_cycle=artifact.cutoff_cycle,
                 feature_names=VARIABLE_NAMES,
                 advanced_provenance=AdvancedModelArtifactProvenance(
