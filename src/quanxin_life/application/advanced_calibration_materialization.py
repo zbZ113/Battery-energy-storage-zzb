@@ -142,6 +142,7 @@ class AdvancedCalibrationCellInputResolver(Protocol):
         *,
         source_registration_id: str,
         source_identity: AdvancedCalibrationSourceIdentity,
+        task: AdvancedModelTask,
         cell_id: str,
         cutoff_cycle: int,
         feature_version: str,
@@ -236,6 +237,7 @@ class VerifiedAdvancedCalibrationCellPredictor:
         resolved = self._input_resolver.resolve(
             source_registration_id=source_registration_id,
             source_identity=source_identity,
+            task=runtime.task,
             cell_id=cell_id,
             cutoff_cycle=runtime.cutoff_cycle,
             feature_version=runtime.feature_version,

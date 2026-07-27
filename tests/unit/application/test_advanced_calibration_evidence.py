@@ -140,6 +140,194 @@ def test_resolves_soh_from_verified_finite_horizon_supervision(
     )
 
 
+def test_resolves_verified_calibration_cell_source_and_cutoff_soh(
+    tmp_path: Path,
+) -> None:
+    fixture = _build_fixture(tmp_path)
+    resolver = fixture.resolver()
+    rul = resolver.resolve(
+        "matr-three-batch-final-v1",
+        task=AdvancedModelTask.RUL,
+        cutoff_cycle=100,
+    )
+    soh = resolver.resolve(
+        "matr-three-batch-final-v1",
+        task=AdvancedModelTask.SOH,
+        cutoff_cycle=100,
+    )
+    cell_id = fixture.calibration_cells[0]
+
+    rul_source = resolver.resolve_cell_source(
+        "matr-three-batch-final-v1",
+        source_identity=rul.source_identity,
+        task=AdvancedModelTask.RUL,
+        cutoff_cycle=100,
+        cell_id=cell_id,
+    )
+    soh_source = resolver.resolve_cell_source(
+        "matr-three-batch-final-v1",
+        source_identity=soh.source_identity,
+        task=AdvancedModelTask.SOH,
+        cutoff_cycle=100,
+        cell_id=cell_id,
+    )
+
+    assert rul_source.cell_evidence.cell_id == cell_id
+    assert rul_source.processed_root == (
+        fixture.root / "data/processed-1"
+    ).resolve()
+    assert rul_source.raw_sha256 == _digest("raw-1")
+    assert rul_source.initial_soh is None
+    assert soh_source.initial_soh == pytest.approx(0.989)
+
+
+def test_cell_source_rejects_non_calibration_cell_and_changed_identity(
+    tmp_path: Path,
+) -> None:
+    fixture = _build_fixture(tmp_path)
+    resolver = fixture.resolver()
+    evidence = resolver.resolve(
+        "matr-three-batch-final-v1",
+        task=AdvancedModelTask.RUL,
+        cutoff_cycle=100,
+    )
+
+    with pytest.raises(ValueError, match="calibration"):
+        resolver.resolve_cell_source(
+            "matr-three-batch-final-v1",
+            source_identity=evidence.source_identity,
+            task=AdvancedModelTask.RUL,
+            cutoff_cycle=100,
+            cell_id="MATR_b1c1",
+        )
+
+    with pytest.raises(ValueError, match="identity"):
+        resolver.resolve_cell_source(
+            "matr-three-batch-final-v1",
+            source_identity=evidence.source_identity.model_copy(
+                update={"source_identity_sha256": "f" * 64}
+            ),
+            task=AdvancedModelTask.RUL,
+            cutoff_cycle=100,
+            cell_id=fixture.calibration_cells[0],
+        )
+
+
+def test_rejects_supervision_replacement_after_initial_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _build_fixture(tmp_path)
+    target = fixture.parquet_paths[0]
+    real_read_bytes = Path.read_bytes
+
+    def read_tampered_bytes(path: Path) -> bytes:
+        if path == target:
+            return b"tampered-at-consumption"
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        read_tampered_bytes,
+    )
+
+    with pytest.raises(ValueError, match="Parquet SHA-256"):
+        fixture.resolver().resolve(
+            "matr-three-batch-final-v1",
+            task=AdvancedModelTask.SOH,
+            cutoff_cycle=100,
+        )
+
+
+def test_rejects_self_consistent_soh_with_wrong_reference_capacity(
+    tmp_path: Path,
+) -> None:
+    fixture = _build_fixture(tmp_path)
+    table = pq.read_table(fixture.parquet_paths[0])
+    rows = table.to_pylist()
+    target_cell = fixture.calibration_cells[0]
+    target = next(
+        row
+        for row in rows
+        if row["cell_id"] == target_cell and row["cycle_index"] == 100
+    )
+    target["reference_capacity_ah"] = 2.0
+    target["discharge_capacity_ah"] = float(target["soh"]) * 2.0
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=table.schema),
+        fixture.parquet_paths[0],
+    )
+    _refresh_supervision_hashes(fixture, batch_index=1)
+
+    with pytest.raises(ValueError, match="reference capacity"):
+        _resolver_for_current_manifest(fixture).resolve(
+            "matr-three-batch-final-v1",
+            task=AdvancedModelTask.SOH,
+            cutoff_cycle=100,
+        )
+
+
+def test_rejects_eligibility_inventory_that_replaces_a_real_cell(
+    tmp_path: Path,
+) -> None:
+    fixture = _build_fixture(tmp_path)
+    manifest = _read_json(fixture.manifest_path)
+    component = manifest["batches"][0]
+    eligibility_path = fixture.root / component["eligibility_report"]
+    eligibility = _read_json(eligibility_path)
+    removed_cell = "MATR_b1c1"
+    eligibility["eligible_cell_ids"].remove(removed_cell)
+    eligibility["excluded"].append(
+        MatrTrajectoryExclusion(
+            cell_id="MATR_forged_exclusion",
+            observed_cycle_count=400,
+        ).model_dump(mode="json")
+    )
+    _write_json(eligibility_path, eligibility)
+    component["eligibility_report_sha256"] = _sha256_file(
+        eligibility_path
+    )
+    component["hybrid_eligible_count"] -= 1
+    component["hybrid_excluded_count"] += 1
+    manifest["hybrid_eligible_count"] -= 1
+    manifest["hybrid_excluded_count"] += 1
+
+    parquet_path = fixture.parquet_paths[0]
+    table = pq.read_table(parquet_path)
+    rows = [
+        row
+        for row in table.to_pylist()
+        if row["cell_id"] != removed_cell
+    ]
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=table.schema),
+        parquet_path,
+    )
+    supervision_path = fixture.supervision_paths[0]
+    supervision = _read_json(supervision_path)
+    supervision["cells"] = [
+        cell
+        for cell in supervision["cells"]
+        if cell["cell_id"] != removed_cell
+    ]
+    supervision["cell_count"] -= 1
+    supervision["row_count"] -= 500
+    supervision["parquet_sha256"] = _sha256_file(parquet_path)
+    _write_json(supervision_path, supervision)
+    component["supervision_report_sha256"] = _sha256_file(
+        supervision_path
+    )
+    _write_json(fixture.manifest_path, manifest)
+
+    with pytest.raises(ValueError, match="inventory"):
+        _resolver_for_current_manifest(fixture).resolve(
+            "matr-three-batch-final-v1",
+            task=AdvancedModelTask.SOH,
+            cutoff_cycle=100,
+        )
+
+
 def test_accepts_positive_capacity_derived_soh_without_inventing_upper_threshold(
     tmp_path: Path,
 ) -> None:
@@ -399,6 +587,7 @@ def _build_fixture(root: Path) -> _Fixture:
         supervision_path = (
             root / f"reports/data_quality/supervision-{batch_index}.json"
         )
+        (root / f"data/processed-{batch_index}").mkdir(parents=True)
         supervision_root = root / f"data/supervision-{batch_index}"
         parquet_path = supervision_root / "trajectories/labels.parquet"
         _write_json(conversion_path, conversion.model_dump(mode="json"))

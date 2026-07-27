@@ -522,13 +522,16 @@ def test_rejects_official_cycle_life_at_the_cutoff() -> None:
 class _CalibrationInputResolver:
     def __init__(self, value: AdvancedCalibrationCellInput) -> None:
         self.value = value
-        self.calls: list[tuple[str, str, str, int, str]] = []
+        self.calls: list[
+            tuple[str, str, str, str, int, str]
+        ] = []
 
     def resolve(
         self,
         *,
         source_registration_id: str,
         source_identity: AdvancedCalibrationSourceIdentity,
+        task: AdvancedModelTask,
         cell_id: str,
         cutoff_cycle: int,
         feature_version: str,
@@ -537,6 +540,7 @@ class _CalibrationInputResolver:
             (
                 source_registration_id,
                 source_identity.source_identity_sha256,
+                task.value,
                 cell_id,
                 cutoff_cycle,
                 feature_version,

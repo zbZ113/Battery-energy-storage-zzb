@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol, TypeAlias
 
@@ -20,6 +21,7 @@ from quanxin_life.data.matr_multibatch import (
 )
 from quanxin_life.data.matr_pipeline import (
     MatrBatchConversionReport,
+    MatrCellConversionEvidence,
     MatrSupervisionArtifact,
 )
 from quanxin_life.data.schemas import SplitManifest
@@ -136,6 +138,66 @@ AdvancedCalibrationEvidence: TypeAlias = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class AdvancedCalibrationCellSource:
+    """Server-only verified source required to build one label-free input."""
+
+    source_identity: AdvancedCalibrationSourceIdentity
+    processed_root: Path
+    raw_sha256: str
+    cell_evidence: MatrCellConversionEvidence
+    initial_soh: float | None
+
+    def __post_init__(self) -> None:
+        if (
+            not self.processed_root.is_absolute()
+            or len(self.raw_sha256) != 64
+            or self.cell_evidence.cell_id == ""
+        ):
+            raise ValueError(
+                "Advanced calibration cell source identity is invalid"
+            )
+        if self.initial_soh is not None and (
+            not math.isfinite(self.initial_soh)
+            or self.initial_soh <= 0.0
+            or self.initial_soh > 1.5
+        ):
+            raise ValueError(
+                "Advanced calibration cutoff SOH is invalid"
+            )
+
+
+class AdvancedCalibrationCellSourceResolver(Protocol):
+    def resolve_cell_source(
+        self,
+        registration_id: str,
+        *,
+        source_identity: AdvancedCalibrationSourceIdentity,
+        task: AdvancedModelTask,
+        cutoff_cycle: int,
+        cell_id: str,
+    ) -> AdvancedCalibrationCellSource: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedCalibrationSourceSnapshot:
+    root: Path
+    registration: AdvancedCalibrationSourceRegistration
+    manifest: MatrThreeBatchManifest
+    combined: SplitManifest
+    conversions: tuple[MatrBatchConversionReport, ...]
+    component_splits: tuple[SplitManifest, ...]
+    eligibility: tuple[MatrTrajectoryEligibilityAudit, ...]
+    supervision: tuple[_VerifiedSupervisionSnapshot, ...]
+    source_identity: AdvancedCalibrationSourceIdentity
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedSupervisionSnapshot:
+    artifact: MatrSupervisionArtifact
+    parquet_bytes: bytes
+
+
 class AdvancedCalibrationEvidenceResolver(Protocol):
     def resolve(
         self,
@@ -175,39 +237,170 @@ class RegisteredAdvancedCalibrationEvidenceResolver:
         task: AdvancedModelTask,
         cutoff_cycle: int,
     ) -> AdvancedCalibrationEvidence:
-        try:
-            registration = self._registrations[registration_id]
-        except KeyError as exc:
-            raise ValueError("Advanced calibration source is not registered") from exc
         normalized_task = AdvancedModelTask(task)
         if cutoff_cycle not in _APPROVED_CUTOFFS:
             raise ValueError("Advanced calibration requires an approved cutoff cycle")
-
-        root = _require_root(registration.evidence_root)
-        manifest_path = _registered_path(root, _THREE_BATCH_MANIFEST)
-        manifest_payload = _read_verified_json(
-            manifest_path,
-            registration.three_batch_manifest_sha256,
+        snapshot = self._resolve_source_snapshot(registration_id)
+        expected_cells = tuple(snapshot.combined.calibration)
+        if normalized_task is AdvancedModelTask.RUL:
+            return AdvancedRULCalibrationEvidence(
+                source_identity=snapshot.source_identity,
+                cells=_rul_cells(
+                    expected_cells=expected_cells,
+                    conversions=snapshot.conversions,
+                    cutoff_cycle=cutoff_cycle,
+                ),
+            )
+        return AdvancedSOHCalibrationEvidence(
+            source_identity=snapshot.source_identity,
+            prediction_cycles=tuple(range(cutoff_cycle + 1, _SOH_HORIZON_CYCLE + 1)),
+            cells=_soh_cells(
+                expected_cells=expected_cells,
+                component_splits=snapshot.component_splits,
+                conversions=snapshot.conversions,
+                eligibility=snapshot.eligibility,
+                supervision=snapshot.supervision,
+                cutoff_cycle=cutoff_cycle,
+            ),
         )
-        manifest = MatrThreeBatchManifest.model_validate(manifest_payload)
-        combined_path = _registered_path(root, manifest.combined_split_manifest)
+
+    def resolve_cell_source(
+        self,
+        registration_id: str,
+        *,
+        source_identity: AdvancedCalibrationSourceIdentity,
+        task: AdvancedModelTask,
+        cutoff_cycle: int,
+        cell_id: str,
+    ) -> AdvancedCalibrationCellSource:
+        normalized_task = AdvancedModelTask(task)
+        if cutoff_cycle not in _APPROVED_CUTOFFS:
+            raise ValueError(
+                "Advanced calibration requires an approved cutoff cycle"
+            )
+        if not cell_id:
+            raise ValueError(
+                "Advanced calibration cell identity is required"
+            )
+        snapshot = self._resolve_source_snapshot(registration_id)
+        if snapshot.source_identity != source_identity:
+            raise ValueError(
+                "Advanced calibration source identity changed"
+            )
+        if cell_id not in snapshot.combined.calibration:
+            raise ValueError(
+                "Advanced calibration cell is not in the calibration split"
+            )
+        component_index = next(
+            (
+                index
+                for index, split in enumerate(snapshot.component_splits)
+                if cell_id in split.calibration
+            ),
+            None,
+        )
+        if component_index is None:
+            raise ValueError(
+                "Advanced calibration cell component is missing"
+            )
+        component = snapshot.manifest.batches[component_index]
+        conversion = snapshot.conversions[component_index]
+        cell_evidence = next(
+            (
+                item
+                for item in conversion.cells
+                if item.cell_id == cell_id
+            ),
+            None,
+        )
+        if cell_evidence is None:
+            raise ValueError(
+                "Advanced calibration cell conversion evidence is missing"
+            )
+        initial_soh: float | None = None
+        if normalized_task is AdvancedModelTask.SOH:
+            eligible = snapshot.eligibility[component_index]
+            if cell_id not in eligible.eligible_cell_ids:
+                raise ValueError(
+                    "Advanced SOH calibration cell is not eligible"
+                )
+            supervision = snapshot.supervision[component_index]
+            rows = _read_supervision_rows(
+                supervision.parquet_bytes,
+                supervision.artifact,
+                conversion,
+            )
+            cell_rows = rows.get(cell_id)
+            if cell_rows is None:
+                raise ValueError(
+                    "Advanced SOH calibration supervision is missing"
+                )
+            cycles = tuple(item[0] for item in cell_rows)
+            if cycles != tuple(range(1, _SOH_HORIZON_CYCLE + 1)):
+                raise ValueError(
+                    "Advanced SOH calibration supervision axis is invalid"
+                )
+            initial_soh = dict(cell_rows).get(cutoff_cycle)
+            if initial_soh is None:
+                raise ValueError(
+                    "Advanced SOH calibration cutoff observation is missing"
+                )
+        return AdvancedCalibrationCellSource(
+            source_identity=snapshot.source_identity,
+            processed_root=_registered_path(
+                snapshot.root,
+                component.processed_root,
+            ),
+            raw_sha256=component.raw_sha256,
+            cell_evidence=cell_evidence,
+            initial_soh=initial_soh,
+        )
+
+    def _resolve_source_snapshot(
+        self,
+        registration_id: str,
+    ) -> _VerifiedCalibrationSourceSnapshot:
+        try:
+            registration = self._registrations[registration_id]
+        except KeyError as exc:
+            raise ValueError(
+                "Advanced calibration source is not registered"
+            ) from exc
+        root = _require_root(registration.evidence_root)
+        manifest = MatrThreeBatchManifest.model_validate(
+            _read_verified_json(
+                _registered_path(root, _THREE_BATCH_MANIFEST),
+                registration.three_batch_manifest_sha256,
+            )
+        )
         combined = SplitManifest.model_validate(
-            _read_verified_json(combined_path, manifest.combined_split_sha256)
+            _read_verified_json(
+                _registered_path(
+                    root,
+                    manifest.combined_split_manifest,
+                ),
+                manifest.combined_split_sha256,
+            )
         )
         if (
             combined.dataset_id != "MATR"
             or len(set(combined.all_cells)) != len(combined.all_cells)
         ):
-            raise ValueError("combined split is not a closed MATR cell partition")
+            raise ValueError(
+                "combined split is not a closed MATR cell partition"
+            )
 
         conversions: list[MatrBatchConversionReport] = []
         component_splits: list[SplitManifest] = []
         eligibility: list[MatrTrajectoryEligibilityAudit] = []
-        supervision: list[tuple[MatrSupervisionArtifact, Path]] = []
+        supervision: list[_VerifiedSupervisionSnapshot] = []
         for component in manifest.batches:
             conversion = MatrBatchConversionReport.model_validate(
                 _read_verified_json(
-                    _registered_path(root, component.conversion_report),
+                    _registered_path(
+                        root,
+                        component.conversion_report,
+                    ),
                     component.conversion_report_sha256,
                 )
             )
@@ -220,26 +413,37 @@ class RegisteredAdvancedCalibrationEvidenceResolver:
             _validate_component_conversion(component, conversion, split)
             conversions.append(conversion)
             component_splits.append(split)
-
             eligible = MatrTrajectoryEligibilityAudit.model_validate(
                 _read_verified_json(
-                    _registered_path(root, component.eligibility_report),
+                    _registered_path(
+                        root,
+                        component.eligibility_report,
+                    ),
                     component.eligibility_report_sha256,
                 )
             )
             supervision_artifact = MatrSupervisionArtifact.model_validate(
                 _read_verified_json(
-                    _registered_path(root, component.supervision_report),
+                    _registered_path(
+                        root,
+                        component.supervision_report,
+                    ),
                     component.supervision_report_sha256,
                 )
             )
-            supervision_root = _registered_path(root, component.supervision_root)
+            supervision_root = _registered_path(
+                root,
+                component.supervision_root,
+            )
             parquet_path = _child_path(
                 supervision_root,
                 supervision_artifact.parquet_relative_path,
             )
-            if _sha256_file(parquet_path) != supervision_artifact.parquet_sha256:
-                raise ValueError("MATR supervision Parquet SHA-256 mismatch")
+            parquet_bytes = _read_verified_bytes(
+                parquet_path,
+                supervision_artifact.parquet_sha256,
+                label="MATR supervision Parquet",
+            )
             _validate_component_supervision(
                 component=component,
                 conversion=conversion,
@@ -247,45 +451,47 @@ class RegisteredAdvancedCalibrationEvidenceResolver:
                 supervision=supervision_artifact,
             )
             eligibility.append(eligible)
-            supervision.append((supervision_artifact, parquet_path))
+            supervision.append(
+                _VerifiedSupervisionSnapshot(
+                    artifact=supervision_artifact,
+                    parquet_bytes=parquet_bytes,
+                )
+            )
 
         try:
-            reconstructed = combine_matr_batch_splits(tuple(component_splits))
+            reconstructed = combine_matr_batch_splits(
+                tuple(component_splits)
+            )
         except ValueError as exc:
             raise ValueError(
                 "component split calibration inventory is invalid"
             ) from exc
         if reconstructed != combined:
             raise ValueError(
-                "component splits do not reconstruct the combined split calibration inventory"
+                "component splits do not reconstruct the combined split "
+                "calibration inventory"
             )
         expected_cells = tuple(combined.calibration)
-        if not expected_cells or len(set(expected_cells)) != len(expected_cells):
-            raise ValueError("combined split calibration cells must be nonempty and unique")
-
-        source_identity = _source_identity(
+        if (
+            not expected_cells
+            or len(set(expected_cells)) != len(expected_cells)
+        ):
+            raise ValueError(
+                "combined split calibration cells must be nonempty and unique"
+            )
+        return _VerifiedCalibrationSourceSnapshot(
+            root=root,
             registration=registration,
             manifest=manifest,
-            supervision=supervision,
-        )
-        if normalized_task is AdvancedModelTask.RUL:
-            return AdvancedRULCalibrationEvidence(
-                source_identity=source_identity,
-                cells=_rul_cells(
-                    expected_cells=expected_cells,
-                    conversions=conversions,
-                    cutoff_cycle=cutoff_cycle,
-                ),
-            )
-        return AdvancedSOHCalibrationEvidence(
-            source_identity=source_identity,
-            prediction_cycles=tuple(range(cutoff_cycle + 1, _SOH_HORIZON_CYCLE + 1)),
-            cells=_soh_cells(
-                expected_cells=expected_cells,
-                component_splits=component_splits,
-                eligibility=eligibility,
+            combined=combined,
+            conversions=tuple(conversions),
+            component_splits=tuple(component_splits),
+            eligibility=tuple(eligibility),
+            supervision=tuple(supervision),
+            source_identity=_source_identity(
+                registration=registration,
+                manifest=manifest,
                 supervision=supervision,
-                cutoff_cycle=cutoff_cycle,
             ),
         )
 
@@ -340,11 +546,14 @@ def _child_path(root: Path, relative: str) -> Path:
 
 
 def _read_verified_json(path: Path, expected_sha256: str) -> dict[str, Any]:
-    if _sha256_file(path) != expected_sha256:
-        raise ValueError(f"{path.name} SHA-256 mismatch")
+    raw = _read_verified_bytes(
+        path,
+        expected_sha256,
+        label=path.name,
+    )
     try:
         value = json.loads(
-            path.read_text(encoding="utf-8"),
+            raw.decode("utf-8"),
             object_pairs_hook=_unique_object,
             parse_constant=_reject_json_constant,
         )
@@ -353,6 +562,18 @@ def _read_verified_json(path: Path, expected_sha256: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} must contain one JSON object")
     return value
+
+
+def _read_verified_bytes(
+    path: Path,
+    expected_sha256: str,
+    *,
+    label: str,
+) -> bytes:
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise ValueError(f"{label} SHA-256 mismatch")
+    return raw
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -405,8 +626,15 @@ def _validate_component_supervision(
     supervision: MatrSupervisionArtifact,
 ) -> None:
     conversion_by_id = {cell.cell_id: cell for cell in conversion.cells}
+    conversion_ids = set(conversion_by_id)
     supervision_ids = tuple(cell.cell_id for cell in supervision.cells)
     eligible_ids = tuple(eligibility.eligible_cell_ids)
+    eligible = set(eligible_ids)
+    excluded_by_id = {
+        cell.cell_id: cell
+        for cell in eligibility.excluded
+    }
+    excluded = set(excluded_by_id)
     if (
         eligibility.batch_index != component.batch_index
         or eligibility.horizon_cycle != _SOH_HORIZON_CYCLE
@@ -416,9 +644,21 @@ def _validate_component_supervision(
         or supervision.source_report_sha256
         != sha256_canonical(conversion.model_dump(mode="json"))
         or len(set(supervision_ids)) != len(supervision_ids)
-        or set(supervision_ids) != set(eligible_ids)
+        or set(supervision_ids) != eligible
+        or eligible | excluded != conversion_ids
+        or eligible & excluded
         or len(eligible_ids) != component.hybrid_eligible_count
         or len(eligibility.excluded) != component.hybrid_excluded_count
+        or any(
+            cell.observed_cycle_count <= _SOH_HORIZON_CYCLE
+            for cell in supervision.cells
+        )
+        or any(
+            not 0
+            < excluded_by_id[cell_id].observed_cycle_count
+            <= _SOH_HORIZON_CYCLE
+            for cell_id in excluded
+        )
     ):
         raise ValueError("MATR supervision evidence inventory mismatch")
     for cell in supervision.cells:
@@ -471,8 +711,9 @@ def _soh_cells(
     *,
     expected_cells: tuple[str, ...],
     component_splits: Sequence[SplitManifest],
+    conversions: Sequence[MatrBatchConversionReport],
     eligibility: Sequence[MatrTrajectoryEligibilityAudit],
-    supervision: Sequence[tuple[MatrSupervisionArtifact, Path]],
+    supervision: Sequence[_VerifiedSupervisionSnapshot],
     cutoff_cycle: int,
 ) -> tuple[AdvancedSOHObservedCell, ...]:
     observed: dict[str, tuple[float, ...]] = {}
@@ -487,8 +728,9 @@ def _soh_cells(
     )
     if not task_expected_cells:
         raise ValueError("SOH calibration has no verified eligible cells")
-    for split, eligible, (artifact, parquet_path) in zip(
+    for split, conversion, eligible, snapshot in zip(
         component_splits,
+        conversions,
         eligibility,
         supervision,
         strict=True,
@@ -498,7 +740,11 @@ def _soh_cells(
             for cell_id in split.calibration
             if cell_id in set(eligible.eligible_cell_ids)
         )
-        rows = _read_supervision_rows(parquet_path, artifact)
+        rows = _read_supervision_rows(
+            snapshot.parquet_bytes,
+            snapshot.artifact,
+            conversion,
+        )
         for cell_id in calibration:
             cell_rows = rows.get(cell_id)
             if cell_rows is None:
@@ -537,22 +783,28 @@ def _soh_cells(
 
 
 def _read_supervision_rows(
-    path: Path,
+    parquet_bytes: bytes,
     artifact: MatrSupervisionArtifact,
+    conversion: MatrBatchConversionReport,
 ) -> Mapping[str, list[tuple[int, float]]]:
     try:
+        import pyarrow as pa  # type: ignore[import-untyped]
         import pyarrow.parquet as pq  # type: ignore[import-untyped]
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "Advanced calibration SOH evidence requires the data dependencies"
         ) from exc
-    table = pq.read_table(path)
+    table = pq.read_table(pa.BufferReader(parquet_bytes))
     if (
         set(table.column_names) != _SUPERVISION_COLUMNS
         or table.num_rows != artifact.row_count
     ):
         raise ValueError("MATR supervision Parquet schema or row count mismatch")
     rows: dict[str, list[tuple[int, float]]] = {}
+    conversion_by_id = {
+        cell.cell_id: cell
+        for cell in conversion.cells
+    }
     for item in table.to_pylist():
         dataset_id = item["dataset_id"]
         cell_id = item["cell_id"]
@@ -577,6 +829,17 @@ def _read_supervision_rows(
         capacity_value = float(capacity)
         reference_value = float(reference)
         soh_value = float(soh)
+        conversion_cell = conversion_by_id.get(cell_id)
+        if conversion_cell is None or not math.isclose(
+            reference_value,
+            conversion_cell.reference_capacity_ah,
+            rel_tol=1e-9,
+            abs_tol=1e-12,
+        ):
+            raise ValueError(
+                "MATR supervision reference capacity differs from "
+                "conversion evidence"
+            )
         if (
             cycle < 1
             or cycle > _SOH_HORIZON_CYCLE
@@ -605,7 +868,7 @@ def _source_identity(
     *,
     registration: AdvancedCalibrationSourceRegistration,
     manifest: MatrThreeBatchManifest,
-    supervision: Sequence[tuple[MatrSupervisionArtifact, Path]],
+    supervision: Sequence[_VerifiedSupervisionSnapshot],
 ) -> AdvancedCalibrationSourceIdentity:
     payload: dict[str, object] = {
         "registration_id": registration.registration_id,
@@ -627,7 +890,7 @@ def _source_identity(
             component.supervision_report_sha256 for component in manifest.batches
         ),
         "supervision_parquet_sha256s": tuple(
-            item[0].parquet_sha256 for item in supervision
+            item.artifact.parquet_sha256 for item in supervision
         ),
     }
     payload["source_identity_sha256"] = sha256_canonical(payload)
@@ -641,6 +904,8 @@ def _sha256_file(path: Path) -> str:
 
 
 __all__ = [
+    "AdvancedCalibrationCellSource",
+    "AdvancedCalibrationCellSourceResolver",
     "AdvancedCalibrationEvidence",
     "AdvancedCalibrationEvidenceResolver",
     "AdvancedCalibrationSourceIdentity",
