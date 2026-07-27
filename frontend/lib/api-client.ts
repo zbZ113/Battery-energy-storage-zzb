@@ -5,6 +5,16 @@ import type {
   ProjectRecord,
   ToolResult,
 } from "./types";
+import {
+  decodeActiveModelRouteList,
+  decodeAdvancedCalibrationMaterialization,
+  decodeAdvancedCalibrationMaterializationList,
+  decodeCreateAdvancedCalibrationMaterializationResponse,
+  type ActiveModelRouteSummary,
+  type AdvancedCalibrationMaterialization,
+  type CreateAdvancedCalibrationMaterializationRequest,
+  type CreateAdvancedCalibrationMaterializationResponse,
+} from "@/components/calibration-materialization-contract";
 
 export function resolveApiBaseUrl(
   configuredUrl: string | undefined = process.env.NEXT_PUBLIC_API_BASE_URL,
@@ -81,6 +91,10 @@ export function login(username: string, password: string): Promise<AuthPrincipal
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
+}
+
+export function getCurrentPrincipal(): Promise<AuthPrincipal> {
+  return apiRequest<AuthPrincipal>("/v1/auth/me");
 }
 
 export function changePassword(
@@ -183,6 +197,54 @@ export function invokeProjectTool(
   );
 }
 
+export async function listActiveModelRoutes(
+  projectId: string,
+): Promise<ActiveModelRouteSummary[]> {
+  const payload = await apiRequest<unknown>(
+    `/v1/projects/${encodeURIComponent(projectId)}/model-routes/active`,
+  );
+  return decodeActiveModelRouteList(payload);
+}
+
+export async function listAdvancedCalibrationMaterializations(
+  projectId: string,
+): Promise<AdvancedCalibrationMaterialization[]> {
+  const payload = await apiRequest<unknown>(
+    advancedCalibrationCollectionPath(projectId),
+  );
+  return decodeAdvancedCalibrationMaterializationList(payload);
+}
+
+export async function getAdvancedCalibrationMaterialization(
+  projectId: string,
+  materializationId: string,
+): Promise<AdvancedCalibrationMaterialization> {
+  const payload = await apiRequest<unknown>(
+    `${advancedCalibrationCollectionPath(projectId)}/${encodeURIComponent(materializationId)}`,
+  );
+  return decodeAdvancedCalibrationMaterialization(payload);
+}
+
+export async function createAdvancedCalibrationMaterialization(
+  projectId: string,
+  payload: CreateAdvancedCalibrationMaterializationRequest,
+  idempotencyKey: string,
+): Promise<CreateAdvancedCalibrationMaterializationResponse> {
+  const response = await apiRequest<unknown>(
+    advancedCalibrationCollectionPath(projectId),
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(payload),
+    },
+  );
+  return decodeCreateAdvancedCalibrationMaterializationResponse(response);
+}
+
 export function agentEventsUrl(runId: string): string {
   return `${apiBaseUrl()}/v1/agent/runs/${encodeURIComponent(runId)}/events`;
+}
+
+function advancedCalibrationCollectionPath(projectId: string): string {
+  return `/v1/projects/${encodeURIComponent(projectId)}/advanced-calibration/materializations`;
 }

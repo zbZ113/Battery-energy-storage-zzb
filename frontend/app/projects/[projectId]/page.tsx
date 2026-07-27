@@ -1,8 +1,9 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, FileCheck2, RefreshCw } from "lucide-react";
+import { Activity, FileCheck2, RefreshCw, ShieldCheck } from "lucide-react";
 
 import { AppShell } from "@/components/app-shell";
 import { CreateAgentRunForm } from "@/components/create-agent-run-form";
@@ -33,6 +34,12 @@ export default function ProjectPage({ params }: { params: Promise<{ projectId: s
         />
       </section> : null}
       {project ? <div className="action-grid project-secondary-actions">
+        <Link className="panel action-card calibration-entry" href={`/projects/${encodeURIComponent(projectId)}/calibration`}>
+          <ShieldCheck aria-hidden="true" />
+          <h2>校准证据管理</h2>
+          <p>查看 active route 的 RUL / SOH 校准物化状态、冻结版本与 SHA-256 证据。</p>
+          <span className="text-link">进入校准工作台</span>
+        </Link>
         <section className="panel action-card"><Activity /><h2>Agent 运行时间线</h2><p>输入运行 ID，查看后端通过 SSE 签发的计划与步骤事件。</p><ResourceLocator kind="run" /></section>
         <section className="panel action-card"><FileCheck2 /><h2>结果与证据</h2><p>输入结果 ID，查看 ToolResult 原值、来源链及警告。</p><ResourceLocator kind="result" /></section>
       </div> : null}

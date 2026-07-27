@@ -4,10 +4,14 @@ import {
   apiRequest,
   approveAgentRun,
   changePassword,
+  createAdvancedCalibrationMaterialization,
   createAgentRun,
+  getCurrentPrincipal,
   getAgentRunResult,
   getProjectResult,
   invokeProjectTool,
+  listActiveModelRoutes,
+  listAdvancedCalibrationMaterializations,
   logout,
   rejectAgentRun,
   resolveApiBaseUrl,
@@ -194,4 +198,159 @@ describe("apiRequest", () => {
       "http://localhost:8000",
     );
   });
+
+  it("loads the current principal and strict active calibration routes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            user_id: "user-1",
+            username: "member@example.test",
+            role: "MEMBER",
+            must_change_password: false,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([activeRoute()]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getCurrentPrincipal()).resolves.toEqual(
+      expect.objectContaining({ role: "MEMBER" }),
+    );
+    await expect(listActiveModelRoutes("project/1")).resolves.toEqual([
+      activeRoute(),
+    ]);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://localhost:8000/v1/auth/me",
+      "http://localhost:8000/v1/projects/project%2F1/model-routes/active",
+    ]);
+  });
+
+  it("creates and lists identity-only calibration materializations", async () => {
+    const materialization = readyMaterialization();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            materialization,
+            dispatch: {
+              materialization_id: materialization.materialization_id,
+              task_id: "task-1",
+            },
+          }),
+          { status: 202, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([materialization]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createAdvancedCalibrationMaterialization(
+      "project/1",
+      {
+        task: "RUL",
+        cutoff_cycle: 100,
+        route_role: "COVERAGE",
+      },
+      "calibration-key-0001",
+    );
+    await listAdvancedCalibrationMaterializations("project/1");
+
+    const [createUrl, createInit] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(createUrl).toBe(
+      "http://localhost:8000/v1/projects/project%2F1/advanced-calibration/materializations",
+    );
+    expect(new Headers(createInit.headers).get("Idempotency-Key")).toBe(
+      "calibration-key-0001",
+    );
+    expect(JSON.parse(String(createInit.body))).toEqual({
+      task: "RUL",
+      cutoff_cycle: 100,
+      route_role: "COVERAGE",
+    });
+    expect(JSON.stringify(createInit.body)).not.toContain("observed");
+    expect(JSON.stringify(createInit.body)).not.toContain("predicted");
+    expect(fetchMock.mock.calls[1][0]).toBe(createUrl);
+  });
+
+  it("rejects malformed calibration readiness instead of fabricating READY", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify([
+            { ...readyMaterialization(), status: "ALMOST_READY" },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    await expect(
+      listAdvancedCalibrationMaterializations("project-1"),
+    ).rejects.toThrow("invalid advanced calibration");
+  });
 });
+
+function activeRoute() {
+  return {
+    task: "RUL",
+    cutoff_cycle: 100,
+    route_role: "COVERAGE",
+    artifact_id: "artifact-1",
+    artifact_kind: "cyclepatch-direct-official-cycle-life",
+    artifact_manifest_sha256: "1".repeat(64),
+    model_version: "model-v1",
+    data_version: "data-v1",
+    split_version: "split-v1",
+    feature_version: "feature-v1",
+    normalization_statistics_sha256: "2".repeat(64),
+    decision_event_id: "event-1",
+    ledger_sequence_number: 3,
+    ledger_head_sha256: "3".repeat(64),
+  };
+}
+
+function readyMaterialization() {
+  return {
+    materialization_id: "materialization-1",
+    project_id: "project-1",
+    task: "RUL",
+    cutoff_cycle: 100,
+    route_role: "COVERAGE",
+    status: "READY",
+    data_version: "data-v1",
+    split_version: "split-v1",
+    feature_version: "feature-v1",
+    artifact_id: "artifact-1",
+    artifact_manifest_sha256: "1".repeat(64),
+    normalization_statistics_sha256: "2".repeat(64),
+    decision_event_id: "event-1",
+    ledger_sequence_number: 3,
+    ledger_head_sha256: "3".repeat(64),
+    source_registration_id: "matr-three-batch-final-v1",
+    source_identity_sha256: "4".repeat(64),
+    sample_manifest_sha256: "5".repeat(64),
+    sample_count: 18,
+    created_at: "2026-07-27T08:00:00Z",
+    started_at: "2026-07-27T08:01:00Z",
+    completed_at: "2026-07-27T08:02:00Z",
+    failure_code: null,
+  };
+}
