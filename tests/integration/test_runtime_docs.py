@@ -29,24 +29,24 @@ def test_readme_is_user_facing_and_only_documents_real_entry_points() -> None:
     readme = _read("README.md")
 
     for section in (
-        "## 项目价值",
-        "## AI核心能力",
-        "## 端到端系统闭环",
-        "## 技术架构",
-        "## 工程进展全景",
+        "## 当前状态",
+        "## 已验证结果",
+        "## 核心技术路线",
+        "## 成熟度边界",
         "## 快速开始",
-        "## 三批MATR与A100真实训练",
-        "## 产品与协同入口",
-        "## 飞书研发协同",
-        "## 可信与可追溯",
         "## 质量门禁",
-        "## 仓库结构",
-        "## 典型应用场景",
         "## 文档导航",
     ):
         assert section in readme
 
     for marker in (
+        "Implemented",
+        "Validated",
+        "Planned",
+        "受约束专业智能体工作流",
+        "CyclePatch Direct",
+        "CyclePatch-BatLiNet",
+        "HybridPatch-v2",
         "matr-three-batch",
         "scripts/a100/train_dataset.sh",
         "frontend/package.json",
@@ -64,8 +64,46 @@ def test_readme_is_user_facing_and_only_documents_real_entry_points() -> None:
     assert ".[mcp]" in readme
     assert "FileSystemVerifiedEarlyCycleBatchStore" in readme
     assert "JsonlAuditLedger" in readme
-    assert "当前不足" not in readme
-    assert "生产系统" not in readme
+    assert "A100 Smoke验收与正式五种子训练" not in readme
+    assert "不等于生产部署" in readme
+
+
+def test_public_evidence_docs_have_single_responsibilities_and_are_linked() -> None:
+    readme = _read("README.md")
+    expected = {
+        "docs/status.md": ("# 项目状态", "Implemented", "Validated", "Planned"),
+        "docs/benchmark.md": ("# Advanced Benchmark", "MAE", "PICP", "五种子"),
+        "docs/model-card-advanced.md": (
+            "# Advanced 模型卡",
+            "CyclePatch Direct",
+            "HybridPatch-v2",
+            "拒绝",
+        ),
+        "docs/limitations.md": (
+            "# 已知限制",
+            "右删失",
+            "HUST",
+            "不等于生产部署",
+        ),
+        "docs/reproducibility.md": (
+            "# 可复现性",
+            "cell_id",
+            "SHA-256",
+            "Python 3.11",
+        ),
+        "ARCHITECTURE.md": (
+            "# 架构说明",
+            "ToolResult",
+            "AgentStep",
+            "fenced claim",
+        ),
+    }
+
+    for relative_path, markers in expected.items():
+        assert relative_path in readme
+        document = _read(relative_path)
+        for marker in markers:
+            assert marker in document
 
 
 def test_runtime_guide_covers_windows_linux_and_operator_owned_inputs() -> None:

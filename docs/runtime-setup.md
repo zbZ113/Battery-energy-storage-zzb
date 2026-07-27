@@ -1,6 +1,23 @@
 # 泉芯智寿运行与部署指南
 
-本指南区分两种运行形态：仓库可直接启动的“基础 API”，以及需要外部审核依赖才能装配的“完整竞赛应用”。前者适合检查传输、契约和工具发现；后者才包含 Canonical CSV 上传、寿命决策和报告链。
+本指南区分两种运行形态：仓库可直接启动的“基础 API”，以及需要受审查依赖和
+外部基础设施才能装配的“完整应用”。前者适合检查传输、契约和工具发现；后者才包含
+项目认证、Advanced route、calibration materialization、寿命决策、报告和 UI 数值链。
+
+## 当前运行边界
+
+| 形态 | 代码状态 | 已验证范围 | 不包含 |
+| --- | --- | --- | --- |
+| Foundation API | 可直接运行 | 健康检查、工具发现、已装配基础工具 | 项目认证、数据库路由、Worker、Advanced 数值链 |
+| 完整应用装配 | 已实现 | 单元、集成和测试环境纵向 E2E | 一键生产 Compose、生产密钥、监控、备份和真实基础设施验收 |
+| 工业协议 | 沙箱已实现 | REST/MQTT/Modbus/EMS 契约与幂等测试 | 真实 BMS/EMS、现场网络、设备安全联锁 |
+
+“完整应用代码链已验证”不等于生产部署。当前 `deploy/compose.yaml` 只启动
+foundation API；完整 PostgreSQL / Redis / Worker / 对象存储 / API / UI 部署链将在
+独立设计中确定。
+
+当前成熟度见 [项目状态](status.md)，正式指标见 [Advanced Benchmark](benchmark.md)，
+限制见 [已知限制](limitations.md)。
 
 ## Windows 10 本机运行
 
@@ -150,6 +167,43 @@ app = create_competition_fastapi_app(
 
 文件系统批次存储会在每次读取时重新校验 CSV、元数据与来源哈希；JSONL 审计账本会在启动时逐条重建 `ToolResult` 并在损坏、重复或冲突时失败关闭。它们适合单进程比赛部署；多人并发或多副本服务仍应实现同契约的数据库/对象存储后端。
 
+### Advanced 项目链装配
+
+完整 Advanced 链还需要：
+
+- Alembic `0009`–`0015`：模型路由、record batch、项目 ToolResult、
+  exact AgentStep 和 calibration claim；
+- `SqlProjectAuditLedger` 与同一数据库事务边界；
+- managed deployment bundle registry 和 active route；
+- `create_project_prediction_tool_invocation_service`；
+- `create_advanced_calibration_components`；
+- Redis/Celery identity-only calibration queue；
+- 受管 MATR manifest、split、Parquet 和 artifact v2；
+- Next.js 的 API base URL 与 trusted Origin。
+
+Advanced calibration API：
+
+```text
+POST /v1/projects/{project_id}/advanced-calibration/materializations
+GET  /v1/projects/{project_id}/advanced-calibration/materializations
+GET  /v1/projects/{project_id}/advanced-calibration/materializations/{materialization_id}
+```
+
+POST 仅接受 task 身份和 `Idempotency-Key`，不接受数组、路径、哈希或 sample ID。
+ADMIN 可以创建，MEMBER 只读。Celery 消息只包含 `materialization_id`；Worker 从数据库
+重建项目、路由、数据和审批上下文。
+
+Agent 执行前，resolver 必须找到与当前 active route 精确匹配的 READY
+materialization。路由改变后旧证据变为 STALE，不能继续签发区间。
+
+测试环境纵向验收：
+
+```powershell
+python -m pytest tests/e2e/test_project_advanced_calibration_workflow.py -q
+```
+
+该测试证明应用装配和证据链能够贯通，不证明目标生产基础设施已经部署。
+
 ## 可审计报告制品
 
 安装 PDF/DOCX 可选导出依赖：
@@ -272,7 +326,7 @@ GET /v1/model-artifacts?project_id=<project-id>&artifact_kind=xgboost&cutoff_cyc
 GET /v1/model-artifacts/{artifact_id}
 ```
 
-响应只包含受管 URI、格式、版本、截止循环、特征名和哈希，不暴露绝对路径，也不复制 MAE、RMSE 等业务指标。相同制品重复登记会先复验字节并返回原记录；文件改变、持久化上下文被篡改、同一摘要绑定到另一身份或项目不可见时失败关闭。正式 A100 结果回传后，仍需先完成完整套件安全导入，再将任务产出的 UBJ/safetensors 清单映射到相应验证源；不能直接把下载目录或训练检查点登记为可服务模型。
+响应只包含受管 URI、格式、版本、截止循环、特征名和哈希，不暴露绝对路径，也不复制 MAE、RMSE 等业务指标。相同制品重复登记会先复验字节并返回原记录；文件改变、持久化上下文被篡改、同一摘要绑定到另一身份或项目不可见时失败关闭。正式 A100 Advanced Final 已经完成离线验收；目标环境仍必须先完成完整套件安全导入，再将 deployment bundle 和 safetensors 清单映射到相应验证源。不能直接把下载目录或训练检查点登记为可服务模型。
 
 ## 审核知识库与混合检索
 
@@ -406,7 +460,7 @@ python scripts/run_mcp_host.py \
 | 企业数据/知识材料 | 可选 | 需脱敏、授权并建立来源链 |
 | LLM Provider 与 API key | 可选 | 当前确定性工作流无需 LLM；接入解释/编排适配器后才需要，且不能产生工程数值 |
 | MCP SDK | 可选 | 仅启用 MCP Host 时需要 |
-| 飞书应用信息 | 可选 | 当前核心仓库尚无飞书运行入口 |
+| 飞书应用信息 | 可选 | 启用签名事件、任务或卡片适配器时需要；不是核心寿命预测前置条件 |
 | PyBaMM | 可选 | 仅用于短时工况核验 |
 
 所有 API key、Token、飞书密钥和数据库凭据都应保持为空模板，通过秘密管理器或本机环境提供。日志不得输出这些值。
