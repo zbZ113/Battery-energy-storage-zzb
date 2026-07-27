@@ -8,10 +8,10 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+
 from quanxin_life.api.advanced_calibration import (
     create_advanced_calibration_http_adapter,
 )
-
 from quanxin_life.api.app import create_fastapi_app
 from quanxin_life.api.auth import AuthCookieConfig, create_auth_http_adapter
 from quanxin_life.api.service import create_available_tool_invocation_service
