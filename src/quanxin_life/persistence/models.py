@@ -842,20 +842,33 @@ class AdvancedCalibrationMaterialization(Base):
         CheckConstraint(
             "(status = 'PENDING' AND started_at IS NULL AND completed_at IS NULL AND "
             "sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
-            "failure_code IS NULL) OR "
+            "failure_code IS NULL AND claim_token_sha256 IS NULL AND "
+            "claim_attempt = 0 AND claim_lease_expires_at IS NULL) OR "
             "(status = 'RUNNING' AND started_at IS NOT NULL AND completed_at IS NULL "
             "AND sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
-            "failure_code IS NULL) OR "
+            "failure_code IS NULL AND claim_token_sha256 IS NOT NULL AND "
+            "claim_attempt > 0 AND claim_lease_expires_at IS NOT NULL) OR "
             "(status = 'READY' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
             "AND sample_count > 0 AND sample_manifest_sha256 IS NOT NULL AND "
-            "failure_code IS NULL) OR "
+            "failure_code IS NULL AND claim_token_sha256 IS NULL AND "
+            "claim_attempt > 0 AND claim_lease_expires_at IS NULL) OR "
             "(status = 'FAILED' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
             "AND sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
-            "failure_code IS NOT NULL) OR "
+            "failure_code IS NOT NULL AND claim_token_sha256 IS NULL AND "
+            "claim_attempt > 0 AND claim_lease_expires_at IS NULL) OR "
             "(status = 'STALE' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
             "AND sample_count > 0 AND sample_manifest_sha256 IS NOT NULL AND "
-            "failure_code IS NOT NULL)",
+            "failure_code IS NOT NULL AND claim_token_sha256 IS NULL AND "
+            "claim_attempt > 0 AND claim_lease_expires_at IS NULL)",
             name="ck_advanced_calibration_state_payload",
+        ),
+        CheckConstraint(
+            "created_by_role = 'ADMIN'",
+            name="ck_advanced_calibration_admin_actor",
+        ),
+        CheckConstraint(
+            "claim_token_sha256 IS NULL OR length(claim_token_sha256) = 64",
+            name="ck_advanced_calibration_claim_hash_length",
         ),
         CheckConstraint(
             "length(artifact_manifest_sha256) = 64 AND "
@@ -915,12 +928,19 @@ class AdvancedCalibrationMaterialization(Base):
     created_by_user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id"), nullable=False
     )
+    created_by_session_id: Mapped[str] = mapped_column(
+        ForeignKey("sessions.id"), nullable=False
+    )
+    created_by_role: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime(), default=utc_now, nullable=False
     )
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     failure_code: Mapped[str | None] = mapped_column(String(100))
+    claim_token_sha256: Mapped[str | None] = mapped_column(String(64))
+    claim_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    claim_lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class AdvancedCalibrationSampleBinding(Base):

@@ -246,12 +246,18 @@ def test_advanced_calibration_materialization_declares_exact_route_identity() ->
         "sample_manifest_sha256",
         "idempotency_key_sha256",
         "request_sha256",
+        "claim_token_sha256",
     }
     for column_name in required_hashes:
         column = materializations.c[column_name]
         assert isinstance(column.type, String)
         assert column.type.length == 64
     assert materializations.c.sample_manifest_sha256.nullable is True
+    assert materializations.c.claim_token_sha256.nullable is True
+    assert materializations.c.claim_attempt.nullable is False
+    assert materializations.c.claim_lease_expires_at.nullable is True
+    assert materializations.c.created_by_session_id.nullable is False
+    assert materializations.c.created_by_role.nullable is False
 
     foreign_keys = {
         column.name: {
@@ -265,6 +271,7 @@ def test_advanced_calibration_materialization_declares_exact_route_identity() ->
         "artifact_id": {"model_artifacts.id"},
         "decision_event_id": {"model_route_activation_events.id"},
         "created_by_user_id": {"users.id"},
+        "created_by_session_id": {"sessions.id"},
     }
 
 
@@ -285,17 +292,30 @@ def test_advanced_calibration_materialization_declares_state_checks() -> None:
     )
     assert checks["ck_advanced_calibration_state_payload"] == (
         "(status = 'PENDING' AND started_at IS NULL AND completed_at IS NULL AND "
-        "sample_count = 0 AND sample_manifest_sha256 IS NULL AND failure_code IS NULL) "
+        "sample_count = 0 AND sample_manifest_sha256 IS NULL AND failure_code IS NULL "
+        "AND claim_token_sha256 IS NULL AND claim_attempt = 0 AND "
+        "claim_lease_expires_at IS NULL) "
         "OR (status = 'RUNNING' AND started_at IS NOT NULL AND completed_at IS NULL "
         "AND sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
-        "failure_code IS NULL) OR (status = 'READY' AND started_at IS NOT NULL AND "
+        "failure_code IS NULL AND claim_token_sha256 IS NOT NULL AND "
+        "claim_attempt > 0 AND claim_lease_expires_at IS NOT NULL) OR "
+        "(status = 'READY' AND started_at IS NOT NULL AND "
         "completed_at IS NOT NULL AND sample_count > 0 AND "
-        "sample_manifest_sha256 IS NOT NULL AND failure_code IS NULL) OR "
+        "sample_manifest_sha256 IS NOT NULL AND failure_code IS NULL AND "
+        "claim_token_sha256 IS NULL AND claim_attempt > 0 AND "
+        "claim_lease_expires_at IS NULL) OR "
         "(status = 'FAILED' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
         "AND sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
-        "failure_code IS NOT NULL) OR (status = 'STALE' AND started_at IS NOT NULL "
+        "failure_code IS NOT NULL AND claim_token_sha256 IS NULL AND "
+        "claim_attempt > 0 AND claim_lease_expires_at IS NULL) OR "
+        "(status = 'STALE' AND started_at IS NOT NULL "
         "AND completed_at IS NOT NULL AND sample_count > 0 AND "
-        "sample_manifest_sha256 IS NOT NULL AND failure_code IS NOT NULL)"
+        "sample_manifest_sha256 IS NOT NULL AND failure_code IS NOT NULL AND "
+        "claim_token_sha256 IS NULL AND claim_attempt > 0 AND "
+        "claim_lease_expires_at IS NULL)"
+    )
+    assert checks["ck_advanced_calibration_admin_actor"] == (
+        "created_by_role = 'ADMIN'"
     )
 
 

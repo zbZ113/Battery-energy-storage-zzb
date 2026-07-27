@@ -278,6 +278,31 @@ git add src/quanxin_life/application/advanced_calibration_evidence.py `
 git commit -m "feat: verify advanced calibration evidence"
 ```
 
+## Task 2.5: Persist ADMIN Session and Fenced Worker Claims
+
+Task 3 and Task 4 require an asynchronous Worker to commit HTTP-scoped
+`project-tool-result-binding-v1` rows and recover a crashed `RUNNING`
+materialization. Migration `0014` freezes the creating user but does not freeze
+the authenticated session, claim token, attempt or lease. Do not implement the
+producer on top of an unfenced `RUNNING` state.
+
+**Files:**
+
+- Modify: `src/quanxin_life/persistence/models.py`
+- Create: `migrations/versions/0015_advanced_calibration_claims.py`
+- Modify: `tests/unit/persistence/test_models.py`
+- Modify: `tests/integration/test_database_migrations.py`
+- Create: `tests/integration/test_advanced_calibration_claim_migration.py`
+
+- [x] Add immutable `created_by_session_id` and `created_by_role=ADMIN`.
+- [x] Add `claim_token_sha256`, `claim_attempt` and
+  `claim_lease_expires_at`.
+- [x] Require PENDING to be unclaimed, RUNNING to carry one live fenced claim,
+  and terminal states to clear the token and lease while retaining the attempt.
+- [x] Refuse upgrade or downgrade when existing rows would require inferred or
+  discarded audit evidence.
+- [x] Verify migration round-trip, ORM metadata and state constraints.
+
 ## Task 3: Produce Samples and Atomically Materialize a Cohort
 
 **Files:**

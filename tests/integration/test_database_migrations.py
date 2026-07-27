@@ -201,6 +201,18 @@ def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(
             column["name"]
             for column in upgraded_inspector.get_columns("knowledge_chunks")
         }
+        assert {
+            "created_by_session_id",
+            "created_by_role",
+            "claim_token_sha256",
+            "claim_attempt",
+            "claim_lease_expires_at",
+        } <= {
+            column["name"]
+            for column in upgraded_inspector.get_columns(
+                "advanced_calibration_materializations"
+            )
+        }
 
         # The declared metadata must also round-trip through the lightweight
         # SQLite migration target without producing type drift.
