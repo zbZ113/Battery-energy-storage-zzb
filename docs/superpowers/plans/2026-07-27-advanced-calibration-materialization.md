@@ -54,7 +54,7 @@ same file.
 - Exclude `.gitignore`, `.playwright-mcp/`, `tmp/`, `output/` and
   `server-results/`.
 
-- [ ] **Step 1: Verify the previous slice before staging**
+- [x] **Step 1: Verify the previous slice before staging**
 
 Run:
 
@@ -70,12 +70,12 @@ Run:
 
 Expected: all selected tests pass.
 
-- [ ] **Step 2: Stage only the previous slice**
+- [x] **Step 2: Stage only the previous slice**
 
 Use explicit `git add -- <paths>` for the source, tests, frontend and main plan
 files listed by `git status --short`. Do not use `git add .`.
 
-- [ ] **Step 3: Review the staged boundary**
+- [x] **Step 3: Review the staged boundary**
 
 Run:
 
@@ -87,7 +87,7 @@ git diff --cached --check
 Expected: no ignored result directories, `.gitignore`, `.playwright-mcp/` or
 `tmp/`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```powershell
 git commit -m "feat: deliver advanced predictions through the project UI"
@@ -105,7 +105,7 @@ git commit -m "feat: deliver advanced predictions through the project UI"
 - Modify: `tests/integration/test_database_migrations.py`
 - Create: `tests/integration/test_advanced_calibration_materialization_migration.py`
 
-- [ ] **Step 1: Write failing enum and metadata tests**
+- [x] **Step 1: Write failing enum and metadata tests**
 
 Add assertions equivalent to:
 
@@ -123,7 +123,7 @@ Verify parent columns include route/runtime/source hashes and state timestamps.
 Verify child uniqueness for `(materialization_id, ordinal)`,
 `(materialization_id, cell_id)` and `(materialization_id, result_id)`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -133,7 +133,7 @@ Verify child uniqueness for `(materialization_id, ordinal)`,
 
 Expected: fail because the enum and tables do not exist.
 
-- [ ] **Step 3: Implement the minimal enum and ORM models**
+- [x] **Step 3: Implement the minimal enum and ORM models**
 
 Add:
 
@@ -150,7 +150,7 @@ Add `AdvancedCalibrationMaterialization` and
 `AdvancedCalibrationSampleBinding` with exact foreign keys, check constraints,
 unique constraints and UTC timestamps from the design.
 
-- [ ] **Step 4: Implement migration 0014**
+- [x] **Step 4: Implement migration 0014**
 
 Migration requirements:
 
@@ -162,7 +162,7 @@ down_revision = "0013"
 Upgrade creates both tables and indexes. Downgrade must fail if either table
 contains rows; otherwise drop child before parent.
 
-- [ ] **Step 5: Run GREEN and migration round-trip**
+- [x] **Step 5: Run GREEN and migration round-trip**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -173,7 +173,7 @@ contains rows; otherwise drop child before parent.
 
 Expected: pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/quanxin_life/core src/quanxin_life/persistence/models.py `
@@ -191,7 +191,7 @@ git commit -m "feat: persist advanced calibration materializations"
 - Create: `src/quanxin_life/application/advanced_calibration_evidence.py`
 - Create: `tests/unit/application/test_advanced_calibration_evidence.py`
 
-- [ ] **Step 1: Write failing source-validation tests**
+- [x] **Step 1: Write failing source-validation tests**
 
 Define wished-for contracts:
 
@@ -221,7 +221,7 @@ Tests must prove:
 - the public evidence object contains immutable source identity hashes, not source
   paths.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -230,7 +230,7 @@ Tests must prove:
 
 Expected: import failure because the module does not exist.
 
-- [ ] **Step 3: Implement strict JSON, manifest and Parquet readers**
+- [x] **Step 3: Implement strict JSON, manifest and Parquet readers**
 
 Reuse structured Pydantic models from:
 
@@ -244,7 +244,7 @@ Do not import training models or torch. Read Parquet through PyArrow/Pandas only
 inside the optional Advanced path. Use resolved paths and require every file to
 remain under the registered root.
 
-- [ ] **Step 4: Implement task-specific evidence**
+- [x] **Step 4: Implement task-specific evidence**
 
 Return immutable records:
 
@@ -261,7 +261,7 @@ AdvancedSOHCalibrationEvidence(
 )
 ```
 
-- [ ] **Step 5: Run GREEN**
+- [x] **Step 5: Run GREEN**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -270,7 +270,7 @@ AdvancedSOHCalibrationEvidence(
 
 Expected: pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/quanxin_life/application/advanced_calibration_evidence.py `
@@ -314,7 +314,7 @@ producer on top of an unfenced `RUNNING` state.
 - Create: `tests/unit/application/test_advanced_calibration_materialization.py`
 - Create: `tests/integration/application/test_advanced_calibration_materialization.py`
 
-- [ ] **Step 1: Write failing producer tests**
+- [x] **Step 1: Write failing producer tests**
 
 Use a wished-for request that contains identities only:
 
@@ -341,7 +341,7 @@ split_partition = calibration
 
 Verify SOH samples use the finite trajectory evidence type and axis.
 
-- [ ] **Step 2: Run producer RED**
+- [x] **Step 2: Run producer RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -350,7 +350,7 @@ Verify SOH samples use the finite trajectory evidence type and axis.
 
 Expected: fail because the producer does not exist.
 
-- [ ] **Step 3: Implement sample production**
+- [x] **Step 3: Implement sample production**
 
 `AdvancedCalibrationSampleProducer` must:
 
@@ -362,7 +362,7 @@ Expected: fail because the producer does not exist.
 6. re-resolve the active runtime after inference;
 7. fail if any runtime identity field changed.
 
-- [ ] **Step 4: Write failing atomicity/idempotency tests**
+- [x] **Step 4: Write failing atomicity/idempotency tests**
 
 Tests must prove:
 
@@ -373,7 +373,7 @@ Tests must prove:
 - active route change marks old evidence unusable;
 - project/result binding tampering is rejected.
 
-- [ ] **Step 5: Run integration RED**
+- [x] **Step 5: Run integration RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -382,7 +382,7 @@ Tests must prove:
 
 Expected: fail because atomic materialization is absent.
 
-- [ ] **Step 6: Implement one-transaction persistence**
+- [x] **Step 6: Implement one-transaction persistence**
 
 Add a dedicated SQL ledger method that writes:
 
@@ -397,13 +397,13 @@ READY materialization state
 
 in one transaction. Do not loop over public `register_result()` calls.
 
-- [ ] **Step 7: Harden Advanced Conformal sample decoding**
+- [x] **Step 7: Harden Advanced Conformal sample decoding**
 
 Replace loose dictionary selection with strict Pydantic sample evidence models.
 Require exact source identity, outer ToolResult versions, runtime identity and
 OBSERVED/PREDICTED provenance.
 
-- [ ] **Step 8: Run GREEN**
+- [x] **Step 8: Run GREEN**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -414,7 +414,7 @@ OBSERVED/PREDICTED provenance.
 
 Expected: pass.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```powershell
 git add src/quanxin_life/application/advanced_calibration_materialization.py `
@@ -443,7 +443,7 @@ git commit -m "feat: materialize trusted advanced calibration samples"
 - Create: `tests/integration/api/test_advanced_calibration_api.py`
 - Create: `tests/integration/application/test_advanced_agent_execution_context.py`
 
-- [ ] **Step 1: Write queue and task RED tests**
+- [x] **Step 1: Write queue and task RED tests**
 
 The Celery payload must contain only:
 
@@ -454,7 +454,7 @@ The Celery payload must contain only:
 No project, route, cell, label, prediction, SHA or file path may be sent through
 Redis. The worker resolves all details from the database.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -464,7 +464,7 @@ Redis. The worker resolves all details from the database.
 
 Expected: fail because queue/task modules do not exist.
 
-- [ ] **Step 3: Implement queue and worker**
+- [x] **Step 3: Implement queue and worker**
 
 Use task identity:
 
@@ -475,7 +475,7 @@ quanxin_life.advanced_calibration.materialize.v1
 Use `acks_late`, `reject_on_worker_lost`, idempotent claim and bounded retry for an
 already-running materialization.
 
-- [ ] **Step 4: Write API RED tests**
+- [x] **Step 4: Write API RED tests**
 
 Cover:
 
@@ -487,7 +487,7 @@ Cover:
 - extra observed/predicted/path/hash fields yield 422;
 - repeated key returns the existing materialization and queue receipt.
 
-- [ ] **Step 5: Implement API adapter and app wiring**
+- [x] **Step 5: Implement API adapter and app wiring**
 
 Request:
 
@@ -501,7 +501,7 @@ class CreateAdvancedCalibrationMaterializationRequest(ContractModel):
 
 Response exposes status and evidence summaries only.
 
-- [ ] **Step 6: Write Agent resolver RED tests**
+- [x] **Step 6: Write Agent resolver RED tests**
 
 The resolver must:
 
@@ -513,7 +513,7 @@ The resolver must:
 - return stable result ID tuples by ordinal;
 - reject missing, duplicate, STALE or tampered evidence.
 
-- [ ] **Step 7: Implement Agent context resolver**
+- [x] **Step 7: Implement Agent context resolver**
 
 Populate only server-owned context references:
 
@@ -524,7 +524,7 @@ context.soh_calibration_sample_result_ids
 
 Do not change the fixed Agent plan structure.
 
-- [ ] **Step 8: Run GREEN**
+- [x] **Step 8: Run GREEN**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -538,7 +538,7 @@ Do not change the fixed Agent plan structure.
 
 Expected: pass.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```powershell
 git add src/quanxin_life/application/advanced_calibration_jobs.py `
@@ -569,7 +569,7 @@ git commit -m "feat: expose advanced calibration readiness"
 - Create: `frontend/tests/components/calibration-materialization-panel.test.tsx`
 - Modify: `frontend/tests/lib/api-client.test.ts`
 
-- [ ] **Step 1: Write component RED tests**
+- [x] **Step 1: Write component RED tests**
 
 Tests must prove:
 
@@ -582,7 +582,7 @@ Tests must prove:
 - polling stops on READY/FAILED/STALE and on unmount;
 - API failure does not display fabricated readiness.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```powershell
 cd frontend
@@ -592,7 +592,7 @@ node node_modules\vitest\vitest.mjs run `
 
 Expected: fail because the component does not exist.
 
-- [ ] **Step 3: Implement typed client and strict decoder**
+- [x] **Step 3: Implement typed client and strict decoder**
 
 Add:
 
@@ -607,7 +607,7 @@ export type AdvancedCalibrationMaterializationStatus =
 
 The API client must reject malformed status, task, route, SHA or timestamps.
 
-- [ ] **Step 4: Implement the project page**
+- [x] **Step 4: Implement the project page**
 
 Use a dense work-focused table on desktop and unframed stacked rows on mobile.
 Controls:
@@ -618,7 +618,7 @@ Controls:
 - tooltips explain status and SHA evidence;
 - no cards nested inside cards.
 
-- [ ] **Step 5: Run component and frontend gates**
+- [x] **Step 5: Run component and frontend gates**
 
 ```powershell
 cd frontend
@@ -631,7 +631,7 @@ node node_modules\next\dist\bin\next build
 Expected: all pass and the build lists
 `/projects/[projectId]/calibration`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add frontend/app/projects/[projectId]/calibration `
@@ -653,7 +653,7 @@ git commit -m "feat: manage calibration evidence in the project UI"
 - Modify:
   `docs/superpowers/plans/2026-07-19-quanxin-product-completion-and-a100-integration.md`
 
-- [ ] **Step 1: Write the end-to-end RED test**
+- [x] **Step 1: Write the end-to-end RED test**
 
 Use a persistent test database and source-verified MATR fixture to prove:
 
@@ -669,7 +669,7 @@ ADMIN creates materialization
 The E2E fixture must be explicitly test-only and must never appear in product UI as
 real production evidence.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -678,12 +678,12 @@ real production evidence.
 
 Expected: fail at the first missing integration boundary.
 
-- [ ] **Step 3: Add only the missing assembly wiring**
+- [x] **Step 3: Add only the missing assembly wiring**
 
 Wire the materialization services, queue, worker and Agent context provider through
 the existing application factory. Do not add alternate in-memory production paths.
 
-- [ ] **Step 4: Run targeted GREEN**
+- [x] **Step 4: Run targeted GREEN**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest `
@@ -694,7 +694,7 @@ the existing application factory. Do not add alternate in-memory production path
 
 Expected: pass.
 
-- [ ] **Step 5: Run browser QA**
+- [x] **Step 5: Run browser QA**
 
 Verify desktop 1440x900 and mobile 390x844:
 
@@ -704,7 +704,7 @@ Verify desktop 1440x900 and mobile 390x844:
 - READY/FAILED/STALE states are unambiguous;
 - single-cell page remains fail-closed without final result IDs.
 
-- [ ] **Step 6: Run full backend gates**
+- [x] **Step 6: Run full backend gates**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q --basetemp D:\qrt-calibration-final
@@ -720,7 +720,12 @@ Verify desktop 1440x900 and mobile 390x844:
 
 Report `pip-audit` as failed if the known diskcache/GitPython vulnerabilities remain.
 
-- [ ] **Step 7: Run full frontend gates**
+2026-07-27 gate result: full pytest `1705 passed, 6 skipped`; leakage
+`2 passed`; integration `359 passed`; E2E `10 passed`; Ruff, mypy,
+compileall and `pip check` passed. `pip-audit` failed as required to be reported:
+`diskcache 5.6.3` has one known vulnerability and `GitPython 3.1.51` has five.
+
+- [x] **Step 7: Run full frontend gates**
 
 ```powershell
 cd frontend
@@ -730,13 +735,13 @@ node node_modules\eslint\bin\eslint.js . --max-warnings=0
 node node_modules\next\dist\bin\next build
 ```
 
-- [ ] **Step 8: Update the main plan**
+- [x] **Step 8: Update the main plan**
 
 Mark the trusted calibration producer/importer and calibration-to-UI code chain
 complete. Keep real product database migrations, 15-candidate registration, ADMIN
 activation and production browser E2E unchecked until actually executed.
 
-- [ ] **Step 9: Final diff and commit**
+- [x] **Step 9: Final diff and commit**
 
 ```powershell
 git diff --check

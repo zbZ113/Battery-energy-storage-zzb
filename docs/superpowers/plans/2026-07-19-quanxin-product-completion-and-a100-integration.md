@@ -594,7 +594,7 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 
 ### Task 3：正式套件注册与 ToolResult
 
-状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本、active-route resolver、可信 project-scoped invocation context、record batch binding、持久 project ToolResult binding 与持久 AgentRun per-step grant；2026-07-26 完成 `0013` exact-step binding、服务端冻结 canonical input/依赖/审批证据、PROJECT Worker 原子提交与 fenced-claim 恢复，并完成 target-aware RUL、finite-horizon SOH、route-specific Split Conformal、项目 API、Agent、报告和单电芯 UI 代码链）**。
+状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本、active-route resolver、可信 project-scoped invocation context、record batch binding、持久 project ToolResult binding 与持久 AgentRun per-step grant；2026-07-26 完成 `0013` exact-step binding、服务端冻结 canonical input/依赖/审批证据、PROJECT Worker 原子提交与 fenced-claim 恢复，并完成 target-aware RUL、finite-horizon SOH、route-specific Split Conformal、项目 API、Agent、报告和单电芯 UI 代码链；2026-07-27 完成来源验证的 Advanced calibration materialization、identity-only ADMIN API/队列、Agent READY resolver、校准管理 UI 与测试环境纵向 E2E）**。
 
 已生成：
 
@@ -677,6 +677,12 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 - PROJECT registry 已接入 Advanced MATR 官方 cycle life 与 finite-horizon SOH 工具：RUL 目标固定为 `matr_official_cycle_life`，SOH 只输出 cutoff 后且不超过 cycle 500 的单调有限轨迹，不从 SOH 推导 RUL；
 - Split Conformal 已按冻结路由接入：cutoff 20 使用 `DEFAULT`，cutoff 50/100/150 的区间只使用 `COVERAGE`；点精度结果与 coverage 区间中心分开保存和展示；无法由 calibration cell 数量支持的目标覆盖率会失败关闭，不再截断秩后虚标覆盖保证；
 - 新增项目安全结果读取 API、固定 Agent 单电芯链、四 ToolResult 审计报告与 Next.js 单电芯页面；报告和 UI 只显示持久 ToolResult 数值，并展示 route、模型、数据、feature、split、制品 SHA-256、SOH simultaneous finite band 与服务端警告；
+- 新增 `0014`/`0015`：持久化 Advanced calibration materialization、样本绑定、创建时的 ADMIN session、claim token 摘要、attempt 与 lease；Worker 使用 fenced claim、续租心跳和崩溃恢复，过期或被替换的 claim 不能提交 READY/FAILED；
+- 新增注册式三批 MATR calibration evidence resolver：RUL 观测只来自非删失的官方 cycle life，SOH 观测只来自逐文件 SHA-256 验证的 supervision Parquet 且 horizon 不超过 cycle 500；split、cell、观测、预测、runtime/source identity 与 sample manifest 全部由服务端冻结；
+- 新增 identity-only ADMIN materialization API 与 Celery 队列：调用方只能选择合法 task/cutoff/route，Redis 只携带 `materialization_id`；样本 ToolResult、provenance、project binding、sample binding、manifest hash 和 READY 状态在一个事务中提交；
+- 新增 Agent READY-materialization resolver：按 record batch 推导目标 route，精确匹配当前 runtime，按 ordinal 解析并复验全部样本 ToolResult/binding/manifest，拒绝目标 cell 进入 calibration cohort，并在返回前再次复验 active route；
+- 新增 Next.js calibration 管理页：ADMIN 只能触发服务端列出的合法 route，MEMBER 只读；页面展示 readiness、冻结 identity、时间和 SHA 证据，不展示 calibration cell、sample result IDs、观测值或预测数组；1440×900 与 390×844 布局已完成无溢出浏览器 QA；
+- 新增测试环境纵向 E2E：通过真实认证 ADMIN HTTP、生产 assembly、identity-only queue、assembled worker、注册式三批 manifest/split/Parquet/SHA resolver、Agent context、Split Conformal、report ledger 与 project result API 验证代码链；仅模型 tensor/inference 边界使用显式 test-only adapter，因此该测试不等同于真实产品数据库或真实激活模型验收；
 - 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录，也未修改任何真实产品数据库。
 
 可复现源码入口：
@@ -715,26 +721,38 @@ migrations/versions/0010_model_route_stream_heads.py
 migrations/versions/0011_record_batch_bindings.py
 migrations/versions/0012_project_tool_result_bindings.py
 migrations/versions/0013_exact_agent_step_bindings.py
+migrations/versions/0014_advanced_calibration_materializations.py
+migrations/versions/0015_advanced_calibration_claims.py
+src/quanxin_life/application/advanced_calibration_evidence.py
+src/quanxin_life/application/advanced_calibration_materialization.py
+src/quanxin_life/application/advanced_calibration_jobs.py
+src/quanxin_life/application/advanced_agent_execution_context.py
+src/quanxin_life/infrastructure/calibration_queue.py
+src/quanxin_life/api/advanced_calibration.py
+src/quanxin_life/tasks/advanced_calibration.py
 frontend/app/projects/[projectId]/cells/[recordBatchId]/page.tsx
 frontend/components/single-cell-analysis-contract.ts
 frontend/components/single-cell-analysis.tsx
 frontend/components/soh-trajectory-chart.tsx
+frontend/app/projects/[projectId]/calibration/page.tsx
+frontend/components/calibration-materialization-contract.ts
+frontend/components/calibration-materialization-panel.tsx
 ```
 
-Task 3 后续顺序：实现可信 calibration-sample producer/importer → 在明确的目标产品数据库执行 `0009`–`0013` migrations 与 15 候选批注册 → 由已初始化 ADMIN 人工激活 route → 导入冻结 calibration ToolResult → 使用真实 result IDs 完成 API / Agent / 报告 / UI 浏览器端到端验收。
+Task 3 后续顺序：在明确的目标产品数据库执行 `0009`–`0015` migrations → 批注册 15 个候选 → 由已初始化 ADMIN 人工激活批准 route → 注册真实 MATR evidence root 并通过 ADMIN API materialize calibration ToolResult → 使用真实模型、真实持久 result IDs 完成 API / Agent / 报告 / UI 浏览器端到端验收。
 
 - [x] A100 Final importer、deployment bundle、managed candidate registry 与 activation ledger 源码和离线制品；
-- [ ] 在目标产品数据库执行 `0009`–`0013` migrations、15 候选批注册和人工 route activation；该步骤需要明确数据库环境、ACTIVE project 与已初始化 ADMIN；
+- [ ] 在目标产品数据库执行 `0009`–`0015` migrations、15 候选批注册和人工 route activation；该步骤需要明确数据库环境、ACTIVE project 与已初始化 ADMIN；
 - [x] exact AgentStep、原子 ledger、fenced-claim 恢复、冻结输入/依赖/审批与 PROJECT Worker 可信执行基础设施；
 - [x] Advanced artifact v2 自包含 inference context、BatLiNet reference batch、显式 output target 与 deployment bundle/index v2；
 - [x] active-route-aware runtime resolver、managed v2 字节复验、四类正式 loader 与隔离推理实例；
 - [x] project Advanced raw-input ToolResult、同项目 record batch 复验、label-free sequence/config SHA-256 与 PROJECT assembly；
 - [x] Advanced RUL/SOH 真实数值链，包括正式 safetensors runtime、target-aware ToolResult 与 finite-horizon SOH；
 - [x] route-specific Split Conformal 校准/签发、项目 API、Agent、报告与 Next.js 单电芯纵向代码链；
-- [ ] 实现可信 calibration-sample producer/importer：必须由服务端冻结 calibration split、cell、观测标签、预测结果和来源哈希，不能由调用方自报；
-- [ ] 在真实产品环境执行 migrations、15 候选批注册、人工 route activation 和 calibration ToolResult 导入后，完成带真实 result IDs 的浏览器端到端验收。
+- [x] 实现可信 calibration-sample producer/materializer、来源验证、fenced Worker、identity-only ADMIN API/队列、Agent READY resolver 与校准管理 UI；calibration split、cell、观测标签、预测结果和来源哈希均由服务端冻结，调用方不能自报；
+- [ ] 在真实产品环境执行 migrations、15 候选批注册、人工 route activation、真实 evidence registration 和 calibration materialization 后，完成带真实模型与真实 result IDs 的浏览器端到端验收。
 
-以上 Task 3 剩余子切片完成后，进入 Next.js 门户和真实数据上传链。
+Task 3 的仓库内代码链已经贯通；完成上述真实产品环境验收后，进入 Next.js 门户其余页面和真实数据上传链。
 
 ## 十三、Git 与制品规则
 
