@@ -1,62 +1,10 @@
-"""Shared typed tool registry for all service and agent entry points."""
+"""Shared typed tool registry with lazy optional-domain exports."""
 
-from quanxin_life.tools.advanced_input import (
-    ADVANCED_INPUT_EVIDENCE_TYPE,
-    ADVANCED_INPUT_TRANSFORM_VERSION,
-    PREPARE_ADVANCED_INPUT_TOOL_VERSION,
-    PrepareAdvancedInputToolInput,
-    execute_prepare_advanced_input_tool,
-    register_project_prepare_advanced_input_tool,
-)
-from quanxin_life.tools.batch_decision import (
-    BATCH_DECISION_TOOL_VERSION,
-    BatchDecisionToolInput,
-    execute_batch_decision_tool,
-    register_batch_decision_tool,
-)
-from quanxin_life.tools.battery_evidence import (
-    BATTERY_EVIDENCE_ARTIFACT_TYPE,
-    BATTERY_EVIDENCE_RETRIEVAL_TOOL_VERSION,
-    RetrieveBatteryEvidenceToolInput,
-    execute_retrieve_battery_evidence_tool,
-    register_retrieve_battery_evidence_tool,
-)
-from quanxin_life.tools.bootstrap import create_available_tool_registry
-from quanxin_life.tools.data_quality import (
-    DATA_QUALITY_MODEL_VERSION,
-    DATA_QUALITY_TOOL_VERSION,
-    ValidateBatteryDataToolInput,
-    execute_validate_battery_data_tool,
-    register_validate_battery_data_tool,
-)
-from quanxin_life.tools.mcp_adapter import (
-    McpAdapterError,
-    McpRequestValidationError,
-    McpSdkUnavailableError,
-    McpToolAdapter,
-    McpToolCallRequest,
-    load_optional_mcp_sdk,
-)
-from quanxin_life.tools.mcp_host import (
-    McpHost,
-    McpHostConfig,
-    McpTransport,
-    create_mcp_host,
-    run_mcp_host,
-)
-from quanxin_life.tools.next_experiment_recommendation import (
-    EXPERIMENT_RECOMMENDATION_EVIDENCE_TYPE,
-    NEXT_EXPERIMENT_RECOMMENDATION_TOOL_VERSION,
-    RecommendNextExperimentToolInput,
-    execute_recommend_next_experiment_tool,
-    register_recommend_next_experiment_tool,
-)
-from quanxin_life.tools.physics_check import (
-    PHYSICS_CHECK_TOOL_VERSION,
-    CheckOperatingConditionToolInput,
-    execute_check_operating_condition_tool,
-    register_check_operating_condition_tool,
-)
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
 from quanxin_life.tools.registry import (
     DuplicateToolError,
     RegisteredTool,
@@ -72,31 +20,61 @@ from quanxin_life.tools.registry import (
     ToolSchema,
     UnknownToolError,
 )
-from quanxin_life.tools.scenario_lifetime import (
-    SCENARIO_CONVERSION_WARNING,
-    SCENARIO_LIFETIME_ARTIFACT_TYPE,
-    SCENARIO_LIFETIME_TOOL_VERSION,
-    ScenarioLifetimeToolInput,
-    execute_scenario_lifetime_tool,
-    register_scenario_lifetime_tool,
-)
-from quanxin_life.tools.split_audit import (
-    SPLIT_AUDIT_MODEL_VERSION,
-    SPLIT_AUDIT_TOOL_VERSION,
-    AuditDatasetSplitToolInput,
-    execute_audit_dataset_split_tool,
-    register_audit_dataset_split_tool,
-)
-from quanxin_life.tools.target_domain_adaptation import (
-    TARGET_DOMAIN_ADAPTATION_TOOL_VERSION,
-    AdaptToTargetDomainToolInput,
-    execute_adapt_to_target_domain_tool,
-    register_adapt_to_target_domain_tool,
-)
+
+_EXPORT_MODULES = {
+    "AdaptToTargetDomainToolInput": "target_domain_adaptation",
+    "AuditDatasetSplitToolInput": "split_audit",
+    "BATCH_DECISION_TOOL_VERSION": "batch_decision",
+    "BATTERY_EVIDENCE_ARTIFACT_TYPE": "battery_evidence",
+    "BATTERY_EVIDENCE_RETRIEVAL_TOOL_VERSION": "battery_evidence",
+    "BatchDecisionToolInput": "batch_decision",
+    "CheckOperatingConditionToolInput": "physics_check",
+    "DATA_QUALITY_MODEL_VERSION": "data_quality",
+    "DATA_QUALITY_TOOL_VERSION": "data_quality",
+    "EXPERIMENT_RECOMMENDATION_EVIDENCE_TYPE": "next_experiment_recommendation",
+    "McpAdapterError": "mcp_adapter",
+    "McpHost": "mcp_host",
+    "McpHostConfig": "mcp_host",
+    "McpRequestValidationError": "mcp_adapter",
+    "McpSdkUnavailableError": "mcp_adapter",
+    "McpToolAdapter": "mcp_adapter",
+    "McpToolCallRequest": "mcp_adapter",
+    "McpTransport": "mcp_host",
+    "NEXT_EXPERIMENT_RECOMMENDATION_TOOL_VERSION": "next_experiment_recommendation",
+    "PHYSICS_CHECK_TOOL_VERSION": "physics_check",
+    "RecommendNextExperimentToolInput": "next_experiment_recommendation",
+    "RetrieveBatteryEvidenceToolInput": "battery_evidence",
+    "SCENARIO_CONVERSION_WARNING": "scenario_lifetime",
+    "SCENARIO_LIFETIME_ARTIFACT_TYPE": "scenario_lifetime",
+    "SCENARIO_LIFETIME_TOOL_VERSION": "scenario_lifetime",
+    "SPLIT_AUDIT_MODEL_VERSION": "split_audit",
+    "SPLIT_AUDIT_TOOL_VERSION": "split_audit",
+    "ScenarioLifetimeToolInput": "scenario_lifetime",
+    "TARGET_DOMAIN_ADAPTATION_TOOL_VERSION": "target_domain_adaptation",
+    "ValidateBatteryDataToolInput": "data_quality",
+    "create_available_tool_registry": "bootstrap",
+    "create_mcp_host": "mcp_host",
+    "execute_adapt_to_target_domain_tool": "target_domain_adaptation",
+    "execute_audit_dataset_split_tool": "split_audit",
+    "execute_batch_decision_tool": "batch_decision",
+    "execute_check_operating_condition_tool": "physics_check",
+    "execute_recommend_next_experiment_tool": "next_experiment_recommendation",
+    "execute_retrieve_battery_evidence_tool": "battery_evidence",
+    "execute_scenario_lifetime_tool": "scenario_lifetime",
+    "execute_validate_battery_data_tool": "data_quality",
+    "load_optional_mcp_sdk": "mcp_adapter",
+    "register_adapt_to_target_domain_tool": "target_domain_adaptation",
+    "register_audit_dataset_split_tool": "split_audit",
+    "register_batch_decision_tool": "batch_decision",
+    "register_check_operating_condition_tool": "physics_check",
+    "register_recommend_next_experiment_tool": "next_experiment_recommendation",
+    "register_retrieve_battery_evidence_tool": "battery_evidence",
+    "register_scenario_lifetime_tool": "scenario_lifetime",
+    "register_validate_battery_data_tool": "data_quality",
+    "run_mcp_host": "mcp_host",
+}
 
 __all__ = [
-    "ADVANCED_INPUT_EVIDENCE_TYPE",
-    "ADVANCED_INPUT_TRANSFORM_VERSION",
     "BATCH_DECISION_TOOL_VERSION",
     "BATTERY_EVIDENCE_ARTIFACT_TYPE",
     "BATTERY_EVIDENCE_RETRIEVAL_TOOL_VERSION",
@@ -105,7 +83,6 @@ __all__ = [
     "EXPERIMENT_RECOMMENDATION_EVIDENCE_TYPE",
     "NEXT_EXPERIMENT_RECOMMENDATION_TOOL_VERSION",
     "PHYSICS_CHECK_TOOL_VERSION",
-    "PREPARE_ADVANCED_INPUT_TOOL_VERSION",
     "SCENARIO_CONVERSION_WARNING",
     "SCENARIO_LIFETIME_ARTIFACT_TYPE",
     "SCENARIO_LIFETIME_TOOL_VERSION",
@@ -125,7 +102,6 @@ __all__ = [
     "McpToolAdapter",
     "McpToolCallRequest",
     "McpTransport",
-    "PrepareAdvancedInputToolInput",
     "RecommendNextExperimentToolInput",
     "RegisteredTool",
     "RetrieveBatteryEvidenceToolInput",
@@ -148,7 +124,6 @@ __all__ = [
     "execute_audit_dataset_split_tool",
     "execute_batch_decision_tool",
     "execute_check_operating_condition_tool",
-    "execute_prepare_advanced_input_tool",
     "execute_recommend_next_experiment_tool",
     "execute_retrieve_battery_evidence_tool",
     "execute_scenario_lifetime_tool",
@@ -158,10 +133,18 @@ __all__ = [
     "register_audit_dataset_split_tool",
     "register_batch_decision_tool",
     "register_check_operating_condition_tool",
-    "register_project_prepare_advanced_input_tool",
     "register_recommend_next_experiment_tool",
     "register_retrieve_battery_evidence_tool",
     "register_scenario_lifetime_tool",
     "register_validate_battery_data_tool",
     "run_mcp_host",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{__name__}.{module_name}"), name)
+    globals()[name] = value
+    return value

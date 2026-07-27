@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import fields, replace
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -49,6 +50,7 @@ from quanxin_life.models.hybridpatch_v2 import (
 from tests.unit.application.test_advanced_deployment_artifact_v2 import (
     _cyclepatch_config,
     _normalizer_and_batches,
+    _raw_sequence,
     _reference_context,
 )
 
@@ -75,7 +77,7 @@ def _route(
     resolved_artifact_id = artifact_id or str(uuid4())
     candidate_id = family.replace("_", "-")
     run_id = f"{candidate_id}-cutoff-20-seed-38"
-    return SimpleNamespace(
+    route = SimpleNamespace(
         project_id="project-1",
         task=task,
         cutoff_cycle=20,
@@ -106,6 +108,23 @@ def _route(
         ledger_sequence_number=sequence,
         ledger_head_sha256="d" * 64,
     )
+    route.artifact.metadata = SimpleNamespace(
+        dataset_id="MATR",
+        data_version="matr-three-batch-v1",
+        split_version="matr-cell-split-v1",
+        feature_version="cyclepatch-multichannel-v1",
+        advanced_provenance=SimpleNamespace(
+            normalization_sha256="9" * 64,
+        ),
+    )
+    return route
+
+
+class _RULAdapter:
+    normalization_statistics_sha256 = "9" * 64
+
+    def predict_cycle(self, _raw_sequence: object) -> float:
+        return 500.0
 
 
 def _artifact(route: object, model: torch.nn.Module) -> VerifiedAdvancedRuntimeArtifact:
@@ -115,6 +134,12 @@ def _artifact(route: object, model: torch.nn.Module) -> VerifiedAdvancedRuntimeA
         model_version=route.artifact.model_version,
         artifact_kind=DeepArtifactKind.CYCLEPATCH_DIRECT,
         output_target=AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE,
+        dataset_id="MATR",
+        data_version="matr-three-batch-v1",
+        feature_version="cyclepatch-multichannel-v1",
+        split_version="matr-cell-split-v1",
+        normalization_sha256="9" * 64,
+        inference=_RULAdapter(),
         model=model,
     )
 
@@ -185,8 +210,14 @@ def test_resolver_revalidates_exact_route_and_artifact_before_returning_runtime(
     )
 
     assert isinstance(runtime, VerifiedRULRuntime)
-    assert runtime.model is model
+    assert runtime.inference is provider.artifacts[0].inference
     assert runtime.output_target is AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE
+    assert runtime.artifact_kind is DeepArtifactKind.CYCLEPATCH_DIRECT
+    assert runtime.dataset_id == "MATR"
+    assert runtime.data_version == "matr-three-batch-v1"
+    assert runtime.split_version == "matr-cell-split-v1"
+    assert runtime.feature_version == "cyclepatch-multichannel-v1"
+    assert runtime.normalization_sha256 == "9" * 64
     assert runtime.artifact_id == route.artifact.artifact_id
     assert runtime.model_version == route.artifact.model_version
     assert route_service.calls == [
@@ -276,13 +307,19 @@ def test_runtime_contract_never_exposes_filesystem_paths() -> None:
             cutoff_cycle=20,
             role=AdvancedModelRouteRole.DEFAULT,
             output_target=AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE,
+            artifact_kind=DeepArtifactKind.CYCLEPATCH_DIRECT,
+            dataset_id="MATR",
+            data_version="matr-three-batch-v1",
+            feature_version="cyclepatch-multichannel-v1",
+            split_version="matr-cell-split-v1",
+            normalization_sha256="9" * 64,
             artifact_id=str(uuid4()),
             artifact_manifest_sha256="a" * 64,
             model_version="cyclepatch-direct-cutoff-20-seed-38",
             decision_event_id=str(uuid4()),
             ledger_sequence_number=1,
             ledger_head_sha256="b" * 64,
-            model=torch.nn.Identity(),
+            inference=_RULAdapter(),
         )
     ).casefold()
 
@@ -298,9 +335,9 @@ class _ManagedRegistry:
 
 
 class _ModelLoader:
-    def __init__(self) -> None:
+    def __init__(self, model: torch.nn.Module | None = None) -> None:
         self.calls = 0
-        self.model = torch.nn.Linear(1, 1)
+        self.model = model or torch.nn.Linear(1, 1)
 
     def load(
         self,
@@ -639,21 +676,25 @@ def test_managed_provider_reverifies_bytes_and_isolates_cached_model_instances(
 ) -> None:
     fixture, _artifact_root = _managed_direct_fixture(tmp_path)
     registry = _ManagedRegistry(fixture.registered)
-    loader = _ModelLoader()
+    loaded_template = ManagedAdvancedRuntimeProvider(
+        _ManagedRegistry(fixture.registered)
+    ).resolve(fixture.active_route).model
+    loader = _ModelLoader(loaded_template)
     provider = ManagedAdvancedRuntimeProvider(registry, model_loader=loader)
 
     first = provider.resolve(fixture.active_route)
-    expected_weight = loader.model.weight.detach().clone()
+    template_parameter = next(loader.model.parameters())
+    expected_parameter = template_parameter.detach().clone()
     first.model.train()
     with torch.no_grad():
-        first.model.weight.add_(1.0)
+        next(first.model.parameters()).add_(1.0)
     second = provider.resolve(fixture.active_route)
 
     assert first.model is not second.model
     assert first.model is not loader.model
     assert second.model is not loader.model
     assert second.model.training is False
-    assert torch.equal(second.model.weight, expected_weight)
+    assert torch.equal(next(second.model.parameters()), expected_parameter)
     assert all(not parameter.requires_grad for parameter in second.model.parameters())
     assert registry.calls == 2
     assert loader.calls == 1
@@ -663,6 +704,7 @@ def test_managed_provider_loads_each_self_contained_v2_family(
     tmp_path: Path,
 ) -> None:
     fixtures = _managed_all_family_fixtures(tmp_path)
+    raw_sequence = _raw_sequence("formal-inference-cell", 0.25)
 
     for fixture, expected_kind, expected_target in fixtures:
         runtime = ManagedAdvancedRuntimeProvider(
@@ -671,13 +713,37 @@ def test_managed_provider_loads_each_self_contained_v2_family(
 
         assert runtime.artifact_kind is expected_kind
         assert runtime.output_target is expected_target
-        assert isinstance(runtime.model, torch.nn.Module)
-        assert runtime.model.training is False
-        assert runtime.model.normalizer is not None
-    batlinet_runtime = ManagedAdvancedRuntimeProvider(
-        _ManagedRegistry(fixtures[1][0].registered)
-    ).resolve(fixtures[1][0].active_route)
-    assert batlinet_runtime.model.reference_batch is not None
+        assert runtime.dataset_id == "MATR"
+        assert runtime.data_version == "matr-three-batch-v1"
+        assert runtime.split_version == "matr-cell-split-v1"
+        assert runtime.feature_version == "cyclepatch-multichannel-v1"
+        assert runtime.normalization_sha256
+        assert (
+            runtime.inference.normalization_statistics_sha256
+            == runtime.normalization_sha256
+        )
+        if expected_target is AdvancedOutputTarget.MATR_OFFICIAL_CYCLE_LIFE:
+            prediction = runtime.inference.predict_cycle(raw_sequence)
+            assert isinstance(prediction, float)
+            assert prediction > 20.0
+        else:
+            cycles, prediction = runtime.inference.predict_trajectory(
+                raw_sequence,
+                initial_soh=1.0,
+            )
+            assert isinstance(cycles, tuple)
+            assert isinstance(prediction, tuple)
+            assert len(cycles) == len(prediction)
+            assert cycles[0] > 20
+            assert cycles[-1] == 500
+            assert all(
+                current > previous
+                for previous, current in pairwise(cycles)
+            )
+            assert all(
+                current <= previous
+                for previous, current in pairwise(prediction)
+            )
 
 
 def test_managed_provider_cache_cannot_hide_artifact_tampering(
@@ -685,7 +751,10 @@ def test_managed_provider_cache_cannot_hide_artifact_tampering(
 ) -> None:
     fixture, artifact_root = _managed_direct_fixture(tmp_path)
     registry = _ManagedRegistry(fixture.registered)
-    loader = _ModelLoader()
+    loaded_template = ManagedAdvancedRuntimeProvider(
+        _ManagedRegistry(fixture.registered)
+    ).resolve(fixture.active_route).model
+    loader = _ModelLoader(loaded_template)
     provider = ManagedAdvancedRuntimeProvider(registry, model_loader=loader)
     provider.resolve(fixture.active_route)
     weights = next(artifact_root.rglob("model.safetensors"))

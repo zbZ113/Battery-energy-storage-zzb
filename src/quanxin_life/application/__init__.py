@@ -1,97 +1,59 @@
-"""Side-effect-free assembly helpers for deployable application contexts."""
+"""Lazy, side-effect-free exports for deployable application contexts."""
 
-from quanxin_life.application.assembly import (
-    CompetitionToolDependencies,
-    ProjectPredictionToolDependencies,
-    create_competition_tool_invocation_service,
-    create_competition_tool_registry,
-    create_project_prediction_tool_invocation_service,
-    create_project_prediction_tool_registry,
-)
-from quanxin_life.application.ingestion import (
-    CANONICAL_CYCLE_CSV_FIELDS,
-    CanonicalCsvBatchRegistration,
-    FileSystemVerifiedEarlyCycleBatchStore,
-    InMemoryVerifiedEarlyCycleBatchStore,
-    VerifiedEarlyCycleBatchStore,
-)
-from quanxin_life.application.invocation_context import (
-    ProjectInvocationAccessError,
-    ProjectInvocationContextService,
-    ProjectInvocationNotFoundError,
-    ProjectInvocationSource,
-    VerifiedProjectInvocationContext,
-)
-from quanxin_life.application.lifetime_workflow import (
-    LifetimeDecisionWorkflowRequest,
-    LifetimeDecisionWorkflowResult,
-    LifetimeDecisionWorkflowStatus,
-    ModelArtifactPolicy,
-    run_lifetime_decision_workflow,
-)
-from quanxin_life.application.model_artifact_catalog import (
-    AdvancedModelArtifactCatalogBatchRecord,
-    ClassicModelArtifactCatalogSource,
-    ModelArtifactCatalogRecord,
-    ModelArtifactCatalogService,
-    VerifiedModelArtifactMetadata,
-    VerifiedModelArtifactRegistration,
-)
-from quanxin_life.application.model_artifacts import (
-    ArtifactFormat,
-    ArtifactKind,
-    ModelArtifactManifest,
-    ModelArtifactRegistry,
-    VerifiedModelArtifact,
-    load_verified_xgboost_life_predictor,
-)
-from quanxin_life.application.record_batch_bindings import (
-    BINDING_SCHEMA_VERSION,
-    RecordBatchBindingAccessError,
-    RecordBatchBindingNotFoundError,
-    RecordBatchBindingRecord,
-    RecordBatchBindingService,
-    RecordBatchBindingStateError,
-)
+from __future__ import annotations
 
-__all__ = [
-    "BINDING_SCHEMA_VERSION",
-    "CANONICAL_CYCLE_CSV_FIELDS",
-    "AdvancedModelArtifactCatalogBatchRecord",
-    "ArtifactFormat",
-    "ArtifactKind",
-    "CanonicalCsvBatchRegistration",
-    "ClassicModelArtifactCatalogSource",
-    "CompetitionToolDependencies",
-    "FileSystemVerifiedEarlyCycleBatchStore",
-    "InMemoryVerifiedEarlyCycleBatchStore",
-    "LifetimeDecisionWorkflowRequest",
-    "LifetimeDecisionWorkflowResult",
-    "LifetimeDecisionWorkflowStatus",
-    "ModelArtifactCatalogRecord",
-    "ModelArtifactCatalogService",
-    "ModelArtifactManifest",
-    "ModelArtifactPolicy",
-    "ModelArtifactRegistry",
-    "ProjectInvocationAccessError",
-    "ProjectInvocationContextService",
-    "ProjectInvocationNotFoundError",
-    "ProjectInvocationSource",
-    "ProjectPredictionToolDependencies",
-    "RecordBatchBindingAccessError",
-    "RecordBatchBindingNotFoundError",
-    "RecordBatchBindingRecord",
-    "RecordBatchBindingService",
-    "RecordBatchBindingStateError",
-    "VerifiedEarlyCycleBatchStore",
-    "VerifiedModelArtifact",
-    "VerifiedModelArtifactMetadata",
-    "VerifiedModelArtifactRegistration",
-    "VerifiedProjectInvocationContext",
-    "create_competition_tool_invocation_service",
-    "create_competition_tool_registry",
-    "create_project_prediction_tool_invocation_service",
-    "create_project_prediction_tool_registry",
-    "load_verified_xgboost_life_predictor",
-    "run_lifetime_decision_workflow",
-]
+from importlib import import_module
+from typing import Any
+
+_EXPORT_MODULES = {
+    "AdvancedModelArtifactCatalogBatchRecord": "model_artifact_catalog",
+    "ArtifactFormat": "model_artifacts",
+    "ArtifactKind": "model_artifacts",
+    "BINDING_SCHEMA_VERSION": "record_batch_bindings",
+    "CANONICAL_CYCLE_CSV_FIELDS": "ingestion",
+    "CanonicalCsvBatchRegistration": "ingestion",
+    "ClassicModelArtifactCatalogSource": "model_artifact_catalog",
+    "CompetitionToolDependencies": "assembly",
+    "FileSystemVerifiedEarlyCycleBatchStore": "ingestion",
+    "InMemoryVerifiedEarlyCycleBatchStore": "ingestion",
+    "LifetimeDecisionWorkflowRequest": "lifetime_workflow",
+    "LifetimeDecisionWorkflowResult": "lifetime_workflow",
+    "LifetimeDecisionWorkflowStatus": "lifetime_workflow",
+    "ModelArtifactCatalogRecord": "model_artifact_catalog",
+    "ModelArtifactCatalogService": "model_artifact_catalog",
+    "ModelArtifactManifest": "model_artifacts",
+    "ModelArtifactPolicy": "lifetime_workflow",
+    "ModelArtifactRegistry": "model_artifacts",
+    "ProjectInvocationAccessError": "invocation_context",
+    "ProjectInvocationContextService": "invocation_context",
+    "ProjectInvocationNotFoundError": "invocation_context",
+    "ProjectInvocationSource": "invocation_context",
+    "ProjectPredictionToolDependencies": "assembly",
+    "RecordBatchBindingAccessError": "record_batch_bindings",
+    "RecordBatchBindingNotFoundError": "record_batch_bindings",
+    "RecordBatchBindingRecord": "record_batch_bindings",
+    "RecordBatchBindingService": "record_batch_bindings",
+    "RecordBatchBindingStateError": "record_batch_bindings",
+    "VerifiedEarlyCycleBatchStore": "ingestion",
+    "VerifiedModelArtifact": "model_artifacts",
+    "VerifiedModelArtifactMetadata": "model_artifact_catalog",
+    "VerifiedModelArtifactRegistration": "model_artifact_catalog",
+    "VerifiedProjectInvocationContext": "invocation_context",
+    "create_competition_tool_invocation_service": "assembly",
+    "create_competition_tool_registry": "assembly",
+    "create_project_prediction_tool_invocation_service": "assembly",
+    "create_project_prediction_tool_registry": "assembly",
+    "load_verified_xgboost_life_predictor": "model_artifacts",
+    "run_lifetime_decision_workflow": "lifetime_workflow",
+}
+
+__all__ = list(_EXPORT_MODULES)
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{__name__}.{module_name}"), name)
+    globals()[name] = value
+    return value

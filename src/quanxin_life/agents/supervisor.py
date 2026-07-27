@@ -39,7 +39,13 @@ PLANNABLE_INPUT_MODES: dict[StandardToolName, tuple[frozenset[str], ...]] = {
         ),
     ),
     StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES: (frozenset({"record_batch_id"}),),
-    StandardToolName.PREDICT_CYCLE_LIFE: (frozenset({"upstream_result_id"}),),
+    StandardToolName.PREDICT_CYCLE_LIFE: (
+        frozenset({"upstream_result_id"}),
+        frozenset({"upstream_result_id", "route_role"}),
+    ),
+    StandardToolName.PREDICT_SOH_TRAJECTORY: (
+        frozenset({"upstream_result_id", "route_role"}),
+    ),
     StandardToolName.CONVERT_SCENARIO_LIFETIME: (
         frozenset(
             {
@@ -60,6 +66,24 @@ PLANNABLE_INPUT_MODES: dict[StandardToolName, tuple[frozenset[str], ...]] = {
     StandardToolName.CALIBRATE_PREDICTION_INTERVAL: (
         frozenset({"calibration_cohort_id"}),
         frozenset({"prediction_result_id", "calibration_result_id"}),
+        frozenset(
+            {
+                "operation",
+                "task",
+                "route_role",
+                "alpha",
+                "calibration_sample_result_ids",
+            }
+        ),
+        frozenset(
+            {
+                "operation",
+                "task",
+                "route_role",
+                "prediction_result_id",
+                "calibration_result_id",
+            }
+        ),
     ),
     StandardToolName.MAKE_BATCH_DECISION: (
         frozenset(
@@ -71,6 +95,16 @@ PLANNABLE_INPUT_MODES: dict[StandardToolName, tuple[frozenset[str], ...]] = {
             }
         ),
     ),
+    StandardToolName.GENERATE_AUDITED_REPORT: (
+        frozenset(
+            {
+                "rul_result_id",
+                "soh_result_id",
+                "rul_conformal_result_id",
+                "soh_conformal_result_id",
+            }
+        ),
+    ),
 }
 ALLOWED_CONTEXT_REFERENCES: dict[str, frozenset[str]] = {
     "records": frozenset({"context.validation_records"}),
@@ -79,6 +113,27 @@ ALLOWED_CONTEXT_REFERENCES: dict[str, frozenset[str]] = {
     "provenance": frozenset({"context.provenance"}),
     "validated_at": frozenset({"context.validated_at"}),
     "upstream_result_id": frozenset({"context.early_feature_result_id"}),
+    "route_role": frozenset(
+        {
+            "context.rul_point_route_role",
+            "context.rul_coverage_route_role",
+            "context.soh_route_role",
+        }
+    ),
+    "operation": frozenset(
+        {
+            "context.conformal_calibrate_operation",
+            "context.conformal_issue_operation",
+        }
+    ),
+    "task": frozenset({"context.rul_task", "context.soh_task"}),
+    "alpha": frozenset({"context.conformal_alpha"}),
+    "calibration_sample_result_ids": frozenset(
+        {
+            "context.rul_calibration_sample_result_ids",
+            "context.soh_calibration_sample_result_ids",
+        }
+    ),
     "lifetime_result_id": frozenset({"context.prediction_result_id"}),
     "operation_policy_version": frozenset({"context.operation_policy_version"}),
     "equivalent_cycles_per_day": frozenset({"context.equivalent_cycles_per_day"}),
@@ -94,7 +149,12 @@ ALLOWED_CONTEXT_REFERENCES: dict[str, frozenset[str]] = {
 }
 EXPECTED_RESULT_SOURCE_TOOLS: dict[str, frozenset[StandardToolName]] = {
     "upstream_result_id": frozenset({StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES}),
-    "prediction_result_id": frozenset({StandardToolName.PREDICT_CYCLE_LIFE}),
+    "prediction_result_id": frozenset(
+        {
+            StandardToolName.PREDICT_CYCLE_LIFE,
+            StandardToolName.PREDICT_SOH_TRAJECTORY,
+        }
+    ),
     "lifetime_result_id": frozenset({StandardToolName.PREDICT_CYCLE_LIFE}),
     "calibration_result_id": frozenset(
         {StandardToolName.CALIBRATE_PREDICTION_INTERVAL}
@@ -103,6 +163,14 @@ EXPECTED_RESULT_SOURCE_TOOLS: dict[str, frozenset[StandardToolName]] = {
         {StandardToolName.CALIBRATE_PREDICTION_INTERVAL}
     ),
     "quality_result_id": frozenset({StandardToolName.VALIDATE_BATTERY_DATA}),
+    "rul_result_id": frozenset({StandardToolName.PREDICT_CYCLE_LIFE}),
+    "soh_result_id": frozenset({StandardToolName.PREDICT_SOH_TRAJECTORY}),
+    "rul_conformal_result_id": frozenset(
+        {StandardToolName.CALIBRATE_PREDICTION_INTERVAL}
+    ),
+    "soh_conformal_result_id": frozenset(
+        {StandardToolName.CALIBRATE_PREDICTION_INTERVAL}
+    ),
 }
 STEP_RESULT_REFERENCE = re.compile(r"^step\.(?P<step_id>[A-Za-z0-9_-]+)\.result_id$")
 DATASET_REFERENCE = re.compile(r"^intent\.dataset_ids\[(?P<index>[0-9]+)\]$")
@@ -412,6 +480,18 @@ class SupervisorPlanner:
     def _fixed_steps(
         available_tools: frozenset[StandardToolName],
     ) -> tuple[AgentPlanStep, ...]:
+        project_tools = {
+            StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+            StandardToolName.PREDICT_CYCLE_LIFE,
+            StandardToolName.PREDICT_SOH_TRAJECTORY,
+            StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+            StandardToolName.GENERATE_AUDITED_REPORT,
+        }
+        if (
+            StandardToolName.VALIDATE_BATTERY_DATA not in available_tools
+            and project_tools <= available_tools
+        ):
+            return SupervisorPlanner._project_advanced_fixed_steps()
         templates = (
             (
                 "validate",
@@ -496,6 +576,127 @@ class SupervisorPlanner:
                 )
             )
         return tuple(steps)
+
+    @staticmethod
+    def _project_advanced_fixed_steps() -> tuple[AgentPlanStep, ...]:
+        templates = (
+            (
+                "advanced-input",
+                AgentRole.DATA_QUALITY,
+                StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+                {"record_batch_id": "intent.dataset_ids[0]"},
+                (),
+            ),
+            (
+                "rul-point",
+                AgentRole.LIFETIME,
+                StandardToolName.PREDICT_CYCLE_LIFE,
+                {
+                    "upstream_result_id": "step.advanced-input.result_id",
+                    "route_role": "context.rul_point_route_role",
+                },
+                ("advanced-input",),
+            ),
+            (
+                "rul-coverage",
+                AgentRole.LIFETIME,
+                StandardToolName.PREDICT_CYCLE_LIFE,
+                {
+                    "upstream_result_id": "step.advanced-input.result_id",
+                    "route_role": "context.rul_coverage_route_role",
+                },
+                ("advanced-input",),
+            ),
+            (
+                "soh",
+                AgentRole.LIFETIME,
+                StandardToolName.PREDICT_SOH_TRAJECTORY,
+                {
+                    "upstream_result_id": "step.advanced-input.result_id",
+                    "route_role": "context.soh_route_role",
+                },
+                ("advanced-input",),
+            ),
+            (
+                "rul-calibration",
+                AgentRole.LIFETIME,
+                StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+                {
+                    "operation": "context.conformal_calibrate_operation",
+                    "task": "context.rul_task",
+                    "route_role": "context.rul_coverage_route_role",
+                    "alpha": "context.conformal_alpha",
+                    "calibration_sample_result_ids": (
+                        "context.rul_calibration_sample_result_ids"
+                    ),
+                },
+                (),
+            ),
+            (
+                "rul-interval",
+                AgentRole.LIFETIME,
+                StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+                {
+                    "operation": "context.conformal_issue_operation",
+                    "task": "context.rul_task",
+                    "route_role": "context.rul_coverage_route_role",
+                    "prediction_result_id": "step.rul-coverage.result_id",
+                    "calibration_result_id": "step.rul-calibration.result_id",
+                },
+                ("rul-coverage", "rul-calibration"),
+            ),
+            (
+                "soh-calibration",
+                AgentRole.LIFETIME,
+                StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+                {
+                    "operation": "context.conformal_calibrate_operation",
+                    "task": "context.soh_task",
+                    "route_role": "context.soh_route_role",
+                    "alpha": "context.conformal_alpha",
+                    "calibration_sample_result_ids": (
+                        "context.soh_calibration_sample_result_ids"
+                    ),
+                },
+                (),
+            ),
+            (
+                "soh-band",
+                AgentRole.LIFETIME,
+                StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+                {
+                    "operation": "context.conformal_issue_operation",
+                    "task": "context.soh_task",
+                    "route_role": "context.soh_route_role",
+                    "prediction_result_id": "step.soh.result_id",
+                    "calibration_result_id": "step.soh-calibration.result_id",
+                },
+                ("soh", "soh-calibration"),
+            ),
+            (
+                "report",
+                AgentRole.SUPERVISOR,
+                StandardToolName.GENERATE_AUDITED_REPORT,
+                {
+                    "rul_result_id": "step.rul-point.result_id",
+                    "soh_result_id": "step.soh.result_id",
+                    "rul_conformal_result_id": "step.rul-interval.result_id",
+                    "soh_conformal_result_id": "step.soh-band.result_id",
+                },
+                ("rul-point", "soh", "rul-interval", "soh-band"),
+            ),
+        )
+        return tuple(
+            AgentPlanStep(
+                step_id=step_id,
+                role=role,
+                tool_name=tool_name.value,
+                depends_on=dependencies,
+                input_references=references,
+                failure_policy=AgentFailurePolicy.STOP,
+            )
+            for step_id, role, tool_name, references, dependencies in templates
+        )
 
     @staticmethod
     def _plan_instruction(

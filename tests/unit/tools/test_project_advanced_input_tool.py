@@ -29,7 +29,9 @@ from quanxin_life.tools.advanced_input import (
     ADVANCED_INPUT_EVIDENCE_TYPE,
     ADVANCED_INPUT_TRANSFORM_VERSION,
     PREPARE_ADVANCED_INPUT_TOOL_VERSION,
+    AdvancedInputEvidence,
     PrepareAdvancedInputToolInput,
+    decode_advanced_input_result,
     execute_prepare_advanced_input_tool,
     register_project_prepare_advanced_input_tool,
 )
@@ -326,7 +328,14 @@ def test_advanced_input_export_preserves_cold_api_import() -> None:
         [
             sys.executable,
             "-c",
-            "import quanxin_life.api.service; print('API_IMPORT_OK')",
+            (
+                "import sys; "
+                "import quanxin_life.api.service; "
+                "blocked = {'numpy', 'scipy', 'torch'}; "
+                "loaded = sorted(name for name in blocked if name in sys.modules); "
+                "assert not loaded, loaded; "
+                "print('API_IMPORT_OK')"
+            ),
         ],
         check=False,
         capture_output=True,
@@ -335,3 +344,47 @@ def test_advanced_input_export_preserves_cold_api_import() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "API_IMPORT_OK"
+
+
+def test_advanced_input_result_decodes_as_strict_reusable_evidence() -> None:
+    batch = _batch()
+    result = execute_prepare_advanced_input_tool(
+        PrepareAdvancedInputToolInput(record_batch_id=batch.record_batch_id),
+        context=_context(),
+        batch_resolver=_BatchResolver(batch),
+        clock=lambda: datetime(2026, 7, 26, 10, 0, tzinfo=UTC),
+    )
+
+    evidence = decode_advanced_input_result(result)
+
+    assert isinstance(evidence, AdvancedInputEvidence)
+    assert evidence.record_batch_id == batch.record_batch_id
+    assert evidence.dataset_id == "MATR"
+    assert evidence.cell_id == batch.metadata.cell_id
+    assert evidence.cutoff_cycle == 20
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement", "message"),
+    [
+        ("tool_version", "legacy-tool-v1", "tool_version"),
+        ("model_version", "legacy-transform-v1", "model_version"),
+        ("input_hash", "f" * 64, "input_hash"),
+    ],
+)
+def test_advanced_input_decoder_rejects_outer_contract_drift(
+    field_name: str,
+    replacement: str,
+    message: str,
+) -> None:
+    batch = _batch()
+    result = execute_prepare_advanced_input_tool(
+        PrepareAdvancedInputToolInput(record_batch_id=batch.record_batch_id),
+        context=_context(),
+        batch_resolver=_BatchResolver(batch),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        decode_advanced_input_result(
+            result.model_copy(update={field_name: replacement})
+        )

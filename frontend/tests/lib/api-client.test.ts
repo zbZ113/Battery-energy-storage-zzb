@@ -6,6 +6,8 @@ import {
   changePassword,
   createAgentRun,
   getAgentRunResult,
+  getProjectResult,
+  invokeProjectTool,
   logout,
   rejectAgentRun,
   resolveApiBaseUrl,
@@ -48,7 +50,7 @@ describe("apiRequest", () => {
   });
 
   it("sends password changes through the protected auth endpoint", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(
         JSON.stringify({
           user_id: "user-1",
@@ -58,7 +60,7 @@ describe("apiRequest", () => {
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
-    );
+    ));
     vi.stubGlobal("fetch", fetchMock);
 
     await changePassword("temporary password", "a much safer password");
@@ -99,6 +101,45 @@ describe("apiRequest", () => {
       "http://localhost:8000/v1/agent/runs/run%2F1/results/result%2F1",
       expect.objectContaining({ credentials: "include" }),
     );
+  });
+
+  it("loads and invokes ToolResults only through the project-scoped API", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(
+        JSON.stringify({
+          result_id: "result-1",
+          tool_name: "extract_early_cycle_features",
+          tool_version: "advanced-input-tool-v1",
+          input_hash: "a".repeat(64),
+          values: {},
+          uncertainty: null,
+          provenance: [],
+          warnings: [],
+          created_at: "2026-07-26T00:00:00Z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getProjectResult("project/1", "result/1");
+    await invokeProjectTool(
+      "project/1",
+      "extract_early_cycle_features",
+      { record_batch_id: "batch-1" },
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://localhost:8000/v1/projects/project%2F1/results/result%2F1",
+    );
+    expect(fetchMock.mock.calls[1]).toEqual([
+      "http://localhost:8000/v1/projects/project%2F1/tools/extract_early_cycle_features",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({ record_batch_id: "batch-1" }),
+      }),
+    ]);
   });
 
   it("creates an Agent run with an idempotency key and bounded intent", async () => {

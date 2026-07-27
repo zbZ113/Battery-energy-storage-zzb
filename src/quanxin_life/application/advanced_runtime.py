@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
-from typing import Protocol, TypeAlias
+from typing import Protocol, TypeAlias, cast, runtime_checkable
 
 import torch
 
@@ -22,6 +24,10 @@ from quanxin_life.application.deep_model_artifacts import (
     CurrentHybridFeatureConfig,
     DeepArtifactKind,
     DeepModelArtifactManifest,
+    LoadedCurrentHybrid,
+    LoadedCyclePatchBatLiNet,
+    LoadedCyclePatchDirect,
+    LoadedHybridPatchV2,
     load_current_hybrid_artifact,
     load_cyclepatch_batlinet_artifact,
     load_cyclepatch_direct_artifact,
@@ -36,6 +42,12 @@ from quanxin_life.application.model_route_activation import (
 )
 from quanxin_life.auth.contracts import AuthPrincipal
 from quanxin_life.core import AdvancedModelRouteRole, AdvancedModelTask
+from quanxin_life.features.early_cycle_sequence import (
+    EarlyCycleNormalizer,
+    EarlyCycleSequence,
+)
+from quanxin_life.models.cyclepatch import stack_early_cycle_sequences
+from quanxin_life.models.hybridpatch_v2 import HybridPatchV2Inputs
 
 
 class AdvancedRuntimeResolutionError(RuntimeError):
@@ -65,6 +77,155 @@ class ActiveModelRouteResolver(Protocol):
     ) -> VerifiedActiveModelRoute: ...
 
 
+@runtime_checkable
+class RULInferenceAdapter(Protocol):
+    """Typed label-free boundary for official MATR cycle-life inference."""
+
+    @property
+    def normalization_statistics_sha256(self) -> str: ...
+
+    def predict_cycle(self, raw_sequence: EarlyCycleSequence) -> float: ...
+
+
+@runtime_checkable
+class SOHInferenceAdapter(Protocol):
+    """Typed label-free boundary for finite-horizon SOH inference."""
+
+    @property
+    def normalization_statistics_sha256(self) -> str: ...
+
+    def predict_trajectory(
+        self,
+        raw_sequence: EarlyCycleSequence,
+        *,
+        initial_soh: float,
+    ) -> tuple[tuple[int, ...], tuple[float, ...]]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedRULInference:
+    artifact_kind: DeepArtifactKind
+    cutoff_cycle: int
+    _model: LoadedCyclePatchDirect | LoadedCyclePatchBatLiNet
+    _normalizer: EarlyCycleNormalizer
+
+    @property
+    def normalization_statistics_sha256(self) -> str:
+        return self._normalizer.statistics_sha256
+
+    def predict_cycle(self, raw_sequence: EarlyCycleSequence) -> float:
+        batch = stack_early_cycle_sequences(
+            (self._normalizer.transform(raw_sequence),)
+        )
+        with torch.inference_mode():
+            if isinstance(
+                self._model,
+                (LoadedCyclePatchDirect, LoadedCyclePatchBatLiNet),
+            ):
+                prediction = self._model.predict_raw(batch)
+            else:  # pragma: no cover - closed by construction
+                raise AdvancedRuntimeResolutionError(
+                    "RUL inference adapter contains an unsupported model"
+                )
+        if prediction.shape != (1,) or not prediction.is_floating_point():
+            raise AdvancedRuntimeResolutionError(
+                "RUL runtime returned an invalid scalar output"
+            )
+        value = float(prediction.detach().cpu().item())
+        if not math.isfinite(value) or value <= self.cutoff_cycle:
+            raise AdvancedRuntimeResolutionError(
+                "RUL runtime returned an invalid official cycle-life value"
+            )
+        return value
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedSOHInference:
+    artifact_kind: DeepArtifactKind
+    cutoff_cycle: int
+    prediction_cycles: tuple[int, ...]
+    _model: LoadedHybridPatchV2 | LoadedCurrentHybrid
+    _normalizer: EarlyCycleNormalizer
+
+    def __post_init__(self) -> None:
+        _validate_prediction_cycles(
+            self.prediction_cycles,
+            cutoff_cycle=self.cutoff_cycle,
+        )
+
+    @property
+    def normalization_statistics_sha256(self) -> str:
+        return self._normalizer.statistics_sha256
+
+    def predict_trajectory(
+        self,
+        raw_sequence: EarlyCycleSequence,
+        *,
+        initial_soh: float,
+    ) -> tuple[tuple[int, ...], tuple[float, ...]]:
+        if (
+            not isinstance(initial_soh, (int, float))
+            or isinstance(initial_soh, bool)
+            or not math.isfinite(float(initial_soh))
+            or not 0.0 < float(initial_soh) <= 1.5
+        ):
+            raise ValueError("initial_soh must be finite and in (0, 1.5]")
+        batch = stack_early_cycle_sequences(
+            (self._normalizer.transform(raw_sequence),)
+        )
+        initial = torch.tensor(
+            (float(initial_soh),),
+            dtype=batch.values.dtype,
+            device=batch.values.device,
+        )
+        cycle_axis = torch.tensor(
+            self.prediction_cycles,
+            dtype=torch.int64,
+            device=batch.values.device,
+        )
+        with torch.inference_mode():
+            if isinstance(self._model, LoadedHybridPatchV2):
+                output = self._model(
+                    HybridPatchV2Inputs(
+                        early_batch=batch,
+                        initial_soh=initial,
+                        prediction_cycles=cycle_axis,
+                    )
+                )
+                prediction = output.predicted_soh
+            elif isinstance(self._model, LoadedCurrentHybrid):
+                prediction = self._model(batch, initial)
+            else:  # pragma: no cover - closed by construction
+                raise AdvancedRuntimeResolutionError(
+                    "SOH inference adapter contains an unsupported model"
+                )
+        expected_shape = (1, len(self.prediction_cycles))
+        if (
+            prediction.shape != expected_shape
+            or not prediction.is_floating_point()
+            or not bool(torch.isfinite(prediction).all().item())
+        ):
+            raise AdvancedRuntimeResolutionError(
+                "SOH runtime returned an invalid trajectory output"
+            )
+        values = tuple(
+            float(value)
+            for value in prediction.detach().cpu().squeeze(0).tolist()
+        )
+        if any(value < 0.0 or value > 1.5 for value in values):
+            raise AdvancedRuntimeResolutionError(
+                "SOH runtime returned values outside the approved range"
+            )
+        if any(
+            current > previous
+            for previous, current in pairwise(values)
+        ):
+            raise AdvancedRuntimeResolutionError(
+                "SOH runtime returned a non-monotonic trajectory"
+            )
+        return self.prediction_cycles, values
+
+
 @dataclass(frozen=True, slots=True)
 class VerifiedAdvancedRuntimeArtifact:
     """One loaded model whose managed bytes were freshly verified."""
@@ -74,6 +235,12 @@ class VerifiedAdvancedRuntimeArtifact:
     model_version: str
     artifact_kind: DeepArtifactKind
     output_target: AdvancedOutputTarget
+    dataset_id: str
+    data_version: str
+    feature_version: str
+    split_version: str
+    normalization_sha256: str
+    inference: RULInferenceAdapter | SOHInferenceAdapter
     model: torch.nn.Module
 
 
@@ -173,12 +340,22 @@ class ManagedAdvancedRuntimeProvider:
             model.requires_grad_(False)
             self._models[cache_key] = model
         isolated_model = _isolated_inference_model(model)
+        inference = _build_inference_adapter(
+            isolated_model,
+            deployment=deployment,
+        )
         return VerifiedAdvancedRuntimeArtifact(
             artifact_id=manifest.artifact_id,
             artifact_manifest_sha256=manifest.manifest_sha256,
             model_version=route.artifact.model_version,
             artifact_kind=manifest.artifact_kind,
             output_target=inference_context.output_target,
+            dataset_id=deployment.dataset_id,
+            data_version=deployment.data_version,
+            feature_version=deployment.feature_version,
+            split_version=deployment.split_version,
+            normalization_sha256=deployment.normalization_sha256,
+            inference=inference,
             model=isolated_model,
         )
 
@@ -267,13 +444,19 @@ class VerifiedRULRuntime:
     cutoff_cycle: int
     role: AdvancedModelRouteRole
     output_target: AdvancedOutputTarget
+    artifact_kind: DeepArtifactKind
+    dataset_id: str
+    data_version: str
+    feature_version: str
+    split_version: str
+    normalization_sha256: str
     artifact_id: str
     artifact_manifest_sha256: str
     model_version: str
     decision_event_id: str
     ledger_sequence_number: int
     ledger_head_sha256: str
-    model: torch.nn.Module
+    inference: RULInferenceAdapter
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,13 +466,19 @@ class VerifiedSOHRuntime:
     cutoff_cycle: int
     role: AdvancedModelRouteRole
     output_target: AdvancedOutputTarget
+    artifact_kind: DeepArtifactKind
+    dataset_id: str
+    data_version: str
+    feature_version: str
+    split_version: str
+    normalization_sha256: str
     artifact_id: str
     artifact_manifest_sha256: str
     model_version: str
     decision_event_id: str
     ledger_sequence_number: int
     ledger_head_sha256: str
-    model: torch.nn.Module
+    inference: SOHInferenceAdapter
 
 
 VerifiedAdvancedRuntime: TypeAlias = VerifiedRULRuntime | VerifiedSOHRuntime
@@ -354,12 +543,24 @@ class ActiveAdvancedRuntimeResolver:
             )
         self._context_service.revalidate(verified_context)
         if normalized_task is AdvancedModelTask.RUL:
+            rul_inference = cast(
+                RULInferenceAdapter,
+                second_artifact.inference,
+            )
             return VerifiedRULRuntime(
                 project_id=verified_context.project_id,
                 task=normalized_task,
                 cutoff_cycle=cutoff_cycle,
                 role=normalized_role,
                 output_target=second_artifact.output_target,
+                artifact_kind=second_artifact.artifact_kind,
+                dataset_id=second_artifact.dataset_id,
+                data_version=second_artifact.data_version,
+                feature_version=second_artifact.feature_version,
+                split_version=second_artifact.split_version,
+                normalization_sha256=(
+                    second_artifact.normalization_sha256
+                ),
                 artifact_id=second_artifact.artifact_id,
                 artifact_manifest_sha256=(
                     second_artifact.artifact_manifest_sha256
@@ -368,21 +569,28 @@ class ActiveAdvancedRuntimeResolver:
                 decision_event_id=second_route.decision_event_id,
                 ledger_sequence_number=second_route.ledger_sequence_number,
                 ledger_head_sha256=second_route.ledger_head_sha256,
-                model=second_artifact.model,
+                inference=rul_inference,
             )
+        soh_inference = cast(SOHInferenceAdapter, second_artifact.inference)
         return VerifiedSOHRuntime(
             project_id=verified_context.project_id,
             task=normalized_task,
             cutoff_cycle=cutoff_cycle,
             role=normalized_role,
             output_target=second_artifact.output_target,
+            artifact_kind=second_artifact.artifact_kind,
+            dataset_id=second_artifact.dataset_id,
+            data_version=second_artifact.data_version,
+            feature_version=second_artifact.feature_version,
+            split_version=second_artifact.split_version,
+            normalization_sha256=second_artifact.normalization_sha256,
             artifact_id=second_artifact.artifact_id,
             artifact_manifest_sha256=second_artifact.artifact_manifest_sha256,
             model_version=second_artifact.model_version,
             decision_event_id=second_route.decision_event_id,
             ledger_sequence_number=second_route.ledger_sequence_number,
             ledger_head_sha256=second_route.ledger_head_sha256,
-            model=second_artifact.model,
+            inference=soh_inference,
         )
 
     def revalidate(
@@ -611,11 +819,108 @@ def _isolated_inference_model(template: torch.nn.Module) -> torch.nn.Module:
     return model
 
 
+def _build_inference_adapter(
+    model: torch.nn.Module,
+    *,
+    deployment: AdvancedDeploymentArtifact,
+) -> RULInferenceAdapter | SOHInferenceAdapter:
+    if isinstance(model, LoadedCyclePatchDirect):
+        if (
+            deployment.artifact_kind is not DeepArtifactKind.CYCLEPATCH_DIRECT
+            or model.normalizer is None
+        ):
+            raise AdvancedRuntimeResolutionError(
+                "CyclePatch Direct runtime context is incomplete"
+            )
+        return _VerifiedRULInference(
+            artifact_kind=deployment.artifact_kind,
+            cutoff_cycle=deployment.cutoff_cycle,
+            _model=model,
+            _normalizer=model.normalizer,
+        )
+    if isinstance(model, LoadedCyclePatchBatLiNet):
+        if (
+            deployment.artifact_kind
+            is not DeepArtifactKind.CYCLEPATCH_BATLINET
+            or model.normalizer is None
+            or model.reference_batch is None
+        ):
+            raise AdvancedRuntimeResolutionError(
+                "CyclePatch-BatLiNet runtime context is incomplete"
+            )
+        return _VerifiedRULInference(
+            artifact_kind=deployment.artifact_kind,
+            cutoff_cycle=deployment.cutoff_cycle,
+            _model=model,
+            _normalizer=model.normalizer,
+        )
+    if isinstance(model, LoadedHybridPatchV2):
+        if (
+            deployment.artifact_kind is not DeepArtifactKind.HYBRIDPATCH_V2
+            or model.normalizer is None
+        ):
+            raise AdvancedRuntimeResolutionError(
+                "HybridPatch-v2 runtime context is incomplete"
+            )
+        return _VerifiedSOHInference(
+            artifact_kind=deployment.artifact_kind,
+            cutoff_cycle=deployment.cutoff_cycle,
+            prediction_cycles=tuple(
+                range(deployment.cutoff_cycle + 1, 501)
+            ),
+            _model=model,
+            _normalizer=model.normalizer,
+        )
+    if isinstance(model, LoadedCurrentHybrid):
+        if (
+            deployment.artifact_kind is not DeepArtifactKind.CURRENT_HYBRID
+            or model.normalizer is None
+        ):
+            raise AdvancedRuntimeResolutionError(
+                "Current Hybrid runtime context is incomplete"
+            )
+        return _VerifiedSOHInference(
+            artifact_kind=deployment.artifact_kind,
+            cutoff_cycle=deployment.cutoff_cycle,
+            prediction_cycles=model.feature.prediction_cycles,
+            _model=model,
+            _normalizer=model.normalizer,
+        )
+    raise AdvancedRuntimeResolutionError(
+        "Advanced runtime loader returned an unsupported model wrapper"
+    )
+
+
+def _validate_prediction_cycles(
+    prediction_cycles: tuple[int, ...],
+    *,
+    cutoff_cycle: int,
+) -> None:
+    if (
+        not prediction_cycles
+        or prediction_cycles[0] <= cutoff_cycle
+        or prediction_cycles[-1] != 500
+        or any(cycle > 500 for cycle in prediction_cycles)
+        or any(
+            current <= previous
+            for previous, current in pairwise(prediction_cycles)
+        )
+    ):
+        raise AdvancedRuntimeResolutionError(
+            "SOH runtime has an invalid finite prediction axis"
+        )
+
+
 def _validate_artifact(
     route: VerifiedActiveModelRoute,
     artifact: VerifiedAdvancedRuntimeArtifact,
 ) -> None:
     family = route.route_provenance.family
+    provenance = route.artifact.metadata.advanced_provenance
+    if provenance is None:
+        raise AdvancedRuntimeStateError(
+            "active route does not contain Advanced artifact provenance"
+        )
     expected_kind = {
         "cyclepatch_direct": DeepArtifactKind.CYCLEPATCH_DIRECT,
         "cyclepatch_batlinet": DeepArtifactKind.CYCLEPATCH_BATLINET,
@@ -638,6 +943,22 @@ def _validate_artifact(
         or artifact.model_version != route.artifact.model_version
         or artifact.artifact_kind is not expected_kind
         or artifact.output_target is not expected_target
+        or artifact.dataset_id != route.artifact.metadata.dataset_id
+        or artifact.data_version != route.artifact.metadata.data_version
+        or artifact.feature_version != route.artifact.metadata.feature_version
+        or artifact.split_version != route.artifact.metadata.split_version
+        or artifact.normalization_sha256
+        != provenance.normalization_sha256
+        or (
+            route.task is AdvancedModelTask.RUL
+            and not isinstance(artifact.inference, RULInferenceAdapter)
+        )
+        or (
+            route.task is AdvancedModelTask.SOH
+            and not isinstance(artifact.inference, SOHInferenceAdapter)
+        )
+        or artifact.inference.normalization_statistics_sha256
+        != artifact.normalization_sha256
     ):
         raise AdvancedRuntimeStateError(
             "loaded Advanced artifact does not match the active route"
@@ -671,6 +992,11 @@ def _artifact_identity(
         artifact.model_version,
         artifact.artifact_kind,
         artifact.output_target,
+        artifact.dataset_id,
+        artifact.data_version,
+        artifact.feature_version,
+        artifact.split_version,
+        artifact.normalization_sha256,
     )
 
 
@@ -681,6 +1007,12 @@ def _runtime_identity(runtime: VerifiedAdvancedRuntime) -> tuple[object, ...]:
         runtime.cutoff_cycle,
         runtime.role,
         runtime.output_target,
+        runtime.artifact_kind,
+        runtime.dataset_id,
+        runtime.data_version,
+        runtime.feature_version,
+        runtime.split_version,
+        runtime.normalization_sha256,
         runtime.artifact_id,
         runtime.artifact_manifest_sha256,
         runtime.model_version,
@@ -695,6 +1027,8 @@ __all__ = [
     "AdvancedRuntimeResolutionError",
     "AdvancedRuntimeStateError",
     "ManagedAdvancedRuntimeProvider",
+    "RULInferenceAdapter",
+    "SOHInferenceAdapter",
     "VerifiedAdvancedRuntime",
     "VerifiedAdvancedRuntimeArtifact",
     "VerifiedRULRuntime",

@@ -311,7 +311,51 @@ def create_fastapi_app(
     if project_invocation_context_service is not None:
         assert auth_adapter is not None
         assert operator_principal_dependency is not None
+        assert service.project_audit_ledger is not None
         project_operator_principal = operator_principal_dependency
+        project_ready_principal = fastapi_module.Depends(
+            auth_adapter.require_ready_user
+        )
+        project_audit_ledger = service.project_audit_ledger
+
+        @app.get(  # type: ignore[untyped-decorator]
+            "/v1/projects/{project_id}/results/{result_id}",
+        )
+        async def get_project_result(
+            project_id: str,
+            result_id: str,
+            principal: AuthPrincipal = project_ready_principal,
+        ) -> dict[str, Any]:
+            try:
+                context = project_invocation_context_service.resolve_http(
+                    principal,
+                    project_id,
+                )
+                result = project_audit_ledger.resolve_registered_result(
+                    context,
+                    result_id,
+                )
+            except ProjectInvocationAccessError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=403,
+                    detail="project_result_access_denied",
+                ) from exc
+            except ProjectInvocationNotFoundError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=404,
+                    detail="project_scope_not_found",
+                ) from exc
+            except AuditLedgerError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=503,
+                    detail="project_result_storage_unavailable",
+                ) from exc
+            except ValueError as exc:
+                raise fastapi_module.HTTPException(
+                    status_code=404,
+                    detail="project_result_not_found",
+                ) from exc
+            return result.model_dump(mode="json")
 
         @app.post(  # type: ignore[untyped-decorator]
             "/v1/projects/{project_id}/tools/{tool_name}",

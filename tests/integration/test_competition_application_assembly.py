@@ -17,6 +17,18 @@ from quanxin_life.tools import (
     ToolRegistry,
     create_available_tool_registry,
 )
+from quanxin_life.tools.advanced_conformal import (
+    ADVANCED_SPLIT_CONFORMAL_TOOL_VERSION,
+)
+from quanxin_life.tools.advanced_cycle_life_prediction import (
+    ADVANCED_RUL_PREDICTION_TOOL_VERSION,
+)
+from quanxin_life.tools.advanced_project_report import (
+    ADVANCED_CELL_REPORT_TOOL_VERSION,
+)
+from quanxin_life.tools.advanced_soh_prediction import (
+    ADVANCED_SOH_PREDICTION_TOOL_VERSION,
+)
 
 
 def _stub_dependencies() -> CompetitionToolDependencies:
@@ -89,26 +101,40 @@ def test_project_prediction_assembly_exposes_only_project_scoped_numeric_tools()
         project_context_validator=stub,
         agent_run_invocation_resolver=stub,
         advanced_input_batch_resolver=stub,
-        cycle_life_predictor=stub,
-        hybrid_degradation_predictor=stub,
-        normalized_calibration_cohort_resolver=stub,
-        prediction_difficulty_scale_resolver=None,
+        advanced_rul_inference_service=stub,
+        advanced_soh_inference_service=stub,
     )
 
     service = module.create_project_prediction_tool_invocation_service(dependencies)
 
     assert service.registry.list_schemas() == ()
-    assert {
-        item.tool_name
-        for item in service.registry.list_schemas(
-            execution_scope=ToolExecutionScope.PROJECT
-        )
-    } == {
+    project_schemas = service.registry.list_schemas(
+        execution_scope=ToolExecutionScope.PROJECT
+    )
+    assert {item.tool_name for item in project_schemas} == {
         StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
         StandardToolName.PREDICT_CYCLE_LIFE,
         StandardToolName.PREDICT_SOH_TRAJECTORY,
         StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+        StandardToolName.GENERATE_AUDITED_REPORT,
     }
+    schema_by_name = {item.tool_name: item for item in project_schemas}
+    assert (
+        schema_by_name[StandardToolName.PREDICT_CYCLE_LIFE].tool_version
+        == ADVANCED_RUL_PREDICTION_TOOL_VERSION
+    )
+    assert (
+        schema_by_name[StandardToolName.PREDICT_SOH_TRAJECTORY].tool_version
+        == ADVANCED_SOH_PREDICTION_TOOL_VERSION
+    )
+    assert (
+        schema_by_name[StandardToolName.CALIBRATE_PREDICTION_INTERVAL].tool_version
+        == ADVANCED_SPLIT_CONFORMAL_TOOL_VERSION
+    )
+    assert (
+        schema_by_name[StandardToolName.GENERATE_AUDITED_REPORT].tool_version
+        == ADVANCED_CELL_REPORT_TOOL_VERSION
+    )
     assert service.project_audit_ledger is dependencies.project_audit_ledger
     assert (
         service.agent_run_invocation_validator

@@ -357,6 +357,52 @@ def test_fixed_fallback_stops_before_a_missing_prerequisite() -> None:
     assert tuple(step.tool_name for step in result.plan.steps) == ("validate_battery_data",)
 
 
+def test_fixed_fallback_builds_the_project_advanced_single_cell_chain() -> None:
+    available = frozenset(
+        {
+            StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+            StandardToolName.PREDICT_CYCLE_LIFE,
+            StandardToolName.PREDICT_SOH_TRAJECTORY,
+            StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+            StandardToolName.GENERATE_AUDITED_REPORT,
+        }
+    )
+
+    result = SupervisorPlanner(gateway=None, clock=lambda: NOW).plan(
+        _planning_request(),
+        available_tools=available,
+    )
+
+    assert tuple(step.step_id for step in result.plan.steps) == (
+        "advanced-input",
+        "rul-point",
+        "rul-coverage",
+        "soh",
+        "rul-calibration",
+        "rul-interval",
+        "soh-calibration",
+        "soh-band",
+        "report",
+    )
+    assert result.plan.steps[1].input_references == {
+        "upstream_result_id": "step.advanced-input.result_id",
+        "route_role": "context.rul_point_route_role",
+    }
+    assert result.plan.steps[4].input_references == {
+        "operation": "context.conformal_calibrate_operation",
+        "task": "context.rul_task",
+        "route_role": "context.rul_coverage_route_role",
+        "alpha": "context.conformal_alpha",
+        "calibration_sample_result_ids": "context.rul_calibration_sample_result_ids",
+    }
+    assert result.plan.steps[-1].input_references == {
+        "rul_result_id": "step.rul-point.result_id",
+        "soh_result_id": "step.soh.result_id",
+        "rul_conformal_result_id": "step.rul-interval.result_id",
+        "soh_conformal_result_id": "step.soh-band.result_id",
+    }
+
+
 def test_fixed_fallback_rejects_a_missing_dataset_instead_of_dangling() -> None:
     request = SupervisorPlanningRequest(
         project_id="quanxin-demo",

@@ -160,6 +160,29 @@ export function getAgentRunResult(runId: string, resultId: string): Promise<Tool
   );
 }
 
+export function getProjectResult(
+  projectId: string,
+  resultId: string,
+): Promise<ToolResult> {
+  return apiRequest<ToolResult>(
+    `/v1/projects/${encodeURIComponent(projectId)}/results/${encodeURIComponent(resultId)}`,
+  );
+}
+
+export function invokeProjectTool(
+  projectId: string,
+  toolName: string,
+  payload: Record<string, unknown>,
+): Promise<ToolResult> {
+  return apiRequest<ToolResult>(
+    `/v1/projects/${encodeURIComponent(projectId)}/tools/${encodeURIComponent(toolName)}`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export function agentEventsUrl(runId: string): string {
   return `${apiBaseUrl()}/v1/agent/runs/${encodeURIComponent(runId)}/events`;
 }

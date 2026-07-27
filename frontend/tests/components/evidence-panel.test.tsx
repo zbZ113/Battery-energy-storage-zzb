@@ -18,6 +18,7 @@ describe("EvidencePanel", () => {
           tool_version: "1.0.0",
           input_hash: "sha256:abc",
           values: { status: "RECHECK" },
+          uncertainty: null,
           provenance: [
             {
               source_id: "dataset:hust-reviewed",
@@ -29,6 +30,7 @@ describe("EvidencePanel", () => {
             },
           ],
           warnings: ["目标域仍需复检"],
+          created_at: "2026-07-16T10:00:00Z",
         }}
       />,
     );

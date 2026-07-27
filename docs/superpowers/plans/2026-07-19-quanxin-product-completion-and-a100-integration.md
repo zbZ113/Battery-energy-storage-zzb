@@ -594,7 +594,7 @@ Task 2 不新增公共 `ModelPromotionDecision`。聚合统计推荐与具体可
 
 ### Task 3：正式套件注册与 ToolResult
 
-状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本、active-route resolver、可信 project-scoped invocation context、record batch binding、持久 project ToolResult binding 与持久 AgentRun per-step grant；2026-07-26 完成 `0013` exact-step binding、服务端冻结 canonical input/依赖/审批证据、PROJECT Worker 原子提交与 fenced-claim 恢复，并建立 RUL/SOH/Conformal PROJECT 装配骨架）**。
+状态：**实施中（2026-07-25 完成部署制品、managed candidate registry、人工激活/回退账本、active-route resolver、可信 project-scoped invocation context、record batch binding、持久 project ToolResult binding 与持久 AgentRun per-step grant；2026-07-26 完成 `0013` exact-step binding、服务端冻结 canonical input/依赖/审批证据、PROJECT Worker 原子提交与 fenced-claim 恢复，并完成 target-aware RUL、finite-horizon SOH、route-specific Split Conformal、项目 API、Agent、报告和单电芯 UI 代码链）**。
 
 已生成：
 
@@ -669,11 +669,14 @@ server-results/advanced-final-20260723T015211Z/analysis/advanced-final-registry/
 - dependency evidence 只接受 ordinal 更早且已完成的显式依赖，每个依赖必须存在唯一持久 ToolResult，并绑定 result、provenance 与可用 project binding 摘要；审批请求必须绑定 exact `agent_step_id + execution_snapshot_sha256 + plan_hash` 和唯一、未过期的 APPROVED action；
 - fenced-claim 恢复协议已覆盖 active lease 拒绝抢占、expired lease 重新 claim、旧 claim 禁止提交或清除新 claim、原子写入失败回滚、Worker 重启续跑和重复队列投递不重跑；原始 claim token 不进入 binding 或事件；
 - Worker 已按 `GLOBAL / PROJECT` execution scope 分流；PROJECT step 只接受由当前持久 claim 派生的 per-step grant，并通过 `invoke_for_project_agent` 在执行前后复验；普通 project service 以及内存/SQL ledger 的 legacy `register_result` 均拒绝 AGENT context，不能绕过 exact-step commit；
-- 已新增 RUL、SOH、Conformal 的显式 PROJECT wrapper 与 assembly 骨架，但当前数值依赖仍是 legacy/in-memory predictor 和 normalized EOL80 Conformal；active-route-aware runtime resolver 已连接 managed Advanced deep artifacts，PROJECT Advanced raw-input attestation ToolResult 也已接入 assembly，但 target-aware RUL/SOH 与正式 Split Conformal 数值链仍未贯通；
+- RUL、SOH、Conformal 的显式 PROJECT wrapper 已从 assembly 骨架贯通到正式 Advanced 数值链：全部重新解析同项目 Advanced raw-input attestation、复验 active-route-aware managed v2 runtime，RUL 固定使用 MATR official cycle life，SOH 固定为 cycle 500 内 finite horizon，Split Conformal 按 route 独立校准和签发；legacy normalized EOL80 链不再承担本纵向切片的业务数值；
 - Advanced Deep artifact 已升级为 v2 自包含推理制品：四类 Advanced 模型均绑定完整 train-only normalizer statistics 与显式 output target；BatLiNet 额外绑定 safetensors reference batch、reference library 和逐文件 SHA-256；加载时重新核对 feature/inference context、normalizer、reference metadata 与制品字节，legacy v1 仍可解析但不能冒充自包含 v2 runtime；
 - Advanced deployment bundle/index 已支持 v2，并将 output target 精确传播到 route、artifact 与 Catalog schema；真实 rebuild 固定生成 v2，BatLiNet round-trip 使用包内 reference batch；既有 v1 bundle、registry 与 Catalog 测试夹具保持可解析兼容；
 - 新增 active-route-aware Advanced runtime resolver：每次调用重新验证 project context、精确 active route、managed bundle、deployment route、Catalog provenance 和 v2 artifact 全部字节；模型准备前后双重解析并在推理后支持复验，route/artifact 中途切换、v1 bundle、文件篡改或 provenance 漂移均 fail closed；四类真实 v2 safetensors loader 均已覆盖，缓存只保留私有冻结模板，每次返回隔离的无梯度推理实例，runtime 契约不暴露文件系统路径；
 - PROJECT registry 已新增 Advanced raw-input attestation：复用 `extract_early_cycle_features` 标准工具名但采用独立 `advanced-input-tool-v1` 契约，只接受同项目服务端 `record_batch_id`；现场复验 FROZEN dataset/canonical records 后构建 label-free multichannel sequence，ToolResult 只记录 source、transform config 与 raw sequence SHA-256、固定轴和版本，不包含标签、RUL、SOH、区间、模型预测张量或 active route；后续数值工具必须重新解析 batch、核对 raw sequence hash，再用现场 active runtime 的 train-only normalizer materialize；
+- PROJECT registry 已接入 Advanced MATR 官方 cycle life 与 finite-horizon SOH 工具：RUL 目标固定为 `matr_official_cycle_life`，SOH 只输出 cutoff 后且不超过 cycle 500 的单调有限轨迹，不从 SOH 推导 RUL；
+- Split Conformal 已按冻结路由接入：cutoff 20 使用 `DEFAULT`，cutoff 50/100/150 的区间只使用 `COVERAGE`；点精度结果与 coverage 区间中心分开保存和展示；无法由 calibration cell 数量支持的目标覆盖率会失败关闭，不再截断秩后虚标覆盖保证；
+- 新增项目安全结果读取 API、固定 Agent 单电芯链、四 ToolResult 审计报告与 Next.js 单电芯页面；报告和 UI 只显示持久 ToolResult 数值，并展示 route、模型、数据、feature、split、制品 SHA-256、SOH simultaneous finite band 与服务端警告；
 - 实际产品数据库写入需在明确的数据库环境、ACTIVE 项目和已完成初始化的 ADMIN 身份下运行，当前仓库未伪造项目或管理员记录，也未修改任何真实产品数据库。
 
 可复现源码入口：
@@ -686,6 +689,12 @@ scripts/register_advanced_candidates_to_catalog.py
 src/quanxin_life/application/model_route_activation.py
 src/quanxin_life/application/advanced_runtime.py
 src/quanxin_life/tools/advanced_input.py
+src/quanxin_life/application/advanced_prediction.py
+src/quanxin_life/application/advanced_split_conformal.py
+src/quanxin_life/tools/advanced_cycle_life_prediction.py
+src/quanxin_life/tools/advanced_soh_prediction.py
+src/quanxin_life/tools/advanced_conformal.py
+src/quanxin_life/tools/advanced_project_report.py
 src/quanxin_life/application/invocation_context.py
 src/quanxin_life/application/agent_run_execution.py
 src/quanxin_life/application/agent_run_invocation.py
@@ -706,9 +715,13 @@ migrations/versions/0010_model_route_stream_heads.py
 migrations/versions/0011_record_batch_bindings.py
 migrations/versions/0012_project_tool_result_bindings.py
 migrations/versions/0013_exact_agent_step_bindings.py
+frontend/app/projects/[projectId]/cells/[recordBatchId]/page.tsx
+frontend/components/single-cell-analysis-contract.ts
+frontend/components/single-cell-analysis.tsx
+frontend/components/soh-trajectory-chart.tsx
 ```
 
-Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注册与 `0009`–`0013` migrations → target-aware RUL/SOH/Split Conformal 正式工具 → API、Agent、报告和 UI 接入。
+Task 3 后续顺序：实现可信 calibration-sample producer/importer → 在明确的目标产品数据库执行 `0009`–`0013` migrations 与 15 候选批注册 → 由已初始化 ADMIN 人工激活 route → 导入冻结 calibration ToolResult → 使用真实 result IDs 完成 API / Agent / 报告 / UI 浏览器端到端验收。
 
 - [x] A100 Final importer、deployment bundle、managed candidate registry 与 activation ledger 源码和离线制品；
 - [ ] 在目标产品数据库执行 `0009`–`0013` migrations、15 候选批注册和人工 route activation；该步骤需要明确数据库环境、ACTIVE project 与已初始化 ADMIN；
@@ -716,8 +729,10 @@ Task 3 后续顺序：在目标产品数据库执行已实现的 Catalog 批注�
 - [x] Advanced artifact v2 自包含 inference context、BatLiNet reference batch、显式 output target 与 deployment bundle/index v2；
 - [x] active-route-aware runtime resolver、managed v2 字节复验、四类正式 loader 与隔离推理实例；
 - [x] project Advanced raw-input ToolResult、同项目 record batch 复验、label-free sequence/config SHA-256 与 PROJECT assembly；
-- [ ] Advanced RUL/SOH/Split Conformal 真实数值链，包括正式 safetensors runtime 与 target-aware ToolResult；
-- [ ] 将真实模型结果接入 API、Agent、报告、UI 与 Next.js 单电芯纵向流程。
+- [x] Advanced RUL/SOH 真实数值链，包括正式 safetensors runtime、target-aware ToolResult 与 finite-horizon SOH；
+- [x] route-specific Split Conformal 校准/签发、项目 API、Agent、报告与 Next.js 单电芯纵向代码链；
+- [ ] 实现可信 calibration-sample producer/importer：必须由服务端冻结 calibration split、cell、观测标签、预测结果和来源哈希，不能由调用方自报；
+- [ ] 在真实产品环境执行 migrations、15 候选批注册、人工 route activation 和 calibration ToolResult 导入后，完成带真实 result IDs 的浏览器端到端验收。
 
 以上 Task 3 剩余子切片完成后，进入 Next.js 门户和真实数据上传链。
 

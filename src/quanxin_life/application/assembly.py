@@ -15,9 +15,23 @@ from quanxin_life.audit import AuditLedger, ProjectResultLedger
 from quanxin_life.audit.project_ledger import ProjectContextValidator
 from quanxin_life.models import HybridDegradationPredictor
 from quanxin_life.online import IndividualTrajectoryCalibrator
+from quanxin_life.tools.advanced_conformal import (
+    register_project_advanced_split_conformal_tool,
+)
+from quanxin_life.tools.advanced_cycle_life_prediction import (
+    AdvancedRULInferenceService,
+    register_project_predict_advanced_rul_tool,
+)
 from quanxin_life.tools.advanced_input import (
     ProjectEarlyCycleBatchResolver,
     register_project_prepare_advanced_input_tool,
+)
+from quanxin_life.tools.advanced_project_report import (
+    register_project_generate_advanced_cell_report_tool,
+)
+from quanxin_life.tools.advanced_soh_prediction import (
+    AdvancedSOHInferenceService,
+    register_project_predict_advanced_soh_tool,
 )
 from quanxin_life.tools.audited_report import register_generate_audited_report_tool
 from quanxin_life.tools.batch_decision import (
@@ -33,12 +47,10 @@ from quanxin_life.tools.conformal_calibration import (
     VerifiedNormalizedCalibrationCohortResolver,
     VerifiedPredictionDifficultyScaleResolver,
     register_calibrate_prediction_interval_tool,
-    register_project_calibrate_prediction_interval_tool,
 )
 from quanxin_life.tools.cycle_life_prediction import (
     CycleLifePredictor,
     register_predict_cycle_life_tool,
-    register_project_predict_cycle_life_tool,
 )
 from quanxin_life.tools.data_quality import register_validate_battery_data_tool
 from quanxin_life.tools.early_cycle_features import (
@@ -67,7 +79,6 @@ from quanxin_life.tools.target_domain_adaptation import (
 )
 from quanxin_life.tools.trajectory_prediction import (
     register_predict_soh_trajectory_tool,
-    register_project_predict_soh_trajectory_tool,
 )
 
 
@@ -120,13 +131,8 @@ class ProjectPredictionToolDependencies:
     project_context_validator: ProjectContextValidator
     agent_run_invocation_resolver: AgentRunInvocationValidator
     advanced_input_batch_resolver: ProjectEarlyCycleBatchResolver
-    cycle_life_predictor: CycleLifePredictor
-    hybrid_degradation_predictor: HybridDegradationPredictor
-    normalized_calibration_cohort_resolver: VerifiedNormalizedCalibrationCohortResolver
-    prediction_difficulty_scale_resolver: (
-        VerifiedPredictionDifficultyScaleResolver | None
-    )
-    model_artifact_registry: ModelArtifactRegistry | None = None
+    advanced_rul_inference_service: AdvancedRULInferenceService
+    advanced_soh_inference_service: AdvancedSOHInferenceService
 
     def __post_init__(self) -> None:
         required = (
@@ -134,9 +140,8 @@ class ProjectPredictionToolDependencies:
             self.project_context_validator,
             self.agent_run_invocation_resolver,
             self.advanced_input_batch_resolver,
-            self.cycle_life_predictor,
-            self.hybrid_degradation_predictor,
-            self.normalized_calibration_cohort_resolver,
+            self.advanced_rul_inference_service,
+            self.advanced_soh_inference_service,
         )
         if any(dependency is None for dependency in required):
             raise TypeError("Required project prediction dependencies must not be None")
@@ -238,22 +243,23 @@ def create_project_prediction_tool_registry(
         registry,
         batch_resolver=dependencies.advanced_input_batch_resolver,
     )
-    register_project_predict_cycle_life_tool(
+    register_project_predict_advanced_rul_tool(
         registry,
-        predictor=dependencies.cycle_life_predictor,
-        project_audit_ledger=dependencies.project_audit_ledger,
-        model_artifact_registry=dependencies.model_artifact_registry,
-    )
-    register_project_predict_soh_trajectory_tool(
-        registry,
-        predictor=dependencies.hybrid_degradation_predictor,
+        inference_service=dependencies.advanced_rul_inference_service,
         project_audit_ledger=dependencies.project_audit_ledger,
     )
-    register_project_calibrate_prediction_interval_tool(
+    register_project_predict_advanced_soh_tool(
         registry,
-        resolver=dependencies.normalized_calibration_cohort_resolver,
+        inference_service=dependencies.advanced_soh_inference_service,
         project_audit_ledger=dependencies.project_audit_ledger,
-        difficulty_scale_resolver=dependencies.prediction_difficulty_scale_resolver,
+    )
+    register_project_advanced_split_conformal_tool(
+        registry,
+        project_audit_ledger=dependencies.project_audit_ledger,
+    )
+    register_project_generate_advanced_cell_report_tool(
+        registry,
+        project_audit_ledger=dependencies.project_audit_ledger,
     )
     return registry
 

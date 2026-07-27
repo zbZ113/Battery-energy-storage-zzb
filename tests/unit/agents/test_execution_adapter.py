@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from quanxin_life.agents.orchestrator import AgentStep
 from quanxin_life.core import (
     AgentFailurePolicy,
     AgentIntent,
@@ -38,6 +39,24 @@ class _ContextResolver:
 
     def resolve_context(self, *, run_id: str, project_id: str, reference: str) -> object:
         self.context_calls.append((run_id, project_id, reference))
+        advanced_values: dict[str, object] = {
+            "context.rul_point_route_role": "POINT_ACCURACY",
+            "context.rul_coverage_route_role": "COVERAGE",
+            "context.soh_route_role": "MEAN_ACCURACY",
+            "context.conformal_calibrate_operation": "calibrate",
+            "context.conformal_issue_operation": "issue",
+            "context.rul_task": "RUL",
+            "context.soh_task": "SOH",
+            "context.conformal_alpha": 0.1,
+            "context.rul_calibration_sample_result_ids": (
+                "00000000-0000-4000-8000-000000000101",
+            ),
+            "context.soh_calibration_sample_result_ids": (
+                "00000000-0000-4000-8000-000000000102",
+            ),
+        }
+        if reference in advanced_values:
+            return advanced_values[reference]
         if reference == "context.calibration_cohort_id":
             return "cohort-reviewed-v1"
         if reference == "context.operation_policy_version":
@@ -253,3 +272,68 @@ def test_compile_step_revalidates_persisted_plan_hash() -> None:
             context_resolver=_ContextResolver(),
             completed_results={},
         )
+
+
+def test_project_advanced_fixed_plan_compiles_only_server_owned_values() -> None:
+    from quanxin_life.agents.execution_adapter import compile_agent_step
+    from quanxin_life.agents.supervisor import (
+        SupervisorPlanner,
+        SupervisorPlanningRequest,
+    )
+
+    intent = _intent()
+    planning = SupervisorPlanner(gateway=None, clock=lambda: NOW).plan(
+        SupervisorPlanningRequest(
+            project_id=intent.project_id,
+            user_goal=intent.goal,
+            dataset_ids=intent.dataset_ids,
+            requested_outputs=("cycle_life", "soh", "audited_report"),
+        ),
+        available_tools={
+            StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+            StandardToolName.PREDICT_CYCLE_LIFE,
+            StandardToolName.PREDICT_SOH_TRAJECTORY,
+            StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+            StandardToolName.GENERATE_AUDITED_REPORT,
+        },
+    )
+    plan = planning.plan.model_copy(update={"intent_id": intent.intent_id})
+    plan = AgentPlan.build(
+        plan_version=plan.plan_version,
+        intent_id=intent.intent_id,
+        steps=plan.steps,
+        planning_mode=plan.planning_mode,
+        created_at=plan.created_at,
+    )
+    resolver = _ContextResolver()
+    run_id = str(uuid4())
+    completed: dict[str, ToolResult] = {}
+    compiled: dict[str, AgentStep] = {}
+
+    for step in plan.steps:
+        compiled[step.step_id] = compile_agent_step(
+            run_id=run_id,
+            intent=intent,
+            plan=plan,
+            step_id=step.step_id,
+            context_resolver=resolver,
+            completed_results=completed,
+        )
+        completed[step.step_id] = _result(StandardToolName(step.tool_name))
+
+    assert compiled["rul-point"].input_value["route_role"] == "POINT_ACCURACY"
+    assert compiled["rul-calibration"].input_value == {
+        "operation": "calibrate",
+        "task": "RUL",
+        "route_role": "COVERAGE",
+        "alpha": 0.1,
+        "calibration_sample_result_ids": (
+            "00000000-0000-4000-8000-000000000101",
+        ),
+    }
+    assert compiled["report"].input_value == {
+        "rul_result_id": completed["rul-point"].result_id,
+        "soh_result_id": completed["soh"].result_id,
+        "rul_conformal_result_id": completed["rul-interval"].result_id,
+        "soh_conformal_result_id": completed["soh-band"].result_id,
+    }

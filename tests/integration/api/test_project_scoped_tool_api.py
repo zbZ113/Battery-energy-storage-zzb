@@ -27,6 +27,7 @@ from quanxin_life.auth import (
 from quanxin_life.core import (
     ProjectStatus,
     ProvenanceRecord,
+    SessionStatus,
     SourceKind,
     ToolResult,
     UserRole,
@@ -35,8 +36,8 @@ from quanxin_life.core import (
 )
 from quanxin_life.core.schemas import ContractModel
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
-from quanxin_life.persistence.database import DatabaseConfig
-from quanxin_life.persistence.models import Project, User
+from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
+from quanxin_life.persistence.models import Project, SessionRecord, ToolResultRecord, User
 from quanxin_life.tools import (
     StandardToolName,
     ToolDefinition,
@@ -59,9 +60,11 @@ class _ApiContext:
     outsider_client: TestClient
     invocation_service: ToolInvocationService
     project_audit_ledger: SqlProjectAuditLedger
+    session_factory: SessionFactory
     executor_calls: list[tuple[_ProjectToolInput, VerifiedProjectInvocationContext]]
     owner_user_id: str
     active_project_id: str
+    secondary_project_id: str
     archived_project_id: str
 
 
@@ -123,6 +126,11 @@ def _api_context(tmp_path: Path) -> _ApiContext:
     archived_project = project_service.create_project(
         owner_principal,
         name="Project-scoped tool archived fixture",
+        now=NOW,
+    )
+    secondary_project = project_service.create_project(
+        owner_principal,
+        name="Project-scoped tool secondary fixture",
         now=NOW,
     )
     with session_factory.begin() as session:
@@ -205,9 +213,11 @@ def _api_context(tmp_path: Path) -> _ApiContext:
         outsider_client=outsider_client,
         invocation_service=invocation_service,
         project_audit_ledger=project_audit_ledger,
+        session_factory=session_factory,
         executor_calls=executor_calls,
         owner_user_id=owner_user_id,
         active_project_id=active_project.project_id,
+        secondary_project_id=secondary_project.project_id,
         archived_project_id=archived_project.project_id,
     )
 
@@ -238,6 +248,112 @@ def test_authenticated_project_tool_uses_server_resolved_invocation_context(
         response.json()["result_id"],
     )
     assert result.values == {"validated_batch_id": "batch-owned-by-project"}
+
+
+def test_authenticated_project_result_is_readable_only_through_its_project_path(
+    tmp_path: Path,
+) -> None:
+    context = _api_context(tmp_path)
+    created = context.owner_client.post(
+        f"/v1/projects/{context.active_project_id}/tools/validate_battery_data",
+        headers={"Origin": ORIGIN},
+        json={"batch_id": "batch-readable-in-project"},
+    )
+    assert created.status_code == 200
+
+    response = context.owner_client.get(
+        f"/v1/projects/{context.active_project_id}/results/"
+        f"{created.json()['result_id']}"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == created.json()
+
+
+def test_project_result_cannot_be_read_through_another_visible_project(
+    tmp_path: Path,
+) -> None:
+    context = _api_context(tmp_path)
+    created = context.owner_client.post(
+        f"/v1/projects/{context.active_project_id}/tools/validate_battery_data",
+        headers={"Origin": ORIGIN},
+        json={"batch_id": "batch-project-isolated"},
+    )
+    assert created.status_code == 200
+    client = TestClient(
+        context.owner_client.app,
+        base_url="https://api.example.test",
+        raise_server_exceptions=False,
+    )
+    client.cookies.update(context.owner_client.cookies)
+
+    response = client.get(
+        f"/v1/projects/{context.secondary_project_id}/results/"
+        f"{created.json()['result_id']}"
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "project_result_not_found"}
+
+
+def test_project_result_read_rejects_a_revoked_authentication_session(
+    tmp_path: Path,
+) -> None:
+    context = _api_context(tmp_path)
+    created = context.owner_client.post(
+        f"/v1/projects/{context.active_project_id}/tools/validate_battery_data",
+        headers={"Origin": ORIGIN},
+        json={"batch_id": "batch-revoked-session"},
+    )
+    assert created.status_code == 200
+    with context.session_factory.begin() as session:
+        session_record = (
+            session.query(SessionRecord)
+            .filter_by(
+                user_id=context.owner_user_id,
+                status=SessionStatus.ACTIVE.value,
+            )
+            .one()
+        )
+        session_record.status = SessionStatus.REVOKED.value
+        session_record.revoked_at = NOW
+
+    response = context.owner_client.get(
+        f"/v1/projects/{context.active_project_id}/results/"
+        f"{created.json()['result_id']}"
+    )
+
+    assert response.status_code == 401
+
+
+def test_project_result_read_fails_closed_when_persisted_result_is_tampered(
+    tmp_path: Path,
+) -> None:
+    context = _api_context(tmp_path)
+    created = context.owner_client.post(
+        f"/v1/projects/{context.active_project_id}/tools/validate_battery_data",
+        headers={"Origin": ORIGIN},
+        json={"batch_id": "batch-before-tamper"},
+    )
+    assert created.status_code == 200
+    with context.session_factory.begin() as session:
+        result = session.get(ToolResultRecord, created.json()["result_id"])
+        assert result is not None
+        result.values_json = {"validated_batch_id": "tampered"}
+    client = TestClient(
+        context.owner_client.app,
+        base_url="https://api.example.test",
+        raise_server_exceptions=False,
+    )
+    client.cookies.update(context.owner_client.cookies)
+
+    response = client.get(
+        f"/v1/projects/{context.active_project_id}/results/"
+        f"{created.json()['result_id']}"
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "project_result_storage_unavailable"}
 
 
 def test_invisible_and_inactive_projects_are_hidden_without_tool_execution(

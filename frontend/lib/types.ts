@@ -46,11 +46,13 @@ export interface ToolResult {
   tool_version: string;
   input_hash: string;
   values: Record<string, unknown>;
+  uncertainty: Record<string, unknown> | null;
   provenance: ProvenanceRecord[];
   warnings: string[];
   model_version?: string | null;
   data_version?: string | null;
   feature_version?: string | null;
+  created_at: string;
 }
 
 export interface ProvenanceRecord {
