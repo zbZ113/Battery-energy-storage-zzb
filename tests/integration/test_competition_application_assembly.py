@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from pytest import MonkeyPatch
 
 from quanxin_life.application import (
@@ -140,3 +142,95 @@ def test_project_prediction_assembly_exposes_only_project_scoped_numeric_tools()
         service.agent_run_invocation_validator
         is dependencies.agent_run_invocation_resolver
     )
+
+
+def test_advanced_calibration_assembly_wires_service_worker_api_and_agent(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    import quanxin_life.api.advanced_calibration as api_module
+    import quanxin_life.application.assembly as module
+
+    stub = cast(Any, object())
+    context_service = cast(
+        Any,
+        SimpleNamespace(revalidate=lambda context: context),
+    )
+    adapter = cast(Any, object())
+    captured: dict[str, object] = {}
+
+    def create_adapter(
+        service: object,
+        *,
+        queue: object,
+        context_service: object,
+        auth_adapter: object,
+    ) -> object:
+        captured.update(
+            {
+                "service": service,
+                "queue": queue,
+                "context_service": context_service,
+                "auth_adapter": auth_adapter,
+            }
+        )
+        return adapter
+
+    monkeypatch.setattr(
+        api_module,
+        "create_advanced_calibration_http_adapter",
+        create_adapter,
+    )
+    dependencies = module.AdvancedCalibrationAssemblyDependencies(
+        session_factory=stub,
+        context_service=context_service,
+        evidence_resolver=stub,
+        runtime_resolver=stub,
+        cell_input_resolver=stub,
+        project_materializer=stub,
+        queue=stub,
+        auth_adapter=stub,
+        agent_context_delegate=stub,
+        target_record_batch_resolver=stub,
+    )
+
+    components = module.create_advanced_calibration_components(dependencies)
+
+    assert components.http_adapter is adapter
+    assert captured == {
+        "service": components.materialization_service,
+        "queue": dependencies.queue,
+        "context_service": context_service,
+        "auth_adapter": dependencies.auth_adapter,
+    }
+    assert (
+        type(components.materialization_service).__name__
+        == "AdvancedCalibrationMaterializationService"
+    )
+    assert (
+        type(components.worker).__name__
+        == "AdvancedCalibrationMaterializationWorker"
+    )
+    assert (
+        type(components.agent_context_resolver).__name__
+        == "AdvancedAgentExecutionContextResolver"
+    )
+
+
+def test_advanced_calibration_assembly_rejects_missing_dependencies() -> None:
+    import quanxin_life.application.assembly as module
+
+    stub = cast(Any, object())
+
+    with pytest.raises(TypeError, match="must not be None"):
+        module.AdvancedCalibrationAssemblyDependencies(
+            session_factory=stub,
+            context_service=stub,
+            evidence_resolver=stub,
+            runtime_resolver=stub,
+            cell_input_resolver=None,
+            project_materializer=stub,
+            queue=stub,
+            auth_adapter=stub,
+            agent_context_delegate=stub,
+            target_record_batch_resolver=stub,
+        )

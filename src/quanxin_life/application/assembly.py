@@ -7,6 +7,7 @@ Importing it performs no model training, I/O, network access, or service start.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from quanxin_life.api.service import ToolInvocationService
 from quanxin_life.application.agent_run_invocation import AgentRunInvocationValidator
@@ -81,6 +82,38 @@ from quanxin_life.tools.trajectory_prediction import (
     register_predict_soh_trajectory_tool,
 )
 
+if TYPE_CHECKING:
+    from quanxin_life.agents.execution_adapter import (
+        AgentExecutionContextResolver,
+    )
+    from quanxin_life.api.advanced_calibration import (
+        AdvancedCalibrationHttpAdapter,
+        AdvancedCalibrationQueue,
+    )
+    from quanxin_life.api.auth import AuthHttpAdapter
+    from quanxin_life.application.advanced_agent_execution_context import (
+        AdvancedAgentExecutionContextResolver,
+        BoundRecordBatchResolver,
+    )
+    from quanxin_life.application.advanced_calibration_evidence import (
+        AdvancedCalibrationEvidenceResolver,
+    )
+    from quanxin_life.application.advanced_calibration_jobs import (
+        AdvancedCalibrationMaterializationService,
+        AdvancedCalibrationMaterializationWorker,
+    )
+    from quanxin_life.application.advanced_calibration_materialization import (
+        AdvancedCalibrationCellInputResolver,
+        AdvancedCalibrationRuntimeResolver,
+    )
+    from quanxin_life.application.invocation_context import (
+        ProjectInvocationContextService,
+    )
+    from quanxin_life.audit.project_ledger import (
+        AtomicProjectResultMaterializer,
+    )
+    from quanxin_life.persistence.database import SessionFactory
+
 
 @dataclass(frozen=True, slots=True)
 class CompetitionToolDependencies:
@@ -145,6 +178,118 @@ class ProjectPredictionToolDependencies:
         )
         if any(dependency is None for dependency in required):
             raise TypeError("Required project prediction dependencies must not be None")
+
+
+@dataclass(frozen=True, slots=True)
+class AdvancedCalibrationAssemblyDependencies:
+    """Caller-owned dependencies for the trusted calibration vertical slice."""
+
+    session_factory: SessionFactory
+    context_service: ProjectInvocationContextService
+    evidence_resolver: AdvancedCalibrationEvidenceResolver
+    runtime_resolver: AdvancedCalibrationRuntimeResolver
+    cell_input_resolver: AdvancedCalibrationCellInputResolver
+    project_materializer: AtomicProjectResultMaterializer
+    queue: AdvancedCalibrationQueue
+    auth_adapter: AuthHttpAdapter
+    agent_context_delegate: AgentExecutionContextResolver
+    target_record_batch_resolver: BoundRecordBatchResolver
+
+    def __post_init__(self) -> None:
+        if any(
+            dependency is None
+            for dependency in (
+                self.session_factory,
+                self.context_service,
+                self.evidence_resolver,
+                self.runtime_resolver,
+                self.cell_input_resolver,
+                self.project_materializer,
+                self.queue,
+                self.auth_adapter,
+                self.agent_context_delegate,
+                self.target_record_batch_resolver,
+            )
+        ):
+            raise TypeError(
+                "Required Advanced calibration dependencies must not be None"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class AdvancedCalibrationComponents:
+    """Explicitly assembled services without starting workers or loading models."""
+
+    materialization_service: AdvancedCalibrationMaterializationService
+    worker: AdvancedCalibrationMaterializationWorker
+    http_adapter: AdvancedCalibrationHttpAdapter
+    agent_context_resolver: AdvancedAgentExecutionContextResolver
+
+
+def create_advanced_calibration_components(
+    dependencies: AdvancedCalibrationAssemblyDependencies,
+) -> AdvancedCalibrationComponents:
+    """Wire the trusted calibration API, worker and Agent context boundary."""
+
+    from quanxin_life.api.advanced_calibration import (
+        create_advanced_calibration_http_adapter,
+    )
+    from quanxin_life.application.advanced_agent_execution_context import (
+        AdvancedAgentExecutionContextResolver,
+    )
+    from quanxin_life.application.advanced_calibration_jobs import (
+        AdvancedCalibrationMaterializationService,
+        AdvancedCalibrationMaterializationWorker,
+    )
+    from quanxin_life.application.advanced_calibration_materialization import (
+        AdvancedCalibrationSampleProducer,
+        VerifiedAdvancedCalibrationCellPredictor,
+    )
+    from quanxin_life.application.advanced_calibration_preparation import (
+        ActiveAdvancedCalibrationPreparationResolver,
+    )
+
+    preparation_resolver = ActiveAdvancedCalibrationPreparationResolver(
+        runtime_resolver=dependencies.runtime_resolver,
+        evidence_resolver=dependencies.evidence_resolver,
+    )
+    predictor = VerifiedAdvancedCalibrationCellPredictor(
+        input_resolver=dependencies.cell_input_resolver,
+    )
+    producer = AdvancedCalibrationSampleProducer(
+        evidence_resolver=dependencies.evidence_resolver,
+        runtime_resolver=dependencies.runtime_resolver,
+        predictor=predictor,
+    )
+    service = AdvancedCalibrationMaterializationService(
+        dependencies.session_factory,
+        preparation_resolver=preparation_resolver,
+    )
+    worker = AdvancedCalibrationMaterializationWorker(
+        dependencies.session_factory,
+        context_service=dependencies.context_service,
+        producer=producer,
+        materializer=dependencies.project_materializer,
+    )
+    agent_context_resolver = AdvancedAgentExecutionContextResolver(
+        dependencies.session_factory,
+        context_service=dependencies.context_service,
+        record_batch_resolver=dependencies.target_record_batch_resolver,
+        runtime_resolver=dependencies.runtime_resolver,
+        delegate=dependencies.agent_context_delegate,
+    )
+    http_adapter = create_advanced_calibration_http_adapter(
+        service,
+        queue=dependencies.queue,
+        context_service=dependencies.context_service,
+        auth_adapter=dependencies.auth_adapter,
+    )
+    return AdvancedCalibrationComponents(
+        materialization_service=service,
+        worker=worker,
+        http_adapter=http_adapter,
+        agent_context_resolver=agent_context_resolver,
+    )
 
 
 def create_competition_tool_registry(

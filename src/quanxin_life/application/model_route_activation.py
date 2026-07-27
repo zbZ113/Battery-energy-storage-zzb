@@ -418,6 +418,54 @@ class ModelRouteActivationService:
                 route=route,
             )
 
+    def list_verified_active_model_routes(
+        self,
+        principal: AuthPrincipal,
+        *,
+        project_id: str,
+    ) -> tuple[VerifiedActiveModelRoute, ...]:
+        """List one path-free, freshly verified head for every active route."""
+
+        normalized_project = _identifier(project_id, "project_id")
+        with session_scope(self._session_factory) as session:
+            project = session.scalar(
+                ProjectService.visible_projects_statement(principal).where(
+                    Project.id == normalized_project,
+                    Project.status == ProjectStatus.ACTIVE.value,
+                )
+            )
+            if project is None:
+                raise ModelRouteActivationNotFoundError(
+                    "project was not found"
+                )
+            snapshot = _latest_route_snapshot(
+                self._verified_project_ledger(session, normalized_project)
+            )
+        routes = tuple(
+            self.resolve_verified_active_model_route(
+                principal,
+                project_id=normalized_project,
+                task=task,
+                cutoff_cycle=cutoff_cycle,
+                role=role,
+            )
+            for task, cutoff_cycle, role, _, _, _ in snapshot
+        )
+        with session_scope(self._session_factory) as session:
+            project = session.scalar(
+                ProjectService.visible_projects_statement(principal).where(
+                    Project.id == normalized_project,
+                    Project.status == ProjectStatus.ACTIVE.value,
+                )
+            )
+            if project is None or _latest_route_snapshot(
+                self._verified_project_ledger(session, normalized_project)
+            ) != snapshot:
+                raise ModelRouteActivationStateError(
+                    "active model route collection changed during resolution"
+                )
+        return routes
+
     def resolve_verified_active_model_route(
         self,
         principal: AuthPrincipal,
@@ -919,6 +967,45 @@ def _candidate_snapshot(event: ModelRouteActivationEventRecord) -> tuple[str, ..
         event.manifest_sha256,
         event.deployment_bundle_manifest_sha256,
         event.route_provenance_sha256,
+    )
+
+
+def _latest_route_snapshot(
+    history: Sequence[ModelRouteActivationEventRecord],
+) -> tuple[
+    tuple[
+        AdvancedModelTask,
+        int,
+        AdvancedModelRouteRole,
+        str,
+        int,
+        str,
+    ],
+    ...,
+]:
+    latest: dict[
+        tuple[AdvancedModelTask, int, AdvancedModelRouteRole],
+        ModelRouteActivationEventRecord,
+    ] = {}
+    for event in history:
+        latest[(event.task, event.cutoff_cycle, event.role)] = event
+    return tuple(
+        (
+            task,
+            cutoff_cycle,
+            role,
+            event.event_id,
+            event.sequence_number,
+            event.event_sha256,
+        )
+        for (task, cutoff_cycle, role), event in sorted(
+            latest.items(),
+            key=lambda item: (
+                item[0][0].value,
+                item[0][1],
+                item[0][2].value,
+            ),
+        )
     )
 
 

@@ -345,3 +345,53 @@ def test_history_is_verified_and_stale_head_returns_conflict(tmp_path: Path) -> 
     assert stale.json()["detail"] == "model_route_state_conflict"
     assert history.status_code == 200
     assert history.json() == [first.json()]
+
+
+def test_active_route_collection_is_member_readable_and_path_free(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    activated = context.client.post(
+        "/v1/admin/model-routes/activations",
+        headers={
+            "Origin": ORIGIN,
+            "Idempotency-Key": "route-active-list-0001",
+        },
+        json=_activation_payload(
+            context,
+            context.first,
+            expected_head=GENESIS_EVENT_SHA256,
+        ),
+    )
+    assert activated.status_code == 201
+    context.login(context.member_username)
+
+    response = context.client.get(
+        f"/v1/projects/{context.project_id}/model-routes/active"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "task": "RUL",
+            "cutoff_cycle": 20,
+            "route_role": "DEFAULT",
+            "artifact_id": context.first.artifact_id,
+            "artifact_kind": context.first.metadata.artifact_kind,
+            "artifact_manifest_sha256": context.first.manifest_sha256,
+            "model_version": context.first.model_version,
+            "data_version": context.first.metadata.data_version,
+            "split_version": context.first.metadata.split_version,
+            "feature_version": context.first.metadata.feature_version,
+            "normalization_statistics_sha256": (
+                context.first.metadata.advanced_provenance.normalization_sha256
+            ),
+            "decision_event_id": activated.json()["event_id"],
+            "ledger_sequence_number": 1,
+            "ledger_head_sha256": activated.json()["event_sha256"],
+        }
+    ]
+    serialized = response.text
+    assert "object_uri" not in serialized
+    assert "manifest_uri" not in serialized
+    assert "feature_names" not in serialized

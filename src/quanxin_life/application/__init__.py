@@ -7,6 +7,8 @@ from typing import Any
 
 _EXPORT_MODULES = {
     "AdvancedModelArtifactCatalogBatchRecord": "model_artifact_catalog",
+    "AdvancedCalibrationAssemblyDependencies": "assembly",
+    "AdvancedCalibrationComponents": "assembly",
     "ArtifactFormat": "model_artifacts",
     "ArtifactKind": "model_artifacts",
     "BINDING_SCHEMA_VERSION": "record_batch_bindings",
@@ -41,6 +43,7 @@ _EXPORT_MODULES = {
     "VerifiedProjectInvocationContext": "invocation_context",
     "create_competition_tool_invocation_service": "assembly",
     "create_competition_tool_registry": "assembly",
+    "create_advanced_calibration_components": "assembly",
     "create_project_prediction_tool_invocation_service": "assembly",
     "create_project_prediction_tool_registry": "assembly",
     "load_verified_xgboost_life_predictor": "model_artifacts",

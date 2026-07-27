@@ -14,6 +14,7 @@ from quanxin_life.application.model_route_activation import (
     ModelRouteActivationNotFoundError,
     ModelRouteActivationService,
     ModelRouteActivationStateError,
+    VerifiedActiveModelRoute,
 )
 from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import AdvancedModelRouteRole, AdvancedModelTask, UserRole
@@ -42,6 +43,25 @@ class RollbackModelRouteRequest(ContractModel):
     target_activation_event_id: str = Field(min_length=1, max_length=64)
     reason: str = Field(min_length=1, max_length=2000)
     expected_previous_event_sha256: Sha256
+
+
+class ActiveModelRouteSummary(ContractModel):
+    """Path-free active route identity safe for readiness management."""
+
+    task: AdvancedModelTask
+    cutoff_cycle: int = Field(gt=0)
+    route_role: AdvancedModelRouteRole
+    artifact_id: str = Field(min_length=1, max_length=64)
+    artifact_kind: str = Field(min_length=1, max_length=100)
+    artifact_manifest_sha256: Sha256
+    model_version: str = Field(min_length=1, max_length=100)
+    data_version: str = Field(min_length=1, max_length=100)
+    split_version: str = Field(min_length=1, max_length=100)
+    feature_version: str = Field(min_length=1, max_length=100)
+    normalization_statistics_sha256: Sha256
+    decision_event_id: str = Field(min_length=1, max_length=64)
+    ledger_sequence_number: int = Field(gt=0)
+    ledger_head_sha256: Sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +162,38 @@ def create_model_route_http_adapter(
             raise HTTPException(status_code=422, detail="invalid_model_route") from exc
 
     @router.get(
+        "/v1/projects/{project_id}/model-routes/active",
+        response_model=list[ActiveModelRouteSummary],
+    )
+    def list_active_model_routes(
+        project_id: str,
+        principal: Annotated[AuthPrincipal, Depends(ready_user)],
+    ) -> Any:
+        try:
+            return [
+                _active_route_summary(item)
+                for item in service.list_verified_active_model_routes(
+                    principal,
+                    project_id=project_id,
+                )
+            ]
+        except ModelRouteActivationNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="model_route_not_found",
+            ) from exc
+        except ModelRouteActivationStateError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="invalid_model_route_ledger",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="invalid_model_route",
+            ) from exc
+
+    @router.get(
         "/v1/model-routes/activation-events",
         response_model=list[ModelRouteActivationEventRecord],
     )
@@ -175,4 +227,34 @@ def create_model_route_http_adapter(
     return ModelRouteHttpAdapter(router=router)
 
 
-__all__ = ["ModelRouteHttpAdapter", "create_model_route_http_adapter"]
+def _active_route_summary(
+    route: VerifiedActiveModelRoute,
+) -> ActiveModelRouteSummary:
+    provenance = route.artifact.metadata.advanced_provenance
+    if provenance is None:
+        raise ModelRouteActivationStateError(
+            "active route does not contain Advanced provenance"
+        )
+    return ActiveModelRouteSummary(
+        task=route.task,
+        cutoff_cycle=route.cutoff_cycle,
+        route_role=route.role,
+        artifact_id=route.artifact.artifact_id,
+        artifact_kind=route.artifact.metadata.artifact_kind,
+        artifact_manifest_sha256=route.artifact.manifest_sha256,
+        model_version=route.artifact.model_version,
+        data_version=route.artifact.metadata.data_version,
+        split_version=route.artifact.metadata.split_version,
+        feature_version=route.artifact.metadata.feature_version,
+        normalization_statistics_sha256=provenance.normalization_sha256,
+        decision_event_id=route.decision_event_id,
+        ledger_sequence_number=route.ledger_sequence_number,
+        ledger_head_sha256=route.ledger_head_sha256,
+    )
+
+
+__all__ = [
+    "ActiveModelRouteSummary",
+    "ModelRouteHttpAdapter",
+    "create_model_route_http_adapter",
+]
