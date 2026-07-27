@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID, uuid4, uuid5
@@ -157,6 +157,8 @@ class _RuntimeResolver:
         self.calls: list[
             tuple[AdvancedModelTask, int, AdvancedModelRouteRole]
         ] = []
+        self.revalidation_calls: list[VerifiedAdvancedRuntime] = []
+        self.revalidation_result: VerifiedAdvancedRuntime | None = None
 
     def resolve(
         self,
@@ -170,6 +172,16 @@ class _RuntimeResolver:
         if context.project_id != PROJECT_ID:
             raise LookupError("runtime is not visible")
         return self.runtimes[(task, cutoff_cycle, role)]
+
+    def revalidate(
+        self,
+        context: VerifiedProjectInvocationContext,
+        runtime: VerifiedAdvancedRuntime,
+    ) -> VerifiedAdvancedRuntime:
+        if context.project_id != PROJECT_ID:
+            raise LookupError("runtime is not visible")
+        self.revalidation_calls.append(runtime)
+        return self.revalidation_result or runtime
 
 
 class _Delegate:
@@ -311,6 +323,34 @@ def test_returns_result_ids_by_persisted_ordinal_not_row_order(
     )
 
     assert resolved == expected
+
+
+def test_rejects_calibration_ids_when_active_route_changes_during_validation(
+    fixture: _Fixture,
+) -> None:
+    original = fixture.runtime_resolver.runtimes[
+        (AdvancedModelTask.RUL, CUTOFF, AdvancedModelRouteRole.COVERAGE)
+    ]
+    fixture.runtime_resolver.revalidation_result = replace(
+        original,
+        artifact_id=str(uuid4()),
+        artifact_manifest_sha256="f" * 64,
+        decision_event_id=str(uuid4()),
+        ledger_sequence_number=2,
+        ledger_head_sha256="e" * 64,
+    )
+
+    with pytest.raises(
+        AdvancedAgentExecutionContextError,
+        match=r"route|runtime|changed",
+    ):
+        fixture.resolver.resolve_context(
+            run_id=RUN_ID,
+            project_id=PROJECT_ID,
+            reference="context.rul_calibration_sample_result_ids",
+        )
+
+    assert fixture.runtime_resolver.revalidation_calls == [original]
 
 
 def test_populates_only_server_owned_calibration_references(

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from threading import Event, Thread
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import UUID, uuid4
 
@@ -157,6 +158,49 @@ class _AdvancedCalibrationWorkerClaim:
     claim_token: str
     claim_attempt: int
     claim_lease_expires_at: datetime
+
+
+class _AdvancedCalibrationClaimHeartbeat:
+    def __init__(
+        self,
+        claim: _AdvancedCalibrationWorkerClaim,
+        *,
+        interval: timedelta,
+        renew: Callable[
+            [_AdvancedCalibrationWorkerClaim],
+            _AdvancedCalibrationWorkerClaim,
+        ],
+    ) -> None:
+        self._claim = claim
+        self._interval_seconds = interval.total_seconds()
+        self._renew = renew
+        self._stop = Event()
+        self._error: BaseException | None = None
+        self._thread = Thread(
+            target=self._run,
+            name=f"advanced-calibration-heartbeat-{claim.materialization_id}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> _AdvancedCalibrationWorkerClaim:
+        self._stop.set()
+        self._thread.join()
+        if self._error is not None:
+            raise AdvancedCalibrationMaterializationError(
+                "Advanced calibration claim heartbeat failed"
+            ) from None
+        return self._claim
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval_seconds):
+            try:
+                self._claim = self._renew(self._claim)
+            except BaseException as exc:
+                self._error = exc
+                self._stop.set()
 
 
 class AdvancedCalibrationMaterializationService:
@@ -579,9 +623,18 @@ class AdvancedCalibrationMaterializationWorker:
         clock: Clock = _utc_now,
         token_factory: TokenFactory = _new_claim_token,
         lease_ttl: timedelta = timedelta(seconds=90),
+        heartbeat_interval: timedelta = timedelta(seconds=30),
     ) -> None:
         if lease_ttl <= timedelta(0):
             raise ValueError("Advanced calibration lease_ttl must be positive")
+        if (
+            heartbeat_interval <= timedelta(0)
+            or heartbeat_interval >= lease_ttl
+        ):
+            raise ValueError(
+                "Advanced calibration heartbeat_interval must be positive "
+                "and shorter than lease_ttl"
+            )
         self._session_factory = session_factory
         self._context_service = context_service
         self._producer = producer
@@ -589,6 +642,7 @@ class AdvancedCalibrationMaterializationWorker:
         self._clock = clock
         self._token_factory = token_factory
         self._lease_ttl = lease_ttl
+        self._heartbeat_interval = heartbeat_interval
 
     def execute(
         self,
@@ -599,26 +653,43 @@ class AdvancedCalibrationMaterializationWorker:
         claimed = self._claim(normalized_id)
         if isinstance(claimed, AdvancedCalibrationMaterializationStatus):
             return claimed
+        active_claim = claimed
+        heartbeat = _AdvancedCalibrationClaimHeartbeat(
+            claimed,
+            interval=self._heartbeat_interval,
+            renew=self._renew_claim,
+        )
+        heartbeat.start()
         try:
-            context = self._reconstruct_context(claimed)
-            request = _materialization_request(claimed)
-            produced_at = _utc(self._clock())
-            samples = self._producer.produce(
-                context=context,
-                materialization_id=claimed.materialization_id,
-                request=request,
-                created_at=produced_at,
-            )
+            try:
+                context = self._reconstruct_context(active_claim)
+                request = _materialization_request(active_claim)
+                produced_at = _utc(self._clock())
+                samples = self._producer.produce(
+                    context=context,
+                    materialization_id=active_claim.materialization_id,
+                    request=request,
+                    created_at=produced_at,
+                )
+            finally:
+                active_claim = heartbeat.stop()
             model_version = _sample_model_version(
                 samples,
-                data_version=claimed.data_version,
-                feature_version=claimed.feature_version,
+                data_version=active_claim.data_version,
+                feature_version=active_claim.feature_version,
             )
-            self._commit(claimed, samples=samples, model_version=model_version)
+            self._commit(
+                active_claim,
+                samples=samples,
+                model_version=model_version,
+            )
             return AdvancedCalibrationMaterializationStatus.READY
         except Exception as exc:
             try:
-                self._mark_failed(claimed, failure_code=type(exc).__name__)
+                self._mark_failed(
+                    active_claim,
+                    failure_code=type(exc).__name__,
+                )
             except AdvancedCalibrationMaterializationError as fence_error:
                 raise fence_error from None
             return AdvancedCalibrationMaterializationStatus.FAILED
@@ -705,6 +776,58 @@ class AdvancedCalibrationMaterializationWorker:
                 claim_token=claim_token,
                 claim_lease_expires_at=claim_lease_expires_at,
             )
+
+    def _renew_claim(
+        self,
+        claim: _AdvancedCalibrationWorkerClaim,
+    ) -> _AdvancedCalibrationWorkerClaim:
+        now = _utc(self._clock())
+        expected_claim_sha256 = sha256_canonical(
+            {"claim_token": claim.claim_token}
+        )
+        locator = self._locator(claim.materialization_id)
+        with session_scope(self._session_factory) as session:
+            project = session.scalar(
+                select(Project)
+                .where(Project.id == locator.project_id)
+                .with_for_update()
+            )
+            head = session.scalar(
+                _head_statement(locator).with_for_update()
+            )
+            row = session.scalar(
+                select(AdvancedCalibrationMaterialization)
+                .where(
+                    AdvancedCalibrationMaterialization.id
+                    == claim.materialization_id
+                )
+                .with_for_update()
+            )
+            if (
+                project is None
+                or project.status != ProjectStatus.ACTIVE.value
+                or head is None
+                or row is None
+                or not _head_matches(head, row)
+                or row.status
+                != AdvancedCalibrationMaterializationStatus.RUNNING.value
+                or row.claim_token_sha256 != expected_claim_sha256
+                or row.claim_attempt != claim.claim_attempt
+                or row.claim_lease_expires_at is None
+                or _database_utc(row.claim_lease_expires_at)
+                != claim.claim_lease_expires_at
+                or not _lease_is_active(row.claim_lease_expires_at, now)
+            ):
+                raise AdvancedCalibrationMaterializationError(
+                    "Advanced calibration heartbeat claim fence is stale"
+                )
+            renewed_expires_at = now + self._lease_ttl
+            row.claim_lease_expires_at = renewed_expires_at
+            session.flush()
+        return replace(
+            claim,
+            claim_lease_expires_at=renewed_expires_at,
+        )
 
     def _locator(
         self,

@@ -61,6 +61,12 @@ class ActiveAdvancedRuntimeResolver(Protocol):
         role: AdvancedModelRouteRole,
     ) -> VerifiedAdvancedRuntime: ...
 
+    def revalidate(
+        self,
+        context: VerifiedProjectInvocationContext,
+        runtime: VerifiedAdvancedRuntime,
+    ) -> VerifiedAdvancedRuntime: ...
+
 
 class AdvancedAgentExecutionContextResolver:
     """Resolve calibration result IDs only from live persisted server state."""
@@ -123,11 +129,22 @@ class AdvancedAgentExecutionContextResolver:
             role=role,
         )
         self._require_target_runtime(context, batch, runtime, task=task, role=role)
-        return self._ready_result_ids(
+        result_ids = self._ready_result_ids(
             context,
             target_cell_id=batch.metadata.cell_id,
             runtime=runtime,
         )
+        try:
+            revalidated = self._runtime_resolver.revalidate(context, runtime)
+        except (LookupError, RuntimeError, ValueError) as exc:
+            raise AdvancedAgentExecutionContextError(
+                "Advanced runtime route changed during calibration validation"
+            ) from exc
+        if _runtime_identity(revalidated) != _runtime_identity(runtime):
+            raise AdvancedAgentExecutionContextError(
+                "Advanced runtime route changed during calibration validation"
+            )
+        return result_ids
 
     def _agent_context(
         self,
@@ -425,6 +442,28 @@ def _manifest_sha256(
             "request_sha256": materialization.request_sha256,
             "samples": list(entries),
         }
+    )
+
+
+def _runtime_identity(runtime: VerifiedAdvancedRuntime) -> tuple[object, ...]:
+    return (
+        runtime.project_id,
+        runtime.task,
+        runtime.cutoff_cycle,
+        runtime.role,
+        runtime.output_target,
+        runtime.artifact_kind,
+        runtime.dataset_id,
+        runtime.data_version,
+        runtime.feature_version,
+        runtime.split_version,
+        runtime.normalization_sha256,
+        runtime.artifact_id,
+        runtime.artifact_manifest_sha256,
+        runtime.model_version,
+        runtime.decision_event_id,
+        runtime.ledger_sequence_number,
+        runtime.ledger_head_sha256,
     )
 
 

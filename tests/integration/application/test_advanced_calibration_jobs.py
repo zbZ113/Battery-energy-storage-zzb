@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event, Lock, Thread
+from time import monotonic
 from typing import Any, cast
 from uuid import uuid4
 
@@ -69,6 +71,20 @@ SOURCE_IDENTITY_SHA256 = "2" * 64
 CLAIM_TOKEN = "advanced-calibration-claim-token-v2"
 CLAIM_TOKEN_SHA256 = sha256_canonical({"claim_token": CLAIM_TOKEN})
 LEASE_TTL = timedelta(minutes=15)
+
+
+class _MutableClock:
+    def __init__(self, value: datetime) -> None:
+        self._value = value
+        self._lock = Lock()
+
+    def __call__(self) -> datetime:
+        with self._lock:
+            return self._value
+
+    def set(self, value: datetime) -> None:
+        with self._lock:
+            self._value = value
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,6 +540,96 @@ def test_worker_default_lease_expires_before_busy_retries_are_exhausted(
 
     assert status is AdvancedCalibrationMaterializationStatus.READY
     assert observed["lease"] <= NOW + timedelta(seconds=95)
+
+
+def test_worker_heartbeats_keep_a_live_long_running_claim_fenced(
+    fixture: _Fixture,
+) -> None:
+    _seed_materialization(
+        fixture,
+        status=AdvancedCalibrationMaterializationStatus.PENDING,
+    )
+    producer_started = Event()
+    release_producer = Event()
+    clock = _MutableClock(NOW)
+    first_result: list[AdvancedCalibrationMaterializationStatus] = []
+    first_error: list[BaseException] = []
+
+    def block_during_production() -> None:
+        producer_started.set()
+        assert release_producer.wait(timeout=3)
+
+    worker_type = _required_symbol("AdvancedCalibrationMaterializationWorker")
+    first_worker = worker_type(
+        fixture.session_factory,
+        context_service=fixture.context_service,
+        producer=_Producer(
+            samples=_samples(),
+            before_return=block_during_production,
+        ),
+        materializer=_CapturingMaterializer(
+            fixture.session_factory,
+            completed_at=NOW,
+        ),
+        clock=clock,
+        token_factory=lambda: CLAIM_TOKEN,
+        lease_ttl=timedelta(minutes=1),
+        heartbeat_interval=timedelta(milliseconds=5),
+    )
+
+    def execute_first_worker() -> None:
+        try:
+            first_result.append(
+                first_worker.execute(materialization_id=MATERIALIZATION_ID)
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            first_error.append(exc)
+
+    thread = Thread(target=execute_first_worker)
+    thread.start()
+    assert producer_started.wait(timeout=3)
+
+    clock.set(NOW + timedelta(seconds=30))
+    deadline = monotonic() + 3
+    renewed_lease: datetime | None = None
+    while monotonic() < deadline:
+        with fixture.session_factory() as session:
+            row = session.get(
+                AdvancedCalibrationMaterialization,
+                MATERIALIZATION_ID,
+            )
+            assert row is not None
+            renewed_lease = row.claim_lease_expires_at
+        if renewed_lease == NOW + timedelta(seconds=90):
+            break
+        Event().wait(0.01)
+    assert renewed_lease == NOW + timedelta(seconds=90)
+
+    clock.set(NOW + timedelta(seconds=70))
+    second_worker = worker_type(
+        fixture.session_factory,
+        context_service=fixture.context_service,
+        producer=_Producer(samples=_samples()),
+        materializer=_CapturingMaterializer(
+            fixture.session_factory,
+            completed_at=NOW,
+        ),
+        clock=clock,
+        token_factory=lambda: "replacement-token",
+        lease_ttl=timedelta(minutes=1),
+        heartbeat_interval=timedelta(milliseconds=5),
+    )
+    with pytest.raises(
+        _required_symbol("AdvancedCalibrationMaterializationBusyError"),
+        match=r"claim|lease|running",
+    ):
+        second_worker.execute(materialization_id=MATERIALIZATION_ID)
+
+    release_producer.set()
+    thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert first_error == []
+    assert first_result == [AdvancedCalibrationMaterializationStatus.READY]
 
 
 def test_worker_recovers_an_expired_running_claim_with_a_new_fence(
