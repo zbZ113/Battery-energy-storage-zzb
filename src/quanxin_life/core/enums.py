@@ -48,6 +48,16 @@ class AdvancedModelRouteRole(StrEnum):
     TAIL_EFFICIENCY = "TAIL_EFFICIENCY"
 
 
+class AdvancedCalibrationMaterializationStatus(StrEnum):
+    """Persisted lifecycle for one route-specific calibration cohort."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    READY = "READY"
+    FAILED = "FAILED"
+    STALE = "STALE"
+
+
 class ModelRouteDecisionType(StrEnum):
     """Append-only manual decisions permitted in the activation ledger."""
 

@@ -25,6 +25,8 @@ EXPECTED_TABLES = {
     "model_route_activation_events",
     "model_route_activation_stream_heads",
     "calibration_cohorts",
+    "advanced_calibration_materializations",
+    "advanced_calibration_sample_bindings",
     "decision_policies",
     "approval_requests",
     "approval_actions",
@@ -216,6 +218,106 @@ def test_model_route_stream_head_is_only_an_integrity_anchor() -> None:
         "status",
         "current_artifact_id",
     }.isdisjoint(heads.c.keys())
+
+
+def test_advanced_calibration_materialization_declares_exact_route_identity() -> None:
+    materializations = Base.metadata.tables["advanced_calibration_materializations"]
+
+    assert (
+        "project_id",
+        "task",
+        "cutoff_cycle",
+        "route_role",
+        "decision_event_id",
+        "source_registration_id",
+    ) in _unique_column_sets("advanced_calibration_materializations")
+    assert ("project_id", "idempotency_key_sha256") in _unique_column_sets(
+        "advanced_calibration_materializations"
+    )
+    assert _named_index_column_sets("advanced_calibration_materializations")[
+        "ix_advanced_calibration_project_status"
+    ] == ("project_id", "status")
+
+    required_hashes = {
+        "artifact_manifest_sha256",
+        "normalization_statistics_sha256",
+        "ledger_head_sha256",
+        "source_identity_sha256",
+        "sample_manifest_sha256",
+        "idempotency_key_sha256",
+        "request_sha256",
+    }
+    for column_name in required_hashes:
+        column = materializations.c[column_name]
+        assert isinstance(column.type, String)
+        assert column.type.length == 64
+    assert materializations.c.sample_manifest_sha256.nullable is True
+
+    foreign_keys = {
+        column.name: {
+            foreign_key.target_fullname for foreign_key in column.foreign_keys
+        }
+        for column in materializations.columns
+        if column.foreign_keys
+    }
+    assert foreign_keys == {
+        "project_id": {"projects.id"},
+        "artifact_id": {"model_artifacts.id"},
+        "decision_event_id": {"model_route_activation_events.id"},
+        "created_by_user_id": {"users.id"},
+    }
+
+
+def test_advanced_calibration_materialization_declares_state_checks() -> None:
+    checks = _named_check_constraints("advanced_calibration_materializations")
+
+    assert checks["ck_advanced_calibration_coordinates"] == (
+        "cutoff_cycle IN (20, 50, 100, 150) AND "
+        "ledger_sequence_number > 0 AND sample_count >= 0"
+    )
+    assert checks["ck_advanced_calibration_status"] == (
+        "status IN ('PENDING', 'RUNNING', 'READY', 'FAILED', 'STALE')"
+    )
+    assert checks["ck_advanced_calibration_task_role"] == (
+        "(task = 'RUL' AND ((cutoff_cycle = 20 AND route_role = 'DEFAULT') OR "
+        "(cutoff_cycle IN (50, 100, 150) AND route_role = 'COVERAGE'))) OR "
+        "(task = 'SOH' AND route_role IN ('MEAN_ACCURACY', 'TAIL_EFFICIENCY'))"
+    )
+    assert checks["ck_advanced_calibration_state_payload"] == (
+        "(status = 'PENDING' AND started_at IS NULL AND completed_at IS NULL AND "
+        "sample_count = 0 AND sample_manifest_sha256 IS NULL AND failure_code IS NULL) "
+        "OR (status = 'RUNNING' AND started_at IS NOT NULL AND completed_at IS NULL "
+        "AND sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
+        "failure_code IS NULL) OR (status = 'READY' AND started_at IS NOT NULL AND "
+        "completed_at IS NOT NULL AND sample_count > 0 AND "
+        "sample_manifest_sha256 IS NOT NULL AND failure_code IS NULL) OR "
+        "(status = 'FAILED' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
+        "AND sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
+        "failure_code IS NOT NULL) OR (status = 'STALE' AND started_at IS NOT NULL "
+        "AND completed_at IS NOT NULL AND sample_count > 0 AND "
+        "sample_manifest_sha256 IS NOT NULL AND failure_code IS NOT NULL)"
+    )
+
+
+def test_advanced_calibration_sample_bindings_are_ordered_and_unique() -> None:
+    bindings = Base.metadata.tables["advanced_calibration_sample_bindings"]
+
+    unique_columns = _unique_column_sets("advanced_calibration_sample_bindings")
+    assert ("materialization_id", "ordinal") in unique_columns
+    assert ("materialization_id", "cell_id") in unique_columns
+    assert ("materialization_id", "result_id") in unique_columns
+    assert _named_check_constraints("advanced_calibration_sample_bindings") == {
+        "ck_advanced_calibration_sample_ordinal": "ordinal >= 0",
+        "ck_advanced_calibration_sample_sha_length": "length(sample_sha256) = 64",
+    }
+    assert {
+        foreign_key.target_fullname
+        for foreign_key in bindings.c.materialization_id.foreign_keys
+    } == {"advanced_calibration_materializations.id"}
+    assert {
+        foreign_key.target_fullname
+        for foreign_key in bindings.c.result_id.foreign_keys
+    } == {"tool_results.id"}
 
 
 def test_agent_run_control_plane_columns_are_strictly_declared() -> None:

@@ -38,6 +38,8 @@ EXPECTED_TABLES = {
     "experiment_runs",
     "model_route_activation_events",
     "model_route_activation_stream_heads",
+    "advanced_calibration_materializations",
+    "advanced_calibration_sample_bindings",
 }
 
 

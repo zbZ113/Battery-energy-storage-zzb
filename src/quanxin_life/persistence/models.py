@@ -807,6 +807,169 @@ class CalibrationCohort(Base):
     )
 
 
+class AdvancedCalibrationMaterialization(Base):
+    __tablename__ = "advanced_calibration_materializations"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "task",
+            "cutoff_cycle",
+            "route_role",
+            "decision_event_id",
+            "source_registration_id",
+            name="uq_advanced_calibration_exact_route",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "idempotency_key_sha256",
+            name="uq_advanced_calibration_idempotency",
+        ),
+        CheckConstraint(
+            "cutoff_cycle IN (20, 50, 100, 150) AND "
+            "ledger_sequence_number > 0 AND sample_count >= 0",
+            name="ck_advanced_calibration_coordinates",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING', 'RUNNING', 'READY', 'FAILED', 'STALE')",
+            name="ck_advanced_calibration_status",
+        ),
+        CheckConstraint(
+            "(task = 'RUL' AND ((cutoff_cycle = 20 AND route_role = 'DEFAULT') OR "
+            "(cutoff_cycle IN (50, 100, 150) AND route_role = 'COVERAGE'))) OR "
+            "(task = 'SOH' AND route_role IN ('MEAN_ACCURACY', 'TAIL_EFFICIENCY'))",
+            name="ck_advanced_calibration_task_role",
+        ),
+        CheckConstraint(
+            "(status = 'PENDING' AND started_at IS NULL AND completed_at IS NULL AND "
+            "sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
+            "failure_code IS NULL) OR "
+            "(status = 'RUNNING' AND started_at IS NOT NULL AND completed_at IS NULL "
+            "AND sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
+            "failure_code IS NULL) OR "
+            "(status = 'READY' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
+            "AND sample_count > 0 AND sample_manifest_sha256 IS NOT NULL AND "
+            "failure_code IS NULL) OR "
+            "(status = 'FAILED' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
+            "AND sample_count = 0 AND sample_manifest_sha256 IS NULL AND "
+            "failure_code IS NOT NULL) OR "
+            "(status = 'STALE' AND started_at IS NOT NULL AND completed_at IS NOT NULL "
+            "AND sample_count > 0 AND sample_manifest_sha256 IS NOT NULL AND "
+            "failure_code IS NOT NULL)",
+            name="ck_advanced_calibration_state_payload",
+        ),
+        CheckConstraint(
+            "length(artifact_manifest_sha256) = 64 AND "
+            "length(normalization_statistics_sha256) = 64 AND "
+            "length(ledger_head_sha256) = 64 AND "
+            "length(source_identity_sha256) = 64 AND "
+            "(sample_manifest_sha256 IS NULL OR "
+            "length(sample_manifest_sha256) = 64) AND "
+            "length(idempotency_key_sha256) = 64 AND "
+            "length(request_sha256) = 64",
+            name="ck_advanced_calibration_hash_lengths",
+        ),
+        Index(
+            "ix_advanced_calibration_project_status",
+            "project_id",
+            "status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id"), nullable=False
+    )
+    task: Mapped[str] = mapped_column(String(32), nullable=False)
+    cutoff_cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    route_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    data_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    split_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(200), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("model_artifacts.id"), nullable=False
+    )
+    artifact_manifest_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    normalization_statistics_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    decision_event_id: Mapped[str] = mapped_column(
+        ForeignKey("model_route_activation_events.id"), nullable=False
+    )
+    ledger_sequence_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    ledger_head_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_registration_id: Mapped[str] = mapped_column(
+        String(200), nullable=False
+    )
+    source_identity_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    sample_manifest_sha256: Mapped[str | None] = mapped_column(String(64))
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    idempotency_key_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), default=utc_now, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    failure_code: Mapped[str | None] = mapped_column(String(100))
+
+
+class AdvancedCalibrationSampleBinding(Base):
+    __tablename__ = "advanced_calibration_sample_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "materialization_id",
+            "ordinal",
+            name="uq_advanced_calibration_sample_ordinal",
+        ),
+        UniqueConstraint(
+            "materialization_id",
+            "cell_id",
+            name="uq_advanced_calibration_sample_cell",
+        ),
+        UniqueConstraint(
+            "materialization_id",
+            "result_id",
+            name="uq_advanced_calibration_sample_result",
+        ),
+        CheckConstraint(
+            "ordinal >= 0",
+            name="ck_advanced_calibration_sample_ordinal",
+        ),
+        CheckConstraint(
+            "length(sample_sha256) = 64",
+            name="ck_advanced_calibration_sample_sha_length",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    materialization_id: Mapped[str] = mapped_column(
+        ForeignKey(
+            "advanced_calibration_materializations.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    cell_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    result_id: Mapped[str] = mapped_column(
+        ForeignKey("tool_results.id"), nullable=False
+    )
+    sample_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), default=utc_now, nullable=False
+    )
+
+
 class DecisionPolicy(Base):
     __tablename__ = "decision_policies"
     __table_args__ = (

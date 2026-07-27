@@ -1,6 +1,7 @@
 """Stable, service-independent domain contracts."""
 
 from quanxin_life.core.enums import (
+    AdvancedCalibrationMaterializationStatus,
     AdvancedModelRouteRole,
     AdvancedModelTask,
     AgentDispatchStatus,
@@ -52,6 +53,7 @@ from quanxin_life.core.schemas import (
 )
 
 __all__ = [
+    "AdvancedCalibrationMaterializationStatus",
     "AdvancedModelRouteRole",
     "AdvancedModelTask",
     "AgentDispatchStatus",
