@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from threading import RLock
 from typing import TYPE_CHECKING, Protocol
 
 from quanxin_life.audit.numeric_firewall import AuditLedger
-from quanxin_life.core import ToolResult, UserRole
+from quanxin_life.core import (
+    AdvancedModelRouteRole,
+    AdvancedModelTask,
+    ToolResult,
+    UserRole,
+)
 
 if TYPE_CHECKING:
     from quanxin_life.application.agent_run_invocation import (
@@ -29,6 +35,60 @@ class ProjectContextValidator(Protocol):
 
 class RegisteredResultResolver(Protocol):
     def resolve_registered_result(self, result_id: str) -> ToolResult: ...
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedProjectResult:
+    """One ordered ToolResult in an atomic project materialization."""
+
+    ordinal: int
+    cell_id: str
+    result: ToolResult
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectMaterializationCommit:
+    """Frozen worker claim, route and source identity for one atomic cohort."""
+
+    materialization_id: str
+    project_id: str
+    task: AdvancedModelTask
+    cutoff_cycle: int
+    route_role: AdvancedModelRouteRole
+    data_version: str
+    split_version: str
+    feature_version: str
+    artifact_id: str
+    artifact_manifest_sha256: str
+    model_version: str
+    normalization_statistics_sha256: str
+    decision_event_id: str
+    ledger_sequence_number: int
+    ledger_head_sha256: str
+    source_registration_id: str
+    source_identity_sha256: str
+    request_sha256: str
+    claim_token: str
+    claim_attempt: int
+    claim_lease_expires_at: datetime
+    samples: tuple[MaterializedProjectResult, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectMaterializationReceipt:
+    """Non-numeric receipt for one READY atomic materialization."""
+
+    materialization_id: str
+    sample_count: int
+    sample_manifest_sha256: str
+    result_ids: tuple[str, ...]
+
+
+class AtomicProjectResultMaterializer(Protocol):
+    def commit_advanced_calibration_materialization(
+        self,
+        commit: ProjectMaterializationCommit,
+    ) -> ProjectMaterializationReceipt: ...
 
 
 class ProjectResultLedger(Protocol):
@@ -194,8 +254,12 @@ class BoundProjectResultResolver:
 
 
 __all__ = [
+    "AtomicProjectResultMaterializer",
     "BoundProjectResultResolver",
+    "MaterializedProjectResult",
     "ProjectAuditLedger",
+    "ProjectMaterializationCommit",
+    "ProjectMaterializationReceipt",
     "ProjectResultLedger",
     "ProjectToolResultBinding",
     "RegisteredResultResolver",

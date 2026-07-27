@@ -5,6 +5,9 @@ from uuid import uuid4
 
 import pytest
 
+from quanxin_life.application.advanced_calibration_materialization import (
+    ADVANCED_CALIBRATION_SAMPLE_PRODUCER_VERSION,
+)
 from quanxin_life.application.invocation_context import (
     ProjectInvocationSource,
     VerifiedProjectInvocationContext,
@@ -41,6 +44,10 @@ from quanxin_life.tools.registry import (
     ToolExecutionScope,
     ToolRegistry,
 )
+
+MATERIALIZATION_ID = "f8a5a6ff-f5c0-46c8-9ae1-40313007966a"
+SOURCE_REGISTRATION_ID = "matr-three-batch-final-v1"
+SOURCE_IDENTITY_SHA256 = "d" * 64
 
 
 def _context() -> VerifiedProjectInvocationContext:
@@ -81,6 +88,11 @@ def _runtime(*, task: AdvancedModelTask, role: AdvancedModelRouteRole) -> dict[s
         ),
         "artifact_id": str(uuid4()),
         "artifact_manifest_sha256": "a" * 64,
+        "model_version": "advanced-model-v1",
+        "dataset_id": "MATR",
+        "data_version": "matr-three-batch-v1",
+        "feature_version": "cyclepatch-multichannel-v1",
+        "split_version": "matr-cell-split-v1",
         "normalization_statistics_sha256": "b" * 64,
         "decision_event_id": str(uuid4()),
         "ledger_sequence_number": 7,
@@ -95,10 +107,47 @@ def _result(
     tool_name: StandardToolName,
     result_id: str | None = None,
 ) -> ToolResult:
+    calibration_sample = artifact_type in {
+        ADVANCED_RUL_CALIBRATION_SAMPLE_EVIDENCE_TYPE,
+        ADVANCED_SOH_CALIBRATION_SAMPLE_EVIDENCE_TYPE,
+    }
+    provenance = (
+        [
+            ProvenanceRecord(
+                source_id=(
+                    f"advanced-calibration-source-{SOURCE_REGISTRATION_ID}"
+                ),
+                source_kind=SourceKind.OBSERVED,
+                uri=(
+                    f"calibration-source://{SOURCE_REGISTRATION_ID}/"
+                    f"{SOURCE_IDENTITY_SHA256}"
+                ),
+                sha256=SOURCE_IDENTITY_SHA256,
+                description="Verified server-owned MATR calibration supervision",
+                created_at=datetime(2026, 7, 26, tzinfo=UTC),
+            ),
+            ProvenanceRecord(
+                source_id=f"advanced-model-{artifact['artifact_id']}",
+                source_kind=SourceKind.PREDICTED,
+                uri=f"artifact://advanced-model/{artifact['artifact_id']}",
+                sha256=str(artifact["artifact_manifest_sha256"]),
+                description=(
+                    "Verified active Advanced runtime used for calibration inference"
+                ),
+                created_at=datetime(2026, 7, 26, tzinfo=UTC),
+            ),
+        ]
+        if calibration_sample
+        else [_provenance(), _provenance(SourceKind.PREDICTED)]
+    )
     return ToolResult(
         result_id=result_id or str(uuid4()),
         tool_name=tool_name.value,
-        tool_version="trusted-fixture-v1",
+        tool_version=(
+            ADVANCED_CALIBRATION_SAMPLE_PRODUCER_VERSION
+            if calibration_sample
+            else "trusted-fixture-v1"
+        ),
         model_version="advanced-model-v1",
         data_version="matr-three-batch-v1",
         feature_version="cyclepatch-multichannel-v1",
@@ -106,7 +155,7 @@ def _result(
         values={"artifact_type": artifact_type, "artifact": artifact},
         uncertainty=None,
         warnings=[],
-        provenance=[_provenance(), _provenance(SourceKind.PREDICTED)],
+        provenance=provenance,
         created_at=datetime(2026, 7, 26, tzinfo=UTC),
     )
 
@@ -127,6 +176,33 @@ class _ContextValidator:
         return context
 
 
+def _production_rul_calibration_samples() -> tuple[ToolResult, ...]:
+    runtime = _runtime(
+        task=AdvancedModelTask.RUL,
+        role=AdvancedModelRouteRole.COVERAGE,
+    )
+    return tuple(
+        _result(
+            ADVANCED_RUL_CALIBRATION_SAMPLE_EVIDENCE_TYPE,
+            {
+                **runtime,
+                "dataset_id": "MATR",
+                "cell_id": f"strict-cal-{index}",
+                "cutoff_cycle": 50,
+                "split_version": "matr-cell-split-v1",
+                "materialization_id": MATERIALIZATION_ID,
+                "source_registration_id": SOURCE_REGISTRATION_ID,
+                "source_identity_sha256": SOURCE_IDENTITY_SHA256,
+                "split_partition": "calibration",
+                "point_prediction_cycle": 100.0 + index,
+                "observed_cycle": 105 + index,
+            },
+            tool_name=StandardToolName.PREDICT_CYCLE_LIFE,
+        )
+        for index in range(9)
+    )
+
+
 def test_project_rul_conformal_calibrates_and_issues_coverage_interval() -> None:
     runtime = _runtime(
         task=AdvancedModelTask.RUL,
@@ -141,6 +217,9 @@ def test_project_rul_conformal_calibrates_and_issues_coverage_interval() -> None
                 "cell_id": f"cal-{index}",
                 "cutoff_cycle": 20,
                 "split_version": "matr-cell-split-v1",
+                "materialization_id": MATERIALIZATION_ID,
+                "source_registration_id": SOURCE_REGISTRATION_ID,
+                "source_identity_sha256": SOURCE_IDENTITY_SHA256,
                 "split_partition": "calibration",
                 "point_prediction_cycle": point,
                 "observed_cycle": observed,
@@ -303,6 +382,9 @@ def test_project_conformal_calibration_rejects_requested_route_mismatch() -> Non
                 "cell_id": f"cal-{index}",
                 "cutoff_cycle": 50,
                 "split_version": "matr-cell-split-v1",
+                "materialization_id": MATERIALIZATION_ID,
+                "source_registration_id": SOURCE_REGISTRATION_ID,
+                "source_identity_sha256": SOURCE_IDENTITY_SHA256,
                 "split_partition": "calibration",
                 "point_prediction_cycle": 100.0 + index,
                 "observed_cycle": 105 + index,
@@ -328,7 +410,85 @@ def test_project_conformal_calibration_rejects_requested_route_mismatch() -> Non
         )
 
 
-def test_project_soh_conformal_calibrates_simultaneous_finite_band() -> None:
+def test_calibration_sample_requires_exact_producer_version() -> None:
+    samples = list(_production_rul_calibration_samples())
+    samples[0] = samples[0].model_copy(
+        update={"tool_version": "trusted-fixture-v1"}
+    )
+
+    with pytest.raises(ValueError, match="producer version"):
+        execute_advanced_split_conformal_tool(
+            AdvancedSplitConformalToolInput(
+                operation="calibrate",
+                task=AdvancedModelTask.RUL,
+                route_role=AdvancedModelRouteRole.COVERAGE,
+                alpha=0.10,
+                calibration_sample_result_ids=tuple(
+                    result.result_id for result in samples
+                ),
+            ),
+            context=_context(),
+            result_resolver=_Resolver(tuple(samples)),
+        )
+
+
+def test_calibration_sample_rejects_extra_artifact_fields() -> None:
+    samples = list(_production_rul_calibration_samples())
+    artifact = dict(samples[0].values["artifact"])
+    artifact["client_supplied_value"] = 123
+    samples[0] = samples[0].model_copy(
+        update={
+            "values": {
+                "artifact_type": (
+                    ADVANCED_RUL_CALIBRATION_SAMPLE_EVIDENCE_TYPE
+                ),
+                "artifact": artifact,
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="artifact"):
+        execute_advanced_split_conformal_tool(
+            AdvancedSplitConformalToolInput(
+                operation="calibrate",
+                task=AdvancedModelTask.RUL,
+                route_role=AdvancedModelRouteRole.COVERAGE,
+                alpha=0.10,
+                calibration_sample_result_ids=tuple(
+                    result.result_id for result in samples
+                ),
+            ),
+            context=_context(),
+            result_resolver=_Resolver(tuple(samples)),
+        )
+
+
+def test_calibration_sample_rejects_provenance_identity_mismatch() -> None:
+    samples = list(_production_rul_calibration_samples())
+    predicted = samples[0].provenance[1].model_copy(
+        update={"sha256": "f" * 64}
+    )
+    samples[0] = samples[0].model_copy(
+        update={"provenance": [samples[0].provenance[0], predicted]}
+    )
+
+    with pytest.raises(ValueError, match="provenance"):
+        execute_advanced_split_conformal_tool(
+            AdvancedSplitConformalToolInput(
+                operation="calibrate",
+                task=AdvancedModelTask.RUL,
+                route_role=AdvancedModelRouteRole.COVERAGE,
+                alpha=0.10,
+                calibration_sample_result_ids=tuple(
+                    result.result_id for result in samples
+                ),
+            ),
+            context=_context(),
+            result_resolver=_Resolver(tuple(samples)),
+        )
+
+
+def test_soh_calibration_sample_requires_exact_axis_through_cycle_500() -> None:
     runtime = _runtime(
         task=AdvancedModelTask.SOH,
         role=AdvancedModelRouteRole.TAIL_EFFICIENCY,
@@ -338,21 +498,70 @@ def test_project_soh_conformal_calibrates_simultaneous_finite_band() -> None:
             ADVANCED_SOH_CALIBRATION_SAMPLE_EVIDENCE_TYPE,
             {
                 **runtime,
+                "cell_id": f"truncated-cal-{index}",
+                "cutoff_cycle": 20,
+                "materialization_id": MATERIALIZATION_ID,
+                "source_registration_id": SOURCE_REGISTRATION_ID,
+                "source_identity_sha256": SOURCE_IDENTITY_SHA256,
+                "split_partition": "calibration",
+                "prediction_cycles": [21, 22],
+                "predicted_soh": [1.0, 0.99],
+                "observed_soh": [0.98, 0.97],
+                "finite_horizon_only": True,
+                "horizon_end_cycle": 500,
+            },
+            tool_name=StandardToolName.PREDICT_SOH_TRAJECTORY,
+        )
+        for index in range(9)
+    )
+
+    with pytest.raises(ValueError, match=r"cutoff.*500"):
+        execute_advanced_split_conformal_tool(
+            AdvancedSplitConformalToolInput(
+                operation="calibrate",
+                task=AdvancedModelTask.SOH,
+                route_role=AdvancedModelRouteRole.TAIL_EFFICIENCY,
+                alpha=0.10,
+                calibration_sample_result_ids=tuple(
+                    result.result_id for result in samples
+                ),
+            ),
+            context=_context(),
+            result_resolver=_Resolver(samples),
+        )
+
+
+def test_project_soh_conformal_calibrates_simultaneous_finite_band() -> None:
+    runtime = _runtime(
+        task=AdvancedModelTask.SOH,
+        role=AdvancedModelRouteRole.TAIL_EFFICIENCY,
+    )
+    cycles = list(range(21, 501))
+    baseline = [1.0 - index * 0.0005 for index in range(len(cycles))]
+    samples = tuple(
+        _result(
+            ADVANCED_SOH_CALIBRATION_SAMPLE_EVIDENCE_TYPE,
+            {
+                **runtime,
                 "dataset_id": "MATR",
                 "cell_id": f"cal-{index}",
                 "cutoff_cycle": 20,
                 "split_version": "matr-cell-split-v1",
+                "materialization_id": MATERIALIZATION_ID,
+                "source_registration_id": SOURCE_REGISTRATION_ID,
+                "source_identity_sha256": SOURCE_IDENTITY_SHA256,
                 "split_partition": "calibration",
-                "prediction_cycles": [21, 22],
-                "predicted_soh": predicted,
-                "observed_soh": observed,
+                "prediction_cycles": cycles,
+                "predicted_soh": baseline,
+                "observed_soh": [
+                    value - residual for value in baseline
+                ],
+                "finite_horizon_only": True,
+                "horizon_end_cycle": 500,
             },
             tool_name=StandardToolName.PREDICT_SOH_TRAJECTORY,
         )
-            for index, (predicted, observed) in enumerate(
-                (([1.0, 0.90], [0.98, 0.85]),) * 8
-                + (([0.95, 0.80], [0.90, 0.70]),)
-            )
+        for index, residual in enumerate((0.05,) * 8 + (0.10,))
     )
     resolver = _Resolver(samples)
     calibration = execute_advanced_split_conformal_tool(
@@ -380,9 +589,11 @@ def test_project_soh_conformal_calibrates_simultaneous_finite_band() -> None:
             "cell_id": "target",
             "cutoff_cycle": 20,
             "split_version": "matr-cell-split-v1",
-            "prediction_cycles": [21, 22],
-            "predicted_soh": [0.95, 0.80],
-            "horizon_end_cycle": 22,
+            "prediction_cycles": cycles,
+            "predicted_soh": [
+                0.95 - index * 0.0005 for index in range(len(cycles))
+            ],
+            "horizon_end_cycle": 500,
             "upstream_result_id": str(uuid4()),
             "raw_sequence_input_sha256": "1" * 64,
             "transform_config_sha256": "2" * 64,
@@ -406,10 +617,10 @@ def test_project_soh_conformal_calibrates_simultaneous_finite_band() -> None:
 
     assert band.values["artifact_type"] == ADVANCED_SOH_SPLIT_BAND_EVIDENCE_TYPE
     artifact = band.values["artifact"]
-    assert artifact["prediction_cycles"] == [21, 22]
-    assert artifact["predicted_soh"] == [0.95, 0.8]
-    assert artifact["lower_soh"] == pytest.approx([0.85, 0.70])
-    assert artifact["upper_soh"] == pytest.approx([1.05, 0.90])
+    assert artifact["prediction_cycles"] == cycles
+    assert artifact["predicted_soh"][:2] == pytest.approx([0.95, 0.9495])
+    assert artifact["lower_soh"][:2] == pytest.approx([0.85, 0.8495])
+    assert artifact["upper_soh"][:2] == pytest.approx([1.05, 1.0495])
     assert artifact["finite_horizon_only"] is True
     assert artifact["coverage_scope"] == "simultaneous_finite_trajectory"
 

@@ -5,10 +5,16 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 from uuid import UUID, uuid4
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from quanxin_life.application.advanced_split_conformal import (
     AdvancedConformalRuntimeIdentity,
@@ -37,7 +43,7 @@ from quanxin_life.core import (
     ToolResult,
     sha256_canonical,
 )
-from quanxin_life.core.schemas import ContractModel
+from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
 )
@@ -58,6 +64,9 @@ if TYPE_CHECKING:
     )
 
 ADVANCED_SPLIT_CONFORMAL_TOOL_VERSION = "advanced-split-conformal-tool-v1"
+ADVANCED_CALIBRATION_SAMPLE_PRODUCER_VERSION = (
+    "advanced-calibration-sample-producer-v1"
+)
 ADVANCED_RUL_CALIBRATION_SAMPLE_EVIDENCE_TYPE = (
     "quanxin_life.advanced_rul_calibration_sample.v1"
 )
@@ -82,6 +91,70 @@ _SOH_ROLES = {
     AdvancedModelRouteRole.MEAN_ACCURACY,
     AdvancedModelRouteRole.TAIL_EFFICIENCY,
 }
+CalibrationSOHValue = Annotated[
+    float,
+    Field(ge=0.0, le=1.5, allow_inf_nan=False),
+]
+
+
+class _AdvancedCalibrationSampleArtifact(AdvancedConformalRuntimeIdentity):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    materialization_id: str
+    source_registration_id: str = Field(min_length=1, max_length=200)
+    source_identity_sha256: Sha256
+    split_partition: Literal["calibration"]
+    cell_id: str = Field(min_length=1)
+
+    @field_validator("materialization_id")
+    @classmethod
+    def require_materialization_uuid(cls, value: str) -> str:
+        return _uuid(value, "materialization_id")
+
+
+class _AdvancedRULCalibrationSampleArtifact(
+    _AdvancedCalibrationSampleArtifact
+):
+    point_prediction_cycle: float = Field(ge=0.0, allow_inf_nan=False)
+    observed_cycle: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def require_official_cycle_life_after_cutoff(
+        self,
+    ) -> _AdvancedRULCalibrationSampleArtifact:
+        if (
+            self.point_prediction_cycle < self.cutoff_cycle
+            or self.observed_cycle <= self.cutoff_cycle
+        ):
+            raise ValueError(
+                "RUL calibration values must be after cutoff_cycle"
+            )
+        return self
+
+
+class _AdvancedSOHCalibrationSampleArtifact(
+    _AdvancedCalibrationSampleArtifact
+):
+    prediction_cycles: tuple[int, ...] = Field(min_length=1)
+    predicted_soh: tuple[CalibrationSOHValue, ...] = Field(min_length=1)
+    observed_soh: tuple[CalibrationSOHValue, ...] = Field(min_length=1)
+    finite_horizon_only: Literal[True]
+    horizon_end_cycle: Literal[500]
+
+    @model_validator(mode="after")
+    def require_exact_finite_horizon(
+        self,
+    ) -> _AdvancedSOHCalibrationSampleArtifact:
+        expected = tuple(range(self.cutoff_cycle + 1, 501))
+        if (
+            self.prediction_cycles != expected
+            or len(self.predicted_soh) != len(expected)
+            or len(self.observed_soh) != len(expected)
+        ):
+            raise ValueError(
+                "SOH calibration axis must span cutoff + 1 through cycle 500"
+            )
+        return self
 
 
 class RegisteredResultResolver(Protocol):
@@ -161,6 +234,20 @@ def execute_advanced_split_conformal_tool(
     if validated.operation == "calibrate":
         return _calibrate(validated, result_resolver=result_resolver, clock=clock)
     return _issue(validated, result_resolver=result_resolver, clock=clock)
+
+
+def validate_advanced_calibration_sample_result(
+    result: ToolResult,
+    *,
+    task: AdvancedModelTask,
+) -> None:
+    """Fail closed unless one ToolResult is an exact producer-shaped sample."""
+
+    normalized = ToolResult.model_validate(result.model_dump(mode="json"))
+    if AdvancedModelTask(task) is AdvancedModelTask.RUL:
+        _decode_rul_sample(normalized)
+    else:
+        _decode_soh_sample(normalized)
 
 
 def register_project_advanced_split_conformal_tool(
@@ -360,35 +447,58 @@ def _issue(
 
 
 def _decode_rul_sample(result: ToolResult) -> AdvancedRULCalibrationSample:
-    artifact = _artifact(result, ADVANCED_RUL_CALIBRATION_SAMPLE_EVIDENCE_TYPE)
+    artifact_payload = _artifact(
+        result,
+        ADVANCED_RUL_CALIBRATION_SAMPLE_EVIDENCE_TYPE,
+    )
     _require_tool_name(result, StandardToolName.PREDICT_CYCLE_LIFE)
-    _require_calibration_provenance(result)
-    if artifact.get("split_partition") != "calibration":
-        raise ValueError("RUL calibration sample must belong to the calibration split")
-    runtime = _runtime_from_result(result, artifact)
+    _require_calibration_sample_producer(result)
+    try:
+        artifact = _AdvancedRULCalibrationSampleArtifact.model_validate(
+            artifact_payload
+        )
+    except ValidationError as exc:
+        raise ValueError(
+            "RUL calibration sample artifact is invalid"
+        ) from exc
+    _require_calibration_provenance(result, artifact)
+    artifact_json = artifact.model_dump(mode="json")
+    runtime = _runtime_from_result(result, artifact_json)
     return AdvancedRULCalibrationSample.model_validate(
         {
-            "cell_id": artifact["cell_id"],
-            "point_prediction_cycle": artifact["point_prediction_cycle"],
-            "observed_cycle": artifact["observed_cycle"],
+            "cell_id": artifact.cell_id,
+            "point_prediction_cycle": artifact.point_prediction_cycle,
+            "observed_cycle": artifact.observed_cycle,
             "runtime": runtime.model_dump(mode="json"),
         }
     )
 
 
 def _decode_soh_sample(result: ToolResult) -> AdvancedSOHCalibrationSample:
-    artifact = _artifact(result, ADVANCED_SOH_CALIBRATION_SAMPLE_EVIDENCE_TYPE)
+    artifact_payload = _artifact(
+        result,
+        ADVANCED_SOH_CALIBRATION_SAMPLE_EVIDENCE_TYPE,
+    )
     _require_tool_name(result, StandardToolName.PREDICT_SOH_TRAJECTORY)
-    _require_calibration_provenance(result)
-    if artifact.get("split_partition") != "calibration":
-        raise ValueError("SOH calibration sample must belong to the calibration split")
-    runtime = _runtime_from_result(result, artifact)
+    _require_calibration_sample_producer(result)
+    try:
+        artifact = _AdvancedSOHCalibrationSampleArtifact.model_validate(
+            artifact_payload
+        )
+    except ValidationError as exc:
+        raise ValueError(
+            "SOH calibration sample artifact must cover cutoff + 1 "
+            "through cycle 500"
+        ) from exc
+    _require_calibration_provenance(result, artifact)
+    artifact_json = artifact.model_dump(mode="json")
+    runtime = _runtime_from_result(result, artifact_json)
     return AdvancedSOHCalibrationSample.model_validate(
         {
-            "cell_id": artifact["cell_id"],
-            "prediction_cycles": artifact["prediction_cycles"],
-            "predicted_soh": artifact["predicted_soh"],
-            "observed_soh": artifact["observed_soh"],
+            "cell_id": artifact.cell_id,
+            "prediction_cycles": artifact.prediction_cycles,
+            "predicted_soh": artifact.predicted_soh,
+            "observed_soh": artifact.observed_soh,
             "runtime": runtime.model_dump(mode="json"),
         }
     )
@@ -612,11 +722,55 @@ def _require_tool_name(
         raise ValueError("Advanced Conformal dependency tool name is invalid")
 
 
-def _require_calibration_provenance(result: ToolResult) -> None:
-    kinds = {record.source_kind for record in result.provenance}
-    if SourceKind.OBSERVED not in kinds or SourceKind.PREDICTED not in kinds:
+def _require_calibration_sample_producer(result: ToolResult) -> None:
+    if result.tool_version != ADVANCED_CALIBRATION_SAMPLE_PRODUCER_VERSION:
         raise ValueError(
-            "calibration samples require observed and predicted provenance"
+            "Advanced calibration sample producer version is invalid"
+        )
+
+
+def _require_calibration_provenance(
+    result: ToolResult,
+    artifact: _AdvancedCalibrationSampleArtifact,
+) -> None:
+    observed = tuple(
+        record
+        for record in result.provenance
+        if record.source_kind is SourceKind.OBSERVED
+    )
+    predicted = tuple(
+        record
+        for record in result.provenance
+        if record.source_kind is SourceKind.PREDICTED
+    )
+    expected_observed_source_id = (
+        f"advanced-calibration-source-{artifact.source_registration_id}"
+    )
+    expected_observed_uri = (
+        f"calibration-source://{artifact.source_registration_id}/"
+        f"{artifact.source_identity_sha256}"
+    )
+    expected_predicted_source_id = (
+        f"advanced-model-{artifact.artifact_id}"
+    )
+    expected_predicted_uri = (
+        f"artifact://advanced-model/{artifact.artifact_id}"
+    )
+    if (
+        len(result.provenance) != 2
+        or len(observed) != 1
+        or len(predicted) != 1
+        or observed[0].source_id != expected_observed_source_id
+        or observed[0].uri != expected_observed_uri
+        or observed[0].sha256 != artifact.source_identity_sha256
+        or observed[0].created_at != result.created_at
+        or predicted[0].source_id != expected_predicted_source_id
+        or predicted[0].uri != expected_predicted_uri
+        or predicted[0].sha256 != artifact.artifact_manifest_sha256
+        or predicted[0].created_at != result.created_at
+    ):
+        raise ValueError(
+            "Advanced calibration sample provenance identity is invalid"
         )
 
 
@@ -649,6 +803,7 @@ def _uuid(value: str, label: str) -> str:
 
 
 __all__ = [
+    "ADVANCED_CALIBRATION_SAMPLE_PRODUCER_VERSION",
     "ADVANCED_RUL_CALIBRATION_SAMPLE_EVIDENCE_TYPE",
     "ADVANCED_RUL_SPLIT_CALIBRATION_EVIDENCE_TYPE",
     "ADVANCED_RUL_SPLIT_INTERVAL_EVIDENCE_TYPE",
@@ -659,4 +814,5 @@ __all__ = [
     "AdvancedSplitConformalToolInput",
     "execute_advanced_split_conformal_tool",
     "register_project_advanced_split_conformal_tool",
+    "validate_advanced_calibration_sample_result",
 ]

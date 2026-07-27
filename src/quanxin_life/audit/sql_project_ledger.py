@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -17,10 +17,15 @@ from quanxin_life.audit.numeric_firewall import (
     InvalidAuditResultError,
 )
 from quanxin_life.audit.project_ledger import (
+    MaterializedProjectResult,
     ProjectContextValidator,
+    ProjectMaterializationCommit,
+    ProjectMaterializationReceipt,
     ProjectToolResultBinding,
 )
 from quanxin_life.core import (
+    AdvancedCalibrationMaterializationStatus,
+    AdvancedModelTask,
     AgentDispatchStatus,
     AgentRunStatus,
     AgentStepStatus,
@@ -35,12 +40,17 @@ from quanxin_life.core import (
 from quanxin_life.core.hashing import sha256_canonical
 from quanxin_life.persistence.database import SessionFactory, session_scope
 from quanxin_life.persistence.models import (
+    AdvancedCalibrationMaterialization,
+    AdvancedCalibrationSampleBinding,
     AgentEvent,
     AgentRun,
     AgentRunDispatch,
     AgentStep,
     ApprovalAction,
     ApprovalRequestRow,
+    ModelManifest,
+    ModelRouteActivationEvent,
+    ModelRouteActivationStreamHead,
     Project,
     ProjectToolResultBindingRecord,
     ProvenanceRecordRow,
@@ -61,6 +71,12 @@ if TYPE_CHECKING:
 
 PROJECT_RESULT_BINDING_SCHEMA_VERSION = "project-tool-result-binding-v1"
 AGENT_PROJECT_RESULT_BINDING_SCHEMA_VERSION = "project-tool-result-binding-v2"
+ADVANCED_CALIBRATION_SAMPLE_MANIFEST_SCHEMA_VERSION = (
+    "advanced-calibration-sample-manifest-v1"
+)
+ADVANCED_CALIBRATION_SAMPLE_PRODUCER_VERSION = (
+    "advanced-calibration-sample-producer-v1"
+)
 Clock = Callable[[], datetime]
 
 
@@ -182,6 +198,677 @@ class SqlProjectAuditLedger:
         except SQLAlchemyError as exc:
             raise AuditLedgerError("project ToolResult persistence failed") from exc
         return ToolResult.model_validate(normalized.model_dump(mode="json"))
+
+    def commit_advanced_calibration_materialization(
+        self,
+        commit: ProjectMaterializationCommit,
+    ) -> ProjectMaterializationReceipt:
+        """Atomically persist one fenced Advanced calibration cohort."""
+
+        normalized_samples = self._normalized_materialization_samples(commit)
+        now = self._utc(self._clock())
+        claim_lease = self._utc(commit.claim_lease_expires_at)
+        claim_token_sha256 = sha256_canonical(
+            {"claim_token": commit.claim_token}
+        )
+        try:
+            with session_scope(self._session_factory) as session:
+                project = session.scalar(
+                    select(Project)
+                    .where(Project.id == commit.project_id)
+                    .with_for_update()
+                )
+                head = session.scalar(
+                    select(ModelRouteActivationStreamHead)
+                    .where(
+                        ModelRouteActivationStreamHead.project_id
+                        == commit.project_id,
+                        ModelRouteActivationStreamHead.task
+                        == commit.task.value,
+                        ModelRouteActivationStreamHead.cutoff_cycle
+                        == commit.cutoff_cycle,
+                        ModelRouteActivationStreamHead.route_role
+                        == commit.route_role.value,
+                    )
+                    .with_for_update()
+                )
+                materialization = session.scalar(
+                    select(AdvancedCalibrationMaterialization)
+                    .where(
+                        AdvancedCalibrationMaterialization.id
+                        == commit.materialization_id
+                    )
+                    .with_for_update()
+                )
+                self._require_materialization_scope(
+                    session,
+                    project=project,
+                    head=head,
+                    materialization=materialization,
+                    commit=commit,
+                    now=now,
+                )
+                assert materialization is not None
+                if (
+                    materialization.status
+                    == AdvancedCalibrationMaterializationStatus.READY.value
+                ):
+                    return self._ready_materialization_receipt(
+                        session,
+                        materialization=materialization,
+                        commit=commit,
+                        normalized_samples=normalized_samples,
+                    )
+                if (
+                    materialization.status
+                    != AdvancedCalibrationMaterializationStatus.RUNNING.value
+                ):
+                    raise AuditLedgerError(
+                        "Advanced calibration materialization is not RUNNING"
+                    )
+                if (
+                    materialization.claim_token_sha256
+                    != claim_token_sha256
+                    or materialization.claim_attempt != commit.claim_attempt
+                    or materialization.claim_lease_expires_at is None
+                    or self._database_utc(
+                        materialization.claim_lease_expires_at
+                    )
+                    != claim_lease
+                    or claim_lease <= now
+                ):
+                    raise AuditLedgerError(
+                        "Advanced calibration materialization claim is stale"
+                    )
+                existing_bindings = tuple(
+                    session.scalars(
+                        select(AdvancedCalibrationSampleBinding).where(
+                            AdvancedCalibrationSampleBinding.materialization_id
+                            == commit.materialization_id
+                        )
+                    )
+                )
+                if existing_bindings:
+                    raise AuditLedgerError(
+                        "Advanced calibration materialization contains partial samples"
+                    )
+
+                sample_entries: list[dict[str, object]] = []
+                for sample in normalized_samples:
+                    self._require_materialization_sample_identity(
+                        commit,
+                        sample,
+                    )
+                    result = sample.result
+                    result_sha256 = sha256_canonical(
+                        result.model_dump(mode="json")
+                    )
+                    self._add_materialized_result(
+                        session,
+                        materialization=materialization,
+                        sample=sample,
+                        result_sha256=result_sha256,
+                        created_at=now,
+                    )
+                    sample_entries.append(
+                        {
+                            "ordinal": sample.ordinal,
+                            "cell_id": sample.cell_id,
+                            "result_id": result.result_id,
+                            "sample_sha256": result_sha256,
+                        }
+                    )
+                manifest_sha256 = self._materialization_manifest_sha256(
+                    commit,
+                    tuple(sample_entries),
+                )
+                materialization.status = (
+                    AdvancedCalibrationMaterializationStatus.READY.value
+                )
+                materialization.sample_count = len(normalized_samples)
+                materialization.sample_manifest_sha256 = manifest_sha256
+                materialization.completed_at = now
+                materialization.failure_code = None
+                materialization.claim_token_sha256 = None
+                materialization.claim_lease_expires_at = None
+                session.flush()
+                receipt = ProjectMaterializationReceipt(
+                    materialization_id=commit.materialization_id,
+                    sample_count=len(normalized_samples),
+                    sample_manifest_sha256=manifest_sha256,
+                    result_ids=tuple(
+                        sample.result.result_id
+                        for sample in normalized_samples
+                    ),
+                )
+        except AuditLedgerError:
+            raise
+        except IntegrityError as exc:
+            recovered = self._recover_ready_materialization(
+                commit,
+                normalized_samples,
+            )
+            if recovered is not None:
+                return recovered
+            raise AuditLedgerError(
+                "Advanced calibration materialization integrity check failed"
+            ) from exc
+        except SQLAlchemyError as exc:
+            recovered = self._recover_ready_materialization(
+                commit,
+                normalized_samples,
+            )
+            if recovered is not None:
+                return recovered
+            raise AuditLedgerError(
+                "Advanced calibration materialization persistence failed"
+            ) from exc
+        return receipt
+
+    def _normalized_materialization_samples(
+        self,
+        commit: ProjectMaterializationCommit,
+    ) -> tuple[MaterializedProjectResult, ...]:
+        try:
+            UUID(commit.materialization_id)
+            UUID(commit.project_id)
+            UUID(commit.artifact_id)
+            UUID(commit.decision_event_id)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise AuditLedgerError(
+                "Advanced calibration materialization identity is invalid"
+            ) from exc
+        if (
+            not commit.claim_token
+            or commit.claim_attempt <= 0
+            or commit.ledger_sequence_number <= 0
+            or not commit.samples
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration materialization claim or samples are invalid"
+            )
+        normalized = tuple(
+            MaterializedProjectResult(
+                ordinal=sample.ordinal,
+                cell_id=sample.cell_id,
+                result=self._normalized_result(sample.result),
+            )
+            for sample in commit.samples
+        )
+        ordinals = tuple(sample.ordinal for sample in normalized)
+        cell_ids = tuple(sample.cell_id for sample in normalized)
+        result_ids = tuple(sample.result.result_id for sample in normalized)
+        if (
+            ordinals != tuple(range(len(normalized)))
+            or any(not cell_id for cell_id in cell_ids)
+            or len(set(cell_ids)) != len(cell_ids)
+            or len(set(result_ids)) != len(result_ids)
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration samples are not one ordered unique cohort"
+            )
+        return normalized
+
+    def _require_materialization_scope(
+        self,
+        session: Session,
+        *,
+        project: Project | None,
+        head: ModelRouteActivationStreamHead | None,
+        materialization: AdvancedCalibrationMaterialization | None,
+        commit: ProjectMaterializationCommit,
+        now: datetime,
+    ) -> None:
+        if (
+            project is None
+            or project.status != ProjectStatus.ACTIVE.value
+            or materialization is None
+            or materialization.project_id != commit.project_id
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration materialization project is inactive"
+            )
+        actor = session.get(User, materialization.created_by_user_id)
+        actor_session = session.get(
+            SessionRecord,
+            materialization.created_by_session_id,
+        )
+        if (
+            actor is None
+            or actor.status != UserStatus.ACTIVE.value
+            or actor.must_change_credential
+            or actor.role != UserRole.ADMIN.value
+            or materialization.created_by_role != UserRole.ADMIN.value
+            or actor_session is None
+            or actor_session.user_id != actor.id
+            or actor_session.status != SessionStatus.ACTIVE.value
+            or self._database_utc(actor_session.expires_at) <= now
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration materialization ADMIN session is stale"
+            )
+        self._require_materialization_identity(materialization, commit)
+        if (
+            head is None
+            or head.head_event_id != commit.decision_event_id
+            or head.head_sequence != commit.ledger_sequence_number
+            or head.head_event_sha256 != commit.ledger_head_sha256
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration active route changed before commit"
+            )
+        event = session.get(
+            ModelRouteActivationEvent,
+            commit.decision_event_id,
+        )
+        manifest = session.scalar(
+            select(ModelManifest).where(
+                ModelManifest.artifact_id == commit.artifact_id
+            )
+        )
+        if (
+            event is None
+            or event.project_id != commit.project_id
+            or event.task != commit.task.value
+            or event.cutoff_cycle != commit.cutoff_cycle
+            or event.route_role != commit.route_role.value
+            or event.stream_sequence != commit.ledger_sequence_number
+            or event.event_sha256 != commit.ledger_head_sha256
+            or event.artifact_id != commit.artifact_id
+            or event.manifest_sha256
+            != commit.artifact_manifest_sha256
+            or manifest is None
+            or manifest.manifest_sha256
+            != commit.artifact_manifest_sha256
+            or manifest.model_version != commit.model_version
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration active route identity is invalid"
+            )
+
+    @staticmethod
+    def _require_materialization_identity(
+        materialization: AdvancedCalibrationMaterialization,
+        commit: ProjectMaterializationCommit,
+    ) -> None:
+        expected = {
+            "project_id": commit.project_id,
+            "task": commit.task.value,
+            "cutoff_cycle": commit.cutoff_cycle,
+            "route_role": commit.route_role.value,
+            "data_version": commit.data_version,
+            "split_version": commit.split_version,
+            "feature_version": commit.feature_version,
+            "artifact_id": commit.artifact_id,
+            "artifact_manifest_sha256": (
+                commit.artifact_manifest_sha256
+            ),
+            "normalization_statistics_sha256": (
+                commit.normalization_statistics_sha256
+            ),
+            "decision_event_id": commit.decision_event_id,
+            "ledger_sequence_number": commit.ledger_sequence_number,
+            "ledger_head_sha256": commit.ledger_head_sha256,
+            "source_registration_id": commit.source_registration_id,
+            "source_identity_sha256": commit.source_identity_sha256,
+            "request_sha256": commit.request_sha256,
+        }
+        if any(
+            getattr(materialization, name) != value
+            for name, value in expected.items()
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration materialization frozen identity changed"
+            )
+
+    @staticmethod
+    def _require_materialization_sample_identity(
+        commit: ProjectMaterializationCommit,
+        sample: MaterializedProjectResult,
+    ) -> None:
+        result = sample.result
+        from quanxin_life.tools.advanced_conformal import (
+            validate_advanced_calibration_sample_result,
+        )
+
+        try:
+            validate_advanced_calibration_sample_result(
+                result,
+                task=commit.task,
+            )
+        except (TypeError, ValueError) as exc:
+            raise AuditLedgerError(
+                "Advanced calibration sample contract is invalid"
+            ) from exc
+        values = result.values
+        if (
+            set(values) != {"artifact_type", "artifact"}
+            or not isinstance(values["artifact"], dict)
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration sample identity envelope is invalid"
+            )
+        artifact = values["artifact"]
+        expected = {
+            "materialization_id": commit.materialization_id,
+            "source_registration_id": commit.source_registration_id,
+            "source_identity_sha256": commit.source_identity_sha256,
+            "split_partition": "calibration",
+            "cell_id": sample.cell_id,
+            "task": commit.task.value,
+            "route_role": commit.route_role.value,
+            "artifact_id": commit.artifact_id,
+            "artifact_manifest_sha256": (
+                commit.artifact_manifest_sha256
+            ),
+            "model_version": commit.model_version,
+            "dataset_id": "MATR",
+            "cutoff_cycle": commit.cutoff_cycle,
+            "data_version": commit.data_version,
+            "feature_version": commit.feature_version,
+            "split_version": commit.split_version,
+            "normalization_statistics_sha256": (
+                commit.normalization_statistics_sha256
+            ),
+            "decision_event_id": commit.decision_event_id,
+            "ledger_sequence_number": commit.ledger_sequence_number,
+            "ledger_head_sha256": commit.ledger_head_sha256,
+        }
+        if (
+            result.tool_version
+            != ADVANCED_CALIBRATION_SAMPLE_PRODUCER_VERSION
+            or result.model_version != commit.model_version
+            or result.data_version != commit.data_version
+            or result.feature_version != commit.feature_version
+            or any(artifact.get(name) != value for name, value in expected.items())
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration sample identity does not match its materialization"
+            )
+        if commit.task is AdvancedModelTask.RUL:
+            expected_tool = "predict_cycle_life"
+            expected_type = (
+                "quanxin_life.advanced_rul_calibration_sample.v1"
+            )
+        else:
+            expected_tool = "predict_soh_trajectory"
+            expected_type = (
+                "quanxin_life.advanced_soh_calibration_sample.v1"
+            )
+        kinds = {item.source_kind for item in result.provenance}
+        if (
+            result.tool_name != expected_tool
+            or values["artifact_type"] != expected_type
+            or SourceKind.OBSERVED not in kinds
+            or SourceKind.PREDICTED not in kinds
+            or not any(
+                item.source_kind is SourceKind.OBSERVED
+                and item.sha256 == commit.source_identity_sha256
+                for item in result.provenance
+            )
+            or not any(
+                item.source_kind is SourceKind.PREDICTED
+                and item.sha256 == commit.artifact_manifest_sha256
+                for item in result.provenance
+            )
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration sample provenance identity is invalid"
+            )
+
+    def _add_materialized_result(
+        self,
+        session: Session,
+        *,
+        materialization: AdvancedCalibrationMaterialization,
+        sample: MaterializedProjectResult,
+        result_sha256: str,
+        created_at: datetime,
+    ) -> None:
+        result = sample.result
+        session.add(
+            ToolResultRecord(
+                id=result.result_id,
+                run_id=None,
+                agent_step_id=None,
+                tool_name=result.tool_name,
+                tool_version=result.tool_version,
+                model_version=result.model_version,
+                data_version=result.data_version,
+                feature_version=result.feature_version,
+                input_hash=result.input_hash,
+                values_json=dict(result.values),
+                uncertainty_json=(
+                    dict(result.uncertainty)
+                    if result.uncertainty is not None
+                    else None
+                ),
+                warnings_json=list(result.warnings),
+                created_at=result.created_at,
+            )
+        )
+        for item in result.provenance:
+            session.add(
+                ProvenanceRecordRow(
+                    id=str(uuid4()),
+                    tool_result_id=result.result_id,
+                    source_id=item.source_id,
+                    source_kind=item.source_kind.value,
+                    uri=item.uri,
+                    sha256=item.sha256,
+                    description=item.description,
+                    created_at=item.created_at,
+                )
+            )
+        binding_payload = self._binding_hash_payload(
+            result_id=result.result_id,
+            project_id=materialization.project_id,
+            actor_user_id=materialization.created_by_user_id,
+            actor_session_id=materialization.created_by_session_id,
+            actor_role=materialization.created_by_role,
+            invocation_source="HTTP",
+            agent_run_id=None,
+            tool_name=result.tool_name,
+            input_hash=result.input_hash,
+            result_sha256=result_sha256,
+            created_at=created_at,
+        )
+        session.add(
+            ProjectToolResultBindingRecord(
+                **(
+                    binding_payload
+                    | {
+                        "binding_sha256": sha256_canonical(
+                            binding_payload
+                        ),
+                        "created_at": created_at,
+                    }
+                )
+            )
+        )
+        sample_binding_payload = {
+            "materialization_id": materialization.id,
+            "ordinal": sample.ordinal,
+            "cell_id": sample.cell_id,
+            "result_id": result.result_id,
+            "sample_sha256": result_sha256,
+        }
+        session.add(
+            AdvancedCalibrationSampleBinding(
+                id=str(
+                    uuid5(
+                        UUID(materialization.id),
+                        sha256_canonical(sample_binding_payload),
+                    )
+                ),
+                **sample_binding_payload,
+                created_at=created_at,
+            )
+        )
+
+    def _ready_materialization_receipt(
+        self,
+        session: Session,
+        *,
+        materialization: AdvancedCalibrationMaterialization,
+        commit: ProjectMaterializationCommit,
+        normalized_samples: tuple[MaterializedProjectResult, ...],
+    ) -> ProjectMaterializationReceipt:
+        bindings = tuple(
+            session.scalars(
+                select(AdvancedCalibrationSampleBinding)
+                .where(
+                    AdvancedCalibrationSampleBinding.materialization_id
+                    == materialization.id
+                )
+                .order_by(AdvancedCalibrationSampleBinding.ordinal)
+            )
+        )
+        if len(bindings) != len(normalized_samples):
+            raise AuditLedgerError(
+                "Advanced calibration READY content is incomplete"
+            )
+        entries: list[dict[str, object]] = []
+        for expected, sample_binding in zip(
+            normalized_samples,
+            bindings,
+            strict=True,
+        ):
+            result_row = session.get(
+                ToolResultRecord,
+                sample_binding.result_id,
+            )
+            binding_row = session.get(
+                ProjectToolResultBindingRecord,
+                sample_binding.result_id,
+            )
+            provenance_rows = tuple(
+                session.scalars(
+                    select(ProvenanceRecordRow).where(
+                        ProvenanceRecordRow.tool_result_id
+                        == sample_binding.result_id
+                    )
+                )
+            )
+            if (
+                result_row is None
+                or binding_row is None
+                or result_row.run_id is not None
+                or result_row.agent_step_id is not None
+                or binding_row.project_id != materialization.project_id
+                or binding_row.actor_user_id
+                != materialization.created_by_user_id
+                or binding_row.actor_session_id
+                != materialization.created_by_session_id
+                or binding_row.actor_role
+                != materialization.created_by_role
+                or sample_binding.ordinal != expected.ordinal
+                or sample_binding.cell_id != expected.cell_id
+                or sample_binding.result_id != expected.result.result_id
+            ):
+                raise AuditLedgerError(
+                    "Advanced calibration READY content is invalid"
+                )
+            result = self._result_from_rows(result_row, provenance_rows)
+            self._verify_binding(binding_row, result)
+            result_sha256 = sha256_canonical(result.model_dump(mode="json"))
+            if (
+                result != expected.result
+                or sample_binding.sample_sha256 != result_sha256
+            ):
+                raise AuditLedgerError(
+                    "Advanced calibration READY content conflicts with retry"
+                )
+            entries.append(
+                {
+                    "ordinal": sample_binding.ordinal,
+                    "cell_id": sample_binding.cell_id,
+                    "result_id": sample_binding.result_id,
+                    "sample_sha256": sample_binding.sample_sha256,
+                }
+            )
+        manifest_sha256 = self._materialization_manifest_sha256(
+            commit,
+            tuple(entries),
+        )
+        if (
+            materialization.sample_count != len(bindings)
+            or materialization.sample_manifest_sha256 != manifest_sha256
+        ):
+            raise AuditLedgerError(
+                "Advanced calibration READY manifest is invalid"
+            )
+        return ProjectMaterializationReceipt(
+            materialization_id=materialization.id,
+            sample_count=len(bindings),
+            sample_manifest_sha256=manifest_sha256,
+            result_ids=tuple(item.result_id for item in bindings),
+        )
+
+    @staticmethod
+    def _materialization_manifest_sha256(
+        commit: ProjectMaterializationCommit,
+        entries: tuple[dict[str, object], ...],
+    ) -> str:
+        payload = {
+            "schema_version": (
+                ADVANCED_CALIBRATION_SAMPLE_MANIFEST_SCHEMA_VERSION
+            ),
+            "materialization_id": commit.materialization_id,
+            "project_id": commit.project_id,
+            "task": commit.task.value,
+            "cutoff_cycle": commit.cutoff_cycle,
+            "route_role": commit.route_role.value,
+            "data_version": commit.data_version,
+            "split_version": commit.split_version,
+            "feature_version": commit.feature_version,
+            "artifact_id": commit.artifact_id,
+            "artifact_manifest_sha256": (
+                commit.artifact_manifest_sha256
+            ),
+            "model_version": commit.model_version,
+            "normalization_statistics_sha256": (
+                commit.normalization_statistics_sha256
+            ),
+            "decision_event_id": commit.decision_event_id,
+            "ledger_sequence_number": commit.ledger_sequence_number,
+            "ledger_head_sha256": commit.ledger_head_sha256,
+            "source_registration_id": commit.source_registration_id,
+            "source_identity_sha256": commit.source_identity_sha256,
+            "request_sha256": commit.request_sha256,
+            "samples": list(entries),
+        }
+        return sha256_canonical(payload)
+
+    def _recover_ready_materialization(
+        self,
+        commit: ProjectMaterializationCommit,
+        normalized_samples: tuple[MaterializedProjectResult, ...],
+    ) -> ProjectMaterializationReceipt | None:
+        try:
+            with self._session_factory() as session:
+                materialization = session.get(
+                    AdvancedCalibrationMaterialization,
+                    commit.materialization_id,
+                )
+                if (
+                    materialization is None
+                    or materialization.status
+                    != AdvancedCalibrationMaterializationStatus.READY.value
+                ):
+                    return None
+                self._require_materialization_identity(
+                    materialization,
+                    commit,
+                )
+                return self._ready_materialization_receipt(
+                    session,
+                    materialization=materialization,
+                    commit=commit,
+                    normalized_samples=normalized_samples,
+                )
+        except (AuditLedgerError, SQLAlchemyError):
+            return None
 
     @classmethod
     def _require_live_agent_scope(
