@@ -27,6 +27,8 @@ class CompetitionRuntimeSettings:
     deployment_registry_root: Path
     deployment_registry_id: str
     calibration_registrations_file: Path
+    calibration_evidence_root: Path
+    agent_policy_file: Path
 
     @classmethod
     def from_environment(
@@ -54,31 +56,39 @@ class CompetitionRuntimeSettings:
         ).lower()
         if _SHA256.fullmatch(registry_id) is None:
             raise ValueError("deployment registry ID must be a SHA-256 digest")
+        data_root = _directory(environment, "QUANXIN_DATA_ROOT")
+        artifact_root = _directory(environment, "QUANXIN_ARTIFACT_ROOT")
+        policy_root = _directory(environment, "QUANXIN_POLICY_ROOT")
+        deployment_registry_root = _directory(
+            environment,
+            "QUANXIN_DEPLOYMENT_REGISTRY_ROOT",
+        )
+        calibration_registrations_file = _regular_file(
+            environment,
+            "QUANXIN_CALIBRATION_REGISTRATIONS_FILE",
+        )
+        calibration_evidence_root = _directory(
+            environment,
+            "QUANXIN_CALIBRATION_EVIDENCE_ROOT",
+        )
+        agent_policy_file = _regular_file(
+            environment,
+            "QUANXIN_AGENT_POLICY_FILE",
+        )
+        if not agent_policy_file.is_relative_to(policy_root):
+            raise ValueError("Agent policy file must remain inside QUANXIN_POLICY_ROOT")
         return cls(
             database_url=database_url,
             redis_url=redis_url,
             trusted_origin=trusted_origin,
-            data_root=_directory(
-                environment,
-                "QUANXIN_DATA_ROOT",
-            ),
-            artifact_root=_directory(
-                environment,
-                "QUANXIN_ARTIFACT_ROOT",
-            ),
-            policy_root=_directory(
-                environment,
-                "QUANXIN_POLICY_ROOT",
-            ),
-            deployment_registry_root=_directory(
-                environment,
-                "QUANXIN_DEPLOYMENT_REGISTRY_ROOT",
-            ),
+            data_root=data_root,
+            artifact_root=artifact_root,
+            policy_root=policy_root,
+            deployment_registry_root=deployment_registry_root,
             deployment_registry_id=registry_id,
-            calibration_registrations_file=_regular_file(
-                environment,
-                "QUANXIN_CALIBRATION_REGISTRATIONS_FILE",
-            ),
+            calibration_registrations_file=calibration_registrations_file,
+            calibration_evidence_root=calibration_evidence_root,
+            agent_policy_file=agent_policy_file,
         )
 
 

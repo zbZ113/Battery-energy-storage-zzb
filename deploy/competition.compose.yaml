@@ -1,0 +1,274 @@
+name: quanxin-life
+
+x-backend-environment: &backend-environment
+  - QUANXIN_DATABASE_URL_FILE=/run/secrets/database_url
+  - QUANXIN_REDIS_URL_FILE=/run/secrets/redis_url
+  - QUANXIN_TRUSTED_ORIGIN=${PUBLIC_ORIGIN}
+  - QUANXIN_DATA_ROOT=/srv/quanxin/data
+  - QUANXIN_ARTIFACT_ROOT=/srv/quanxin/artifacts
+  - QUANXIN_POLICY_ROOT=/srv/quanxin/policies
+  - QUANXIN_DEPLOYMENT_REGISTRY_ROOT=/srv/quanxin/deployment-registry
+  - QUANXIN_DEPLOYMENT_REGISTRY_ID=${DEPLOYMENT_REGISTRY_ID}
+  - QUANXIN_CALIBRATION_REGISTRATIONS_FILE=/srv/quanxin/config/calibration-sources.json
+  - QUANXIN_CALIBRATION_EVIDENCE_ROOT=/srv/quanxin/calibration-evidence
+  - QUANXIN_AGENT_POLICY_FILE=/srv/quanxin/policies/advanced-agent.json
+
+x-backend-secrets: &backend-secrets
+  - database_url
+  - redis_url
+
+x-backend-volumes: &backend-volumes
+  - ${DATA_ROOT:-/srv/quanxin/data}:/srv/quanxin/data
+  - ${ARTIFACT_ROOT:-/srv/quanxin/artifacts}:/srv/quanxin/artifacts
+  - ${POLICY_ROOT:-/srv/quanxin/policies}:/srv/quanxin/policies:ro
+  - ${DEPLOYMENT_REGISTRY_ROOT}:/srv/quanxin/deployment-registry:ro
+  - ${CALIBRATION_EVIDENCE_ROOT}:/srv/quanxin/calibration-evidence:ro
+  - ${CONFIG_ROOT:-/srv/quanxin/config}:/srv/quanxin/config:ro
+
+x-runtime-security: &runtime-security
+  security_opt:
+    - no-new-privileges:true
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m,mode=1777
+
+services:
+  postgres:
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/quanxin-postgres:${RELEASE_TAG}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: quanxin
+      POSTGRES_USER: quanxin
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ${POSTGRES_DATA_ROOT:-/srv/quanxin/postgres}:/var/lib/postgresql/data
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql:size=16m,mode=0775
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    mem_limit: 1g
+    cpus: "1.0"
+
+  redis:
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/quanxin-redis:${RELEASE_TAG}
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --aclfile
+      - /run/secrets/redis_acl
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    secrets:
+      - redis_acl
+      - redis_password
+    volumes:
+      - ${REDIS_DATA_ROOT:-/srv/quanxin/redis}:/data
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli ping
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    mem_limit: 256m
+    cpus: "0.5"
+
+  migrate:
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/quanxin-backend:${RELEASE_TAG}
+    command:
+      - python
+      - -m
+      - deploy.migrate
+    environment: *backend-environment
+    secrets: *backend-secrets
+    volumes: *backend-volumes
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+    <<: *runtime-security
+    mem_limit: 768m
+    cpus: "1.0"
+
+  api:
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/quanxin-backend:${RELEASE_TAG}
+    command:
+      - python
+      - -m
+      - uvicorn
+      - deploy.competition_api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    environment: *backend-environment
+    secrets: *backend-secrets
+    volumes: *backend-volumes
+    networks:
+      - backend
+      - edge
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    <<: *runtime-security
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    mem_limit: 1536m
+    cpus: "1.5"
+
+  worker:
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/quanxin-backend:${RELEASE_TAG}
+    command:
+      - celery
+      - -A
+      - deploy.competition_worker:app
+      - worker
+      - --queues
+      - agent-runs,advanced-calibration
+      - --concurrency
+      - "1"
+      - --loglevel
+      - INFO
+    environment: *backend-environment
+    secrets: *backend-secrets
+    volumes: *backend-volumes
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    <<: *runtime-security
+    mem_limit: 2304m
+    cpus: "2.0"
+
+  frontend:
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/quanxin-frontend:${RELEASE_TAG}
+    restart: unless-stopped
+    networks:
+      - edge
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000')
+            .then((response) => {
+              if (!response.ok) process.exit(1);
+            })
+            .catch(() => process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s
+    mem_limit: 512m
+    cpus: "0.75"
+
+  gateway:
+    image: ${ACR_REGISTRY}/${ACR_NAMESPACE}/quanxin-nginx:${RELEASE_TAG}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/competition.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${LETSENCRYPT_ROOT:-/etc/letsencrypt}:/etc/letsencrypt:ro
+      - ${ACME_WEBROOT:-/srv/quanxin/acme}:/var/www/certbot:ro
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=32m,mode=0755
+      - /var/run:size=8m,mode=0755
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget --no-check-certificate -q -O /dev/null https://127.0.0.1/health
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    mem_limit: 128m
+    cpus: "0.25"
+
+networks:
+  edge:
+  backend:
+    internal: true
+
+secrets:
+  postgres_password:
+    file: ${QUANXIN_SECRETS_ROOT}/postgres_password
+  database_url:
+    file: ${QUANXIN_SECRETS_ROOT}/database_url
+  redis_acl:
+    file: ${QUANXIN_SECRETS_ROOT}/redis_acl
+  redis_password:
+    file: ${QUANXIN_SECRETS_ROOT}/redis_password
+  redis_url:
+    file: ${QUANXIN_SECRETS_ROOT}/redis_url

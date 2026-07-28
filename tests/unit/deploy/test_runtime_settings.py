@@ -20,12 +20,23 @@ def _environment(tmp_path: Path) -> dict[str, str]:
         encoding="utf-8",
     )
     roots = {}
-    for name in ("data", "artifacts", "policies", "deployment-registry"):
+    for name in (
+        "data",
+        "artifacts",
+        "policies",
+        "deployment-registry",
+        "calibration-evidence",
+    ):
         root = tmp_path / name
         root.mkdir()
         roots[name] = root
     registrations = tmp_path / "calibration-registrations.json"
     registrations.write_text("[]\n", encoding="utf-8")
+    agent_policy = roots["policies"] / "advanced-agent.json"
+    agent_policy.write_text(
+        '{"schema_version":"advanced-agent-policy-v1","conformal_alpha":0.1}\n',
+        encoding="utf-8",
+    )
     return {
         "QUANXIN_DATABASE_URL_FILE": str(database_secret),
         "QUANXIN_REDIS_URL_FILE": str(redis_secret),
@@ -38,6 +49,10 @@ def _environment(tmp_path: Path) -> dict[str, str]:
         ),
         "QUANXIN_DEPLOYMENT_REGISTRY_ID": "a" * 64,
         "QUANXIN_CALIBRATION_REGISTRATIONS_FILE": str(registrations),
+        "QUANXIN_CALIBRATION_EVIDENCE_ROOT": str(
+            roots["calibration-evidence"]
+        ),
+        "QUANXIN_AGENT_POLICY_FILE": str(agent_policy),
     }
 
 
@@ -54,6 +69,8 @@ def test_runtime_settings_load_only_explicit_files_and_paths(tmp_path: Path) -> 
     assert settings.deployment_registry_id == "a" * 64
     assert settings.data_root.is_absolute()
     assert settings.calibration_registrations_file.is_file()
+    assert settings.calibration_evidence_root.is_dir()
+    assert settings.agent_policy_file.is_file()
 
 
 def test_runtime_settings_repr_never_exposes_credentials(tmp_path: Path) -> None:

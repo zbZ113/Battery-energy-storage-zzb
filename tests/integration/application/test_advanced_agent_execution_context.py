@@ -7,6 +7,8 @@ from uuid import UUID, uuid4, uuid5
 
 import pytest
 
+from deploy.advanced_agent_context import CompetitionAgentPolicyContextResolver
+from deploy.competition_inputs import AdvancedAgentRuntimePolicy
 from quanxin_life.application.advanced_agent_execution_context import (
     AdvancedAgentExecutionContextError,
     AdvancedAgentExecutionContextResolver,
@@ -184,39 +186,12 @@ class _RuntimeResolver:
         return self.revalidation_result or runtime
 
 
-class _Delegate:
-    def __init__(self) -> None:
-        self.context_calls: list[tuple[str, str, str]] = []
-
-    def resolve_dataset_artifact(
-        self,
-        *,
-        run_id: str,
-        project_id: str,
-        dataset_id: str,
-    ) -> object:
-        del run_id, project_id, dataset_id
-        raise AssertionError("Advanced resolver must verify the bound record batch")
-
-    def resolve_context(
-        self,
-        *,
-        run_id: str,
-        project_id: str,
-        reference: str,
-    ) -> object:
-        self.context_calls.append((run_id, project_id, reference))
-        if reference == "context.rul_task":
-            return AdvancedModelTask.RUL.value
-        raise KeyError(reference)
-
-
 @dataclass(slots=True)
 class _Fixture:
     session_factory: SessionFactory
     record_batch_resolver: _RecordBatchResolver
     runtime_resolver: _RuntimeResolver
-    delegate: _Delegate
+    delegate: CompetitionAgentPolicyContextResolver
     resolver: AdvancedAgentExecutionContextResolver
     results: dict[AdvancedModelTask, tuple[str, ...]]
 
@@ -232,12 +207,20 @@ def fixture(tmp_path) -> _Fixture:
     record_batch_resolver = _RecordBatchResolver(batch)
     runtimes = (_runtime(RUL_ROUTE), _runtime(SOH_ROUTE))
     runtime_resolver = _RuntimeResolver(runtimes)
-    delegate = _Delegate()
     context_service = ProjectInvocationContextService(
         session_factory,
         clock=lambda: NOW,
     )
     _seed_base(session_factory)
+    delegate = CompetitionAgentPolicyContextResolver(
+        session_factory,
+        context_service=context_service,
+        record_batch_resolver=record_batch_resolver,
+        policy=AdvancedAgentRuntimePolicy(
+            schema_version="advanced-agent-policy-v1",
+            conformal_alpha=0.1,
+        ),
+    )
     _seed_route_and_materialization(session_factory, RUL_ROUTE)
     _seed_route_and_materialization(session_factory, SOH_ROUTE)
     ledger = SqlProjectAuditLedger(
@@ -356,25 +339,23 @@ def test_rejects_calibration_ids_when_active_route_changes_during_validation(
 def test_populates_only_server_owned_calibration_references(
     fixture: _Fixture,
 ) -> None:
-    assert (
-        fixture.resolver.resolve_context(
+    expected = {
+        "context.rul_task": AdvancedModelTask.RUL,
+        "context.soh_task": AdvancedModelTask.SOH,
+        "context.rul_point_route_role": AdvancedModelRouteRole.POINT_ACCURACY,
+        "context.rul_coverage_route_role": AdvancedModelRouteRole.COVERAGE,
+        "context.soh_route_role": AdvancedModelRouteRole.MEAN_ACCURACY,
+        "context.conformal_calibrate_operation": "calibrate",
+        "context.conformal_issue_operation": "issue",
+        "context.conformal_alpha": 0.1,
+    }
+
+    for reference, value in expected.items():
+        assert fixture.resolver.resolve_context(
             run_id=RUN_ID,
             project_id=PROJECT_ID,
-            reference="context.rul_task",
-        )
-        == AdvancedModelTask.RUL.value
-    )
-    assert fixture.delegate.context_calls == [
-        (RUN_ID, PROJECT_ID, "context.rul_task")
-    ]
-    assert not fixture.delegate.context_calls or all(
-        reference
-        not in {
-            "context.rul_calibration_sample_result_ids",
-            "context.soh_calibration_sample_result_ids",
-        }
-        for _, _, reference in fixture.delegate.context_calls
-    )
+            reference=reference,
+        ) == value
 
 
 def test_rejects_target_cell_that_is_part_of_calibration_cohort(

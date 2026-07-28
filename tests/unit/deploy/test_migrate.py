@@ -20,12 +20,17 @@ class _Config:
 
 def _settings(tmp_path: Path) -> CompetitionRuntimeSettings:
     roots = []
-    for name in ("data", "artifacts", "policies", "registry"):
+    for name in ("data", "artifacts", "policies", "registry", "evidence"):
         root = tmp_path / name
         root.mkdir()
         roots.append(root)
     registrations = tmp_path / "registrations.json"
     registrations.write_text("[]\n", encoding="utf-8")
+    policy = roots[2] / "advanced-agent.json"
+    policy.write_text(
+        '{"schema_version":"advanced-agent-policy-v1","conformal_alpha":0.1}\n',
+        encoding="utf-8",
+    )
     return CompetitionRuntimeSettings(
         database_url=SecretStr(
             "postgresql+psycopg://quanxin:p%40ss@postgres:5432/quanxin"
@@ -38,6 +43,8 @@ def _settings(tmp_path: Path) -> CompetitionRuntimeSettings:
         deployment_registry_root=roots[3],
         deployment_registry_id="a" * 64,
         calibration_registrations_file=registrations,
+        calibration_evidence_root=roots[4],
+        agent_policy_file=policy,
     )
 
 
