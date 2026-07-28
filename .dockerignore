@@ -21,7 +21,10 @@ deploy/secrets/
 data/
 artifacts/
 models/
+reports/
 reports/generated/
+runs/
+server-results/
 *.pkl
 *.pickle
 *.joblib

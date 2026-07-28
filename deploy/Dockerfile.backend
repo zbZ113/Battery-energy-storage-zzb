@@ -1,0 +1,31 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+RUN groupadd --system --gid 10001 quanxin \
+    && useradd --system --uid 10001 --gid quanxin --home-dir /app quanxin
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY deploy ./deploy
+COPY migrations ./migrations
+COPY scripts ./scripts
+COPY configs ./configs
+COPY alembic.ini ./
+
+RUN python -m pip install --upgrade "pip>=26.1.2,<27" "setuptools>=83" \
+    && python -m pip install \
+        ".[agents,auth,data,knowledge,ml,api,infrastructure,persistence,reporting]" \
+    && python -m compileall -q src deploy migrations
+
+RUN mkdir -p /srv/quanxin/artifacts /srv/quanxin/data /srv/quanxin/policies \
+    && chown -R quanxin:quanxin /app /srv/quanxin
+
+USER quanxin
+
+EXPOSE 8000
