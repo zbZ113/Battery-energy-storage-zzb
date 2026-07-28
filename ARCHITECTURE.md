@@ -287,18 +287,31 @@ fenced claim 覆盖新结果或写入 FAILED。
 
 ### 完整应用装配
 
-代码和测试装配已存在，但目标环境仍需提供：
+`deploy/competition.compose.yaml` 是个人比赛单机部署拓扑。它由私有 ACR 中的
+版本化镜像启动：
 
-- PostgreSQL 与 Alembic migrations；
-- Redis 和 Celery Worker；
-- 受管制品目录或对象存储；
-- 认证、项目、record batch 和审批数据；
-- 完整 FastAPI 组合根；
-- Next.js 环境配置；
-- 监控、TLS、备份、恢复和密钥管理。
+- PostgreSQL/pgvector；
+- Redis ACL 与 AOF；
+- 一次性 Alembic migration service；
+- 完整 FastAPI competition composition root；
+- 同时消费 `agent-runs` 与 `advanced-calibration` 的 Celery Worker；
+- standalone Next.js；
+- 仅向宿主机发布 80/443 的 Nginx HTTPS gateway。
 
-因此“纵向 E2E 已验证”不等于“生产部署已完成”。部署链将在独立设计中决定，
-不在架构文档中假设外部基础设施已经存在。
+后端网络标记为 `internal`，PostgreSQL、Redis、API 和前端端口不直接发布。运行服务
+使用 secret files、只读根文件系统、`no-new-privileges`、受控 tmpfs 和显式资源上限。
+模型 deployment registry、calibration evidence、策略和配置以只读宿主机目录挂载；
+数据库、Redis 和可写数据使用独立持久化目录。
+
+发布链由 `.github/workflows/publish-acr.yml` 手动触发，将 backend、frontend 以及
+固定版本的 PostgreSQL、Redis、Nginx 镜像镜像到私有 ACR，并在 job summary 记录
+五个镜像 digest。工作流存在不等于镜像已经发布；Compose 文件存在也不等于目标
+ECS 已上线。
+
+当前状态是：竞赛部署代码和契约测试已完成，目标 ECS 的 Docker、网络边界和 TLS
+前置设施已建立；仍需完成 ACR 发布、镜像拉取、migration、ADMIN 初始化、正式模型
+与 calibration evidence 激活、浏览器纵向 E2E 和恢复演练。因此“纵向 E2E 已验证”
+仍不等于“目标环境部署已完成”。
 
 ## 扩展能力
 
@@ -321,5 +334,8 @@ fenced claim 覆盖新结果或写入 FAILED。
 - [已知限制](docs/limitations.md)
 - [可复现性](docs/reproducibility.md)
 - [运行与装配指南](docs/runtime-setup.md)
+- [竞赛 ECS 部署](docs/deployment/competition-ecs.md)
+- [竞赛运维 Runbook](docs/deployment/operations-runbook.md)
+- [部署安全与 Secrets](docs/deployment/security-and-secrets.md)
 - [数据契约](DATA_CONTRACT.md)
 - [实验协议](EXPERIMENT_PROTOCOL.md)

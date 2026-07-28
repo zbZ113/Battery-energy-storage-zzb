@@ -1,1 +1,4 @@
 *.sh text eol=lf
+docs/source-data/advanced-final-20260723/*.csv text eol=lf
+docs/assets/benchmark/advanced-final-20260723/manifest.json text eol=lf
+docs/assets/benchmark/advanced-final-20260723/*.png binary

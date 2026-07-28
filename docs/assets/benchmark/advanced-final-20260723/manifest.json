@@ -1,0 +1,97 @@
+{
+  "schema_version": "public-documentation-evidence-package-v1",
+  "created_at": "2026-07-28T13:50:15Z",
+  "copy_mode": "byte_exact_no_recalculation",
+  "source": {
+    "experiment": "MATR three-batch Advanced Final",
+    "source_commit": "232d9fc8957bb547ca2b80205802f377864e982b",
+    "output_index_sha256": "d201224870a28c655f66a810bc94f90ad28133e06f2fb4a7285195274c303d82",
+    "source_figure_manifest_sha256": "d8d69e3bbd9a51222bef73501c2e641b695eaa2d03c643671f344c6080de3589",
+    "backend": "Python/Matplotlib",
+    "validation_status": "VALIDATED",
+    "run_count": 80,
+    "rul_prediction_rows": 1080,
+    "soh_trajectory_rows": 500000,
+    "cutoff_cycles": [
+      20,
+      50,
+      100,
+      150
+    ],
+    "seeds": [
+      38,
+      39,
+      40,
+      41,
+      42
+    ]
+  },
+  "privacy": {
+    "contains_absolute_paths": false,
+    "contains_credentials": false,
+    "contains_enterprise_identifiers": false,
+    "cell_identifiers": "project MATR identifiers retained only where required by the trajectory figure"
+  },
+  "files": [
+    {
+      "path": "Figure_2_rul_cutoff_performance.png",
+      "role": "RUL five-seed cutoff comparison",
+      "source_relative_path": "outputs/Figure_2_rul_cutoff_performance.png",
+      "size_bytes": 243510,
+      "sha256": "d398486206a24a76986115101c5a1f0f34fda4fab6ccf5e80e6a5c37ecf65dac"
+    },
+    {
+      "path": "Figure_4_soh_trajectory_examples.png",
+      "role": "rule-selected SOH trajectory examples",
+      "source_relative_path": "outputs/Figure_4_soh_trajectory_examples.png",
+      "size_bytes": 301508,
+      "sha256": "9fc1d8612513b2bc2b57964a675930803bafc6c0f96c62b047f9c3a5a81843c5"
+    },
+    {
+      "path": "Figure_6_model_tradeoff.png",
+      "role": "accuracy, stability and A100 training-resource trade-off",
+      "source_relative_path": "outputs/Figure_6_model_tradeoff.png",
+      "size_bytes": 279946,
+      "sha256": "62a942418965faa9a103942c49c84e97b0b73ab0c8b52b9db67727e20129a330"
+    },
+    {
+      "path": "../../../source-data/advanced-final-20260723/Figure_2_rul_cutoff_performance__five_seed_summary.csv",
+      "role": "Figure 2 source data",
+      "source_relative_path": "source_data/Figure_2_rul_cutoff_performance__five_seed_summary.csv",
+      "row_count": 32,
+      "size_bytes": 2368,
+      "sha256": "d1cd95e67a3c0aebd96f28ee38a20c9ba31511c04625c3bbe23c1b5c96263f44"
+    },
+    {
+      "path": "../../../source-data/advanced-final-20260723/Figure_4_soh_trajectory_examples__selected_cells.csv",
+      "role": "Figure 4 deterministic selection evidence",
+      "source_relative_path": "source_data/Figure_4_soh_trajectory_examples__selected_cells.csv",
+      "row_count": 5,
+      "size_bytes": 312,
+      "sha256": "e7b2c3be16e64f889015b9c399ccf55d6b8e700887f05127623bc7e14c3b2636"
+    },
+    {
+      "path": "../../../source-data/advanced-final-20260723/Figure_4_soh_trajectory_examples__trajectory_summary.csv",
+      "role": "Figure 4 five-seed trajectory summary",
+      "source_relative_path": "source_data/Figure_4_soh_trajectory_examples__trajectory_summary.csv",
+      "row_count": 8295,
+      "size_bytes": 1048729,
+      "sha256": "e2b8d3f911cb773878d855cb904548e5a6925bba27da966aeeec2df6b506ffcb"
+    },
+    {
+      "path": "../../../source-data/advanced-final-20260723/Figure_6_model_tradeoff__resource_summary.csv",
+      "role": "Figure 6 source data",
+      "source_relative_path": "source_data/Figure_6_model_tradeoff__resource_summary.csv",
+      "row_count": 16,
+      "size_bytes": 3046,
+      "sha256": "a191ce3950ee96416e48ef662db9cc7977fc4444449dd0f37d6bbb4d9fde9326"
+    }
+  ],
+  "boundaries": [
+    "PNG and CSV files were copied byte-for-byte from the validated figure package.",
+    "No metric, prediction, interval or figure was recomputed for documentation.",
+    "The five-seed min-max band in Figure 4 is not a conformal prediction interval.",
+    "Training time and peak GPU memory in Figure 6 are not online inference benchmarks.",
+    "The complete result archive, model weights, logs and high-resolution exports remain outside Git."
+  ]
+}

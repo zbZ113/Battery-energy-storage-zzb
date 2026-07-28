@@ -1,3 +1,11 @@
+# 扩展技术路线图
+
+> 状态说明（2026-07-28）：本文保留完整研究与扩展技术全景，其中包含 legacy、
+> 协议沙箱和未来能力，不是当前部署状态的单一事实源。个人比赛主链、成熟度和完成
+> 标准以[系统总体设计](system-overview.md)与[项目状态](../status.md)为准；当前
+> 算法主线是 CyclePatch RUL、HybridPatch SOH、route-specific Split Conformal
+> 和可审计 `ToolResult` 链。
+
 该工程的技术路线是长什么样子的？每一个大框架下的核心作用是什么？
 ## 一句话看懂技术路线
 

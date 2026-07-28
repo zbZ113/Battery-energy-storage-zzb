@@ -119,3 +119,18 @@ output SHA-256: d201224870a28c655f66a810bc94f90ad28133e06f2fb4a7285195274c303d82
 
 该差异属于 CPU/CUDA 浮点执行差异。完整复现和来源差异见
 [可复现性](reproducibility.md)，研究边界见 [已知限制](limitations.md)。
+
+## 公开图件与 Source Data
+
+README 使用的三张轻量 PNG 和四份聚合 source data 是从已验证 Nature 图包逐字节
+复制的公开子集，没有重新计算或手工改写指标：
+
+- [RUL cutoff 性能](assets/benchmark/advanced-final-20260723/Figure_2_rul_cutoff_performance.png)；
+- [SOH 代表轨迹](assets/benchmark/advanced-final-20260723/Figure_4_soh_trajectory_examples.png)；
+- [模型综合权衡](assets/benchmark/advanced-final-20260723/Figure_6_model_tradeoff.png)；
+- [公开证据 manifest](assets/benchmark/advanced-final-20260723/manifest.json)；
+- [聚合 source data](source-data/advanced-final-20260723/)。
+
+Figure 4 的五种子 min–max 阴影不是 Conformal prediction interval；Figure 6 的耗时和
+显存来自训练过程，不是在线单样本推理基准。算法解释见
+[算法原理](algorithms/README.md)。

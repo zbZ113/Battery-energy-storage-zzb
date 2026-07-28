@@ -6,15 +6,18 @@
 
 ## 当前运行边界
 
-| 形态 | 代码状态 | 已验证范围 | 不包含 |
+| 形态 | 代码状态 | 已验证范围 | 目标环境状态 |
 | --- | --- | --- | --- |
-| Foundation API | 可直接运行 | 健康检查、工具发现、已装配基础工具 | 项目认证、数据库路由、Worker、Advanced 数值链 |
-| 完整应用装配 | 已实现 | 单元、集成和测试环境纵向 E2E | 一键生产 Compose、生产密钥、监控、备份和真实基础设施验收 |
-| 工业协议 | 沙箱已实现 | REST/MQTT/Modbus/EMS 契约与幂等测试 | 真实 BMS/EMS、现场网络、设备安全联锁 |
+| Foundation API | 可直接运行 | 健康检查、工具发现、已装配基础工具 | 本地开发入口 |
+| 完整应用装配 | 已实现 | 单元、集成和测试环境纵向 E2E | 可由调用方显式注入依赖 |
+| 竞赛 ECS Compose | 已实现 | 部署契约、运行设置、迁移和装配测试 | ECS/TLS 前置就绪，应用尚未公网验收 |
+| 工业协议 | 沙箱已实现 | REST/MQTT/Modbus/EMS 契约与幂等测试 | 未接入真实现场 |
 
-“完整应用代码链已验证”不等于生产部署。当前 `deploy/compose.yaml` 只启动
-foundation API；完整 PostgreSQL / Redis / Worker / 对象存储 / API / UI 部署链将在
-独立设计中确定。
+“完整应用代码链已验证”不等于目标环境已经部署。`deploy/compose.yaml` 仍只启动
+foundation API；`deploy/competition.compose.yaml` 已实现个人比赛单机所需的
+PostgreSQL / Redis / migrations / API / Worker / Next.js / Nginx HTTPS 拓扑，但仍需
+完成 ACR 发布、真实模型与校准证据激活、浏览器 E2E 和恢复演练。执行步骤见
+[竞赛 ECS 部署](deployment/competition-ecs.md)。
 
 当前成熟度见 [项目状态](status.md)，正式指标见 [Advanced Benchmark](benchmark.md)，
 限制见 [已知限制](limitations.md)。
@@ -123,6 +126,11 @@ docker compose -f deploy/compose.yaml down
 镜像只安装 `api` extra。它适合传输层冒烟检查，不包含科学计算、PyBaMM、MCP SDK 和完整竞赛依赖。
 
 ## 完整竞赛应用装配
+
+本节说明开发者如何显式组装应用工厂和 Advanced 依赖。真实单机竞赛部署应优先使用
+[`deploy/competition.compose.yaml`](../deploy/competition.compose.yaml) 及
+[竞赛 ECS 部署](deployment/competition-ecs.md)，不要把下述工厂示例误当成完整
+运维步骤。
 
 完整 FastAPI 由 `create_competition_fastapi_app` 构造。仓库不会替调用方猜测企业数据、策略或模型：调用方必须创建并审核以下对象，再把它们注入工厂：
 

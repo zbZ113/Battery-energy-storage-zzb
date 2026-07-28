@@ -106,6 +106,96 @@ def test_public_evidence_docs_have_single_responsibilities_and_are_linked() -> N
             assert marker in document
 
 
+def test_readme_links_the_public_documentation_spine() -> None:
+    readme = _read("README.md")
+    expected = {
+        "docs/architecture/system-overview.md": (
+            "# 系统总体设计",
+            "ToolResult",
+            "个人比赛",
+        ),
+        "ARCHITECTURE.md": ("# 架构说明", "信任边界", "competition.compose.yaml"),
+        "docs/architecture/module-design.md": (
+            "# 模块设计",
+            "src/quanxin_life/core",
+            "依赖",
+        ),
+        "docs/api/README.md": ("# API 文档", "OpenAPI", "Idempotency-Key"),
+        "docs/development/code-walkthrough.md": (
+            "# 代码走读",
+            "Next.js",
+            "Audit Ledger",
+        ),
+        "docs/algorithms/README.md": (
+            "# 算法原理",
+            "CyclePatch",
+            "HybridPatch-v2",
+            "Conformal",
+        ),
+        "docs/adr/README.md": ("# Architecture Decision Records", "ADR-0001"),
+        "docs/deployment/competition-ecs.md": (
+            "# 竞赛 ECS 单机部署",
+            "competition.compose.yaml",
+            "Not deployed",
+        ),
+        "docs/deployment/operations-runbook.md": (
+            "# 竞赛部署运维 Runbook",
+            "回滚",
+            "备份",
+        ),
+        "docs/deployment/security-and-secrets.md": (
+            "# 部署安全与 Secrets",
+            "secret file",
+            "TLS",
+        ),
+    }
+
+    for relative_path, markers in expected.items():
+        assert relative_path in readme
+        document = _read(relative_path)
+        for marker in markers:
+            assert marker in document
+
+    for state in ("Implemented", "Validated", "Deployed", "Planned"):
+        assert state in readme
+
+    assert "docs/assets/benchmark/advanced-final-20260723/" in readme
+
+
+def test_pull_request_template_requires_documentation_impact_review() -> None:
+    template = _read(".github/PULL_REQUEST_TEMPLATE.md")
+
+    for marker in (
+        "README",
+        "docs/status.md",
+        "Implemented",
+        "Validated",
+        "Published",
+        "Deployed",
+        "Demonstrated",
+        "Planned",
+        "ADR",
+        "Markdown",
+        "secrets",
+    ):
+        assert marker in template
+
+
+def test_public_evidence_bytes_have_stable_git_attributes() -> None:
+    attributes = _read(".gitattributes")
+
+    assert (
+        "docs/source-data/advanced-final-20260723/*.csv text eol=lf" in attributes
+    )
+    assert (
+        "docs/assets/benchmark/advanced-final-20260723/manifest.json text eol=lf"
+        in attributes
+    )
+    assert (
+        "docs/assets/benchmark/advanced-final-20260723/*.png binary" in attributes
+    )
+
+
 def test_runtime_guide_covers_windows_linux_and_operator_owned_inputs() -> None:
     guide = _read("docs/runtime-setup.md")
 

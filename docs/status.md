@@ -1,29 +1,31 @@
 # 项目状态
 
-更新时间：2026-07-27。
+更新时间：2026-07-28。
 
 本页是仓库公开成熟度的单一事实源。`Implemented` 表示代码和契约存在，
-`Validated` 表示已有自动化测试、正式实验或受控 E2E 证据，`Planned` 表示尚未完成。
-三者不能互相替代。
+`Validated` 表示已有自动化测试、正式实验、哈希验收或受控 E2E 证据，
+`Published` 表示不可变镜像或发布包已经进入目标 registry，`Deployed` 表示已经在
+目标环境启动并通过服务验收，`Demonstrated` 表示公网浏览器真实业务路径已贯通，
+`Planned` 表示尚未完成。这些状态不能互相替代。
 
 ## 状态摘要
 
-| 能力 | Implemented | Validated | Planned / 未完成 |
-| --- | :---: | :---: | --- |
-| MATR 来源登记、HDF5 安全读取、Canonical 数据 | 是 | 三批正式数据 | 外部数据持续版本化 |
-| `cell_id` 级 train/validation/calibration/test 隔离 | 是 | 140 个电芯的固定划分 | 新数据集重新冻结 |
-| Advanced RUL / SOH 正式训练 | 是 | 80 次 A100 Final | 不重复使用冻结 test 调参 |
-| 指标闭环与论文图件 | 是 | RUL/SOH 逐样本对账、12 张图 | 投稿材料独立审查 |
-| Split / Normalized Conformal | 是 | MATR 12 calibration + 27 test | 扩大 calibration、删失感知、跨域重校准 |
-| Advanced artifact v2 与制品注册 | 是 | 哈希、清单、代表 checkpoint | 生产对象存储激活 |
-| 人工激活、回退、active route | 是 | 数据库和服务测试 | 生产审批策略 |
-| target-aware RUL / finite-horizon SOH | 是 | 工具、API、Agent、报告测试 | 外部域验收 |
-| exact `AgentStep` 与原子 ledger | 是 | claim/recovery 测试 | 多副本压力测试 |
-| calibration materialization | 是 | ADMIN API、Worker、UI、纵向 E2E | 真实 Worker 基础设施部署 |
-| Next.js 项目门户 | 是 | 单元测试、类型检查、构建、E2E | 真实环境配置与运营验收 |
-| 完整服务栈 | 组件存在 | 测试环境装配 | 一键 Compose、监控、备份、密钥管理 |
-| HUST 外部验证 | 接入与安全转换组件存在 | 尚无正式零样本结果 | 零样本、重校准、域适配 |
-| 工业 BMS/EMS | 协议沙箱存在 | 沙箱测试 | 企业凭证、网络、设备和安全联锁 |
+| 能力 | Implemented | Validated | Deployed | Planned / 未完成 |
+| --- | :---: | :---: | :---: | --- |
+| MATR 来源登记、HDF5 安全读取、Canonical 数据 | 是 | 三批正式数据 | 不适用 | 外部数据持续版本化 |
+| `cell_id` 级 train/validation/calibration/test 隔离 | 是 | 140 个电芯的固定划分 | 不适用 | 新数据集重新冻结 |
+| Advanced RUL / SOH 正式训练 | 是 | 80 次 A100 Final | 不适用 | 不重复使用冻结 test 调参 |
+| 指标闭环与论文图件 | 是 | RUL/SOH 逐样本对账、12 张图 | 不适用 | 投稿材料独立审查 |
+| Split / Normalized Conformal | 是 | MATR 12 calibration + 27 test | 否 | 扩大 calibration、删失感知、跨域重校准 |
+| Advanced artifact v2 与制品注册 | 是 | 哈希、清单、代表 checkpoint | 否 | 目标 ECS 激活 |
+| 人工激活、回退、active route | 是 | 数据库和服务测试 | 否 | 目标 ECS 人工审批验收 |
+| target-aware RUL / finite-horizon SOH | 是 | 工具、API、Agent、报告测试 | 否 | 公网真实模型验收 |
+| exact `AgentStep` 与原子 ledger | 是 | claim/recovery 测试 | 否 | 多副本压力测试 |
+| calibration materialization | 是 | ADMIN API、Worker、UI、纵向 E2E | 否 | 真实 Worker 与证据部署 |
+| Next.js 项目门户 | 是 | 单元测试、类型检查、构建、E2E | 否 | 公网浏览器验收 |
+| 竞赛单机服务栈 | Compose、API、Worker、迁移、网关已实现 | 部署契约与装配测试 | 否（仅 ECS/TLS 前置设施 ready） | ACR 发布、Compose 启动、备份与演练 |
+| HUST 外部验证 | 接入与安全转换组件存在 | 尚无正式零样本结果 | 否 | 零样本、重校准、域适配 |
+| 工业 BMS/EMS | 协议沙箱存在 | 沙箱测试 | 否 | 企业凭证、网络、设备和安全联锁 |
 
 ## 已验证的科学证据
 
@@ -96,11 +98,13 @@ cutoff：20 / 50 / 100 / 150
 
 ### 部署
 
-1. 完整 PostgreSQL / Redis / Celery Worker / 对象存储 / API / UI Compose；
-2. 生产配置、密钥轮换、TLS、监控、告警和审计留存；
-3. 备份恢复、灾难恢复和容量规划；
-4. 真实模型制品与真实 calibration 证据在目标环境中的激活验收；
-5. 浏览器到 Worker 的真实环境冒烟和故障演练。
+1. 运行手动 ACR workflow，发布并记录五个不可变镜像 digest；
+2. 在目标 ECS 拉取镜像、执行 Alembic `0001`–`0015` 并启动竞赛 Compose；
+3. 初始化首个 ADMIN、项目、15 个正式候选和人工 active route；
+4. 部署真实 calibration evidence 并由 Worker 生成 `READY` 物化证据；
+5. 完成浏览器到 Worker、ToolResult、Agent、报告的公网纵向 E2E；
+6. 完成重启、route 回退、失败恢复、数据库/Redis 备份与恢复演练；
+7. 补充监控、告警、审计留存和密钥轮换。企业级 HA 与灾难恢复不阻塞个人比赛演示。
 
 ### 外部输入
 
@@ -115,4 +119,6 @@ cutoff：20 / 50 / 100 / 150
 - HUST 或其他外部数据的合规获取和使用确认。
 
 具体限制见 [已知限制](limitations.md)，复现要求见
-[可复现性](reproducibility.md)。
+[可复现性](reproducibility.md)。系统全景和比赛完成标准见
+[系统总体设计](architecture/system-overview.md)，目标环境步骤见
+[竞赛 ECS 部署](deployment/competition-ecs.md)。

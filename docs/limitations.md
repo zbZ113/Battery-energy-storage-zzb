@@ -98,9 +98,13 @@ HUST 安全接入组件不等于 HUST 外部验证已经完成：
 当前 Advanced API / Agent / 报告 / UI 和 calibration materialization 已通过受控
 纵向 E2E，但这不等于生产部署：
 
-- Compose 当前只启动 foundation API；
-- 没有完整生产服务拓扑；
-- 没有真实生产 Worker、对象存储和密钥管理验收；
+- 基础 `deploy/compose.yaml` 仍只启动 foundation API；
+- 竞赛用 `deploy/competition.compose.yaml` 已实现 PostgreSQL、Redis、migrations、
+  API、Worker、Next.js 和 Nginx HTTPS 拓扑，并通过部署契约测试；
+- 目标 ECS、Docker、UFW、ACR 和正式 IP TLS 前置设施已经建立，但五个应用镜像、
+  Compose、数据库迁移、模型路由和 calibration evidence 尚未完成公网纵向验收；
+- 当前竞赛拓扑使用宿主机受管目录和 Docker secrets file，不等于企业级 KMS、
+  对象存储或多节点密钥管理已经验收；
 - 没有容量、并发、故障注入、灾难恢复或长期运行结果；
 - E2E 的模型前向边界使用显式测试适配器。
 

@@ -1,0 +1,57 @@
+# ADR-0001：业务数值必须通过 ToolResult 数值防火墙
+
+- 状态：Accepted
+- 日期：2026-07-28
+
+## 背景
+
+RUL、SOH、置信区间和阈值判断会直接影响电池决策。若 LLM、前端、报告模板或 API 各自
+计算或补写数值，同一请求可能产生互相冲突且无法追溯的结论。
+
+## 决策
+
+1. 只有注册的数值工具可以产生正式业务数值；
+2. 每次正式计算必须返回 `ToolResult`；
+3. `ToolResult` 必须携带工具版本、输入哈希、模型/数据/特征版本、值、告警、来源和 UTC
+   时间；
+4. 结果先通过契约和完整性验证，再登记到审计账本；
+5. Agent、API、UI 和报告只能引用已经登记的 `result_id`；
+6. LLM 只能规划工具调用和解释工具结果；
+7. 缺测、冲突、域外或来源不足时显式拒绝或降级，不补零、不猜测。
+
+## 备选方案
+
+- 让 LLM 直接生成结果：不可验证，拒绝；
+- 让每个客户端分别调用模型：产生版本漂移和权限绕过，拒绝；
+- 只保留自然语言日志：无法支持结构化对账，拒绝；
+- 直接返回裸 JSON 数值：缺少稳定来源和输入身份，拒绝。
+
+## 后果
+
+正面：
+
+- 每个数字都能追溯到唯一工具调用；
+- 报告和 UI 不会重新解释成另一套值；
+- 可以验证重复调用、篡改和跨项目引用；
+- Agent 可以在不掌握模型实现的情况下安全编排。
+
+代价：
+
+- 所有新数值能力都必须定义输入、输出、来源和版本；
+- 结果登记需要数据库事务；
+- 旧代码不能以字典或字符串绕过 `ToolResult`。
+
+## 实现证据
+
+- `src/quanxin_life/core/schemas.py`：`ToolResult` 与 `ProvenanceRecord`；
+- `src/quanxin_life/tools/`：工具注册与执行边界；
+- `src/quanxin_life/audit/`：结果校验和项目账本；
+- `src/quanxin_life/reporting/`：账本绑定报告；
+- `tests/unit/audit/test_numeric_firewall.py`；
+- `tests/integration/test_sql_project_audit_ledger.py`。
+
+## 成熟度
+
+- 契约与审计实现：Validated；
+- 项目级 RUL/SOH/Conformal 使用：Validated；
+- 目标 ECS 公网使用：尚未 Demonstrated。
