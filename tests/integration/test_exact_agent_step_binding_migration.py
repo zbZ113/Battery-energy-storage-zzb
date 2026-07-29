@@ -8,6 +8,7 @@ from alembic.config import Config
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Integer,
     String,
@@ -15,6 +16,8 @@ from sqlalchemy import (
     inspect,
     text,
 )
+
+from quanxin_life.persistence.models import Base
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -60,6 +63,26 @@ def test_0013_uses_native_alter_for_postgresql_and_recreate_for_sqlite() -> None
 
     assert migration._batch_recreate_mode("postgresql") == "auto"
     assert migration._batch_recreate_mode("sqlite") == "always"
+
+
+def test_0013_uses_portable_boolean_predicates_in_migration_and_orm() -> None:
+    migration_source = (
+        PROJECT_ROOT / "migrations/versions/0013_exact_agent_step_bindings.py"
+    ).read_text(encoding="utf-8")
+    binding_table = Base.metadata.tables["project_tool_result_bindings"]
+    orm_contract = next(
+        str(constraint.sqltext)
+        for constraint in binding_table.constraints
+        if isinstance(constraint, CheckConstraint)
+        and constraint.name == "ck_project_tool_result_binding_exact_agent_contract"
+    )
+
+    for contract in (migration_source, orm_contract):
+        normalized = " ".join(contract.split())
+        assert "approval_required IS FALSE" in normalized
+        assert "approval_required IS TRUE" in normalized
+        assert "approval_required = 0" not in normalized
+        assert "approval_required = 1" not in normalized
 
 
 def _config(database_url: str) -> Config:

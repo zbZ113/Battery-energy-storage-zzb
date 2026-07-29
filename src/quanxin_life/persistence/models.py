@@ -487,8 +487,8 @@ class ProjectToolResultBindingRecord(Base):
             "execution_snapshot_sha256 IS NOT NULL AND "
             "dependency_evidence_sha256 IS NOT NULL AND "
             "approval_required IS NOT NULL AND approval_evidence_sha256 IS NOT NULL AND "
-            "((approval_required = 0 AND approval_request_id IS NULL AND "
-            "approval_action_id IS NULL) OR (approval_required = 1 AND "
+            "((approval_required IS FALSE AND approval_request_id IS NULL AND "
+            "approval_action_id IS NULL) OR (approval_required IS TRUE AND "
             "approval_request_id IS NOT NULL AND approval_action_id IS NOT NULL)))",
             name="ck_project_tool_result_binding_exact_agent_contract",
         ),

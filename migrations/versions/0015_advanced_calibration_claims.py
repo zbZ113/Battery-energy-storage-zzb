@@ -5,6 +5,7 @@ Revises: 0014
 """
 
 from collections.abc import Sequence
+from typing import Literal
 
 import sqlalchemy as sa
 from alembic import op
@@ -55,10 +56,20 @@ _FENCED_STATE_CHECK = (
 )
 
 
+def _batch_recreate_mode(
+    dialect_name: str,
+) -> Literal["always", "auto"]:
+    """Recreate only where SQLite requires it; preserve PostgreSQL dependencies."""
+
+    return "always" if dialect_name == "sqlite" else "auto"
+
+
 def upgrade() -> None:
     """Add the immutable actor session and reclaimable worker lease."""
 
-    existing_rows = op.get_bind().execute(
+    bind = op.get_bind()
+    recreate = _batch_recreate_mode(bind.dialect.name)
+    existing_rows = bind.execute(
         sa.text("SELECT count(*) FROM advanced_calibration_materializations")
     ).scalar_one()
     if existing_rows:
@@ -69,7 +80,7 @@ def upgrade() -> None:
 
     with op.batch_alter_table(
         "advanced_calibration_materializations",
-        recreate="always",
+        recreate=recreate,
     ) as batch:
         batch.drop_constraint(
             "ck_advanced_calibration_state_payload",
@@ -122,7 +133,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Remove claim evidence only when no audited materialization exists."""
 
-    existing_rows = op.get_bind().execute(
+    bind = op.get_bind()
+    recreate = _batch_recreate_mode(bind.dialect.name)
+    existing_rows = bind.execute(
         sa.text("SELECT count(*) FROM advanced_calibration_materializations")
     ).scalar_one()
     if existing_rows:
@@ -132,7 +145,7 @@ def downgrade() -> None:
 
     with op.batch_alter_table(
         "advanced_calibration_materializations",
-        recreate="always",
+        recreate=recreate,
     ) as batch:
         batch.drop_constraint(
             "ck_advanced_calibration_state_payload",

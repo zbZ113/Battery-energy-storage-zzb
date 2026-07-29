@@ -66,6 +66,17 @@ def test_backend_image_contains_runtime_code_but_not_local_results() -> None:
     assert "*.pth" in dockerignore
 
 
+def test_backend_image_installs_the_llm_runtime_extra() -> None:
+    dockerfile = _read("deploy/Dockerfile.backend")
+    editable_install = re.search(r'"\.\[([^\]]+)\]"', dockerfile)
+
+    assert editable_install is not None
+    installed_extras = {
+        value.strip() for value in editable_install.group(1).split(",")
+    }
+    assert "llm" in installed_extras
+
+
 def test_frontend_image_uses_locked_standalone_next_build() -> None:
     dockerfile = _read("frontend/Dockerfile")
     next_config = _read("frontend/next.config.ts")

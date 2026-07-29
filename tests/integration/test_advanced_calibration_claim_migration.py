@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from alembic import command
@@ -10,6 +12,23 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _migration_0015_module() -> ModuleType:
+    path = PROJECT_ROOT / "migrations/versions/0015_advanced_calibration_claims.py"
+    spec = importlib.util.spec_from_file_location("migration_0015_under_test", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_0015_uses_native_alter_for_postgresql_and_recreate_for_sqlite() -> None:
+    migration = _migration_0015_module()
+
+    assert migration._batch_recreate_mode("postgresql") == "auto"
+    assert migration._batch_recreate_mode("sqlite") == "always"
 
 
 def _config(database_url: str) -> Config:
