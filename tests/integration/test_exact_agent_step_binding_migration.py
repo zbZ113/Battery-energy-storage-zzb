@@ -1,4 +1,6 @@
+import importlib.util
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from alembic import command
@@ -41,6 +43,23 @@ BINDING_V2_COLUMNS = {
     "approval_action_id",
     "approval_evidence_sha256",
 }
+
+
+def _migration_0013_module() -> ModuleType:
+    path = PROJECT_ROOT / "migrations/versions/0013_exact_agent_step_bindings.py"
+    spec = importlib.util.spec_from_file_location("migration_0013_under_test", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_0013_uses_native_alter_for_postgresql_and_recreate_for_sqlite() -> None:
+    migration = _migration_0013_module()
+
+    assert migration._batch_recreate_mode("postgresql") == "auto"
+    assert migration._batch_recreate_mode("sqlite") == "always"
 
 
 def _config(database_url: str) -> Config:

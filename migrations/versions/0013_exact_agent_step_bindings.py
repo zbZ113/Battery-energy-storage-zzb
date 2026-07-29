@@ -5,6 +5,7 @@ Revises: 0012
 """
 
 from collections.abc import Sequence
+from typing import Literal
 
 import sqlalchemy as sa
 from alembic import op
@@ -36,10 +37,20 @@ _BINDING_AGENT_COLUMNS = (
 )
 
 
+def _batch_recreate_mode(
+    dialect_name: str,
+) -> Literal["always", "auto"]:
+    """Recreate only where SQLite requires it; preserve referenced PostgreSQL tables."""
+
+    return "always" if dialect_name == "sqlite" else "auto"
+
+
 def upgrade() -> None:
     """Add frozen step snapshots and exact Agent result evidence."""
 
-    legacy_agent_rows = op.get_bind().execute(
+    bind = op.get_bind()
+    recreate = _batch_recreate_mode(bind.dialect.name)
+    legacy_agent_rows = bind.execute(
         sa.text(
             "SELECT count(*) FROM project_tool_result_bindings "
             "WHERE invocation_source = 'AGENT'"
@@ -51,7 +62,7 @@ def upgrade() -> None:
             "archive or explicitly replay them before upgrading"
         )
 
-    with op.batch_alter_table("agent_steps", recreate="always") as batch:
+    with op.batch_alter_table("agent_steps", recreate=recreate) as batch:
         batch.add_column(sa.Column("resolved_input_json", sa.JSON(), nullable=True))
         for name in _STEP_HASH_COLUMNS:
             batch.add_column(sa.Column(name, sa.String(length=64), nullable=True))
@@ -60,7 +71,7 @@ def upgrade() -> None:
                 f"{name} IS NULL OR length({name}) = 64",
             )
 
-    with op.batch_alter_table("approval_requests", recreate="always") as batch:
+    with op.batch_alter_table("approval_requests", recreate=recreate) as batch:
         batch.add_column(sa.Column("agent_step_id", sa.String(length=64), nullable=True))
         batch.add_column(
             sa.Column("execution_snapshot_sha256", sa.String(length=64), nullable=True)
@@ -78,7 +89,7 @@ def upgrade() -> None:
         )
 
     with op.batch_alter_table(
-        "project_tool_result_bindings", recreate="always"
+        "project_tool_result_bindings", recreate=recreate
     ) as batch:
         batch.drop_constraint(
             "ck_project_tool_result_binding_schema_version",
@@ -184,7 +195,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Remove exact-step evidence columns."""
 
-    v2_agent_rows = op.get_bind().execute(
+    bind = op.get_bind()
+    recreate = _batch_recreate_mode(bind.dialect.name)
+    v2_agent_rows = bind.execute(
         sa.text(
             "SELECT count(*) FROM project_tool_result_bindings "
             "WHERE binding_schema_version = 'project-tool-result-binding-v2'"
@@ -201,7 +214,7 @@ def downgrade() -> None:
         table_name="project_tool_result_bindings",
     )
     with op.batch_alter_table(
-        "project_tool_result_bindings", recreate="always"
+        "project_tool_result_bindings", recreate=recreate
     ) as batch:
         batch.drop_constraint(
             "ck_project_tool_result_binding_exact_agent_contract", type_="check"
@@ -232,7 +245,7 @@ def downgrade() -> None:
             "binding_schema_version = 'project-tool-result-binding-v1'",
         )
 
-    with op.batch_alter_table("approval_requests", recreate="always") as batch:
+    with op.batch_alter_table("approval_requests", recreate=recreate) as batch:
         batch.drop_constraint(
             "ck_approval_request_execution_snapshot_length", type_="check"
         )
@@ -240,7 +253,7 @@ def downgrade() -> None:
         batch.drop_column("execution_snapshot_sha256")
         batch.drop_column("agent_step_id")
 
-    with op.batch_alter_table("agent_steps", recreate="always") as batch:
+    with op.batch_alter_table("agent_steps", recreate=recreate) as batch:
         for name in reversed(_STEP_HASH_COLUMNS):
             batch.drop_constraint(f"ck_agent_step_{name}_length", type_="check")
             batch.drop_column(name)
