@@ -12,10 +12,14 @@
 - **Validated**：部署契约、运行设置、装配、迁移和 ADMIN 初始化测试；
 - **Infrastructure ready**：目标 ECS、Docker、UFW 22/80/443、私有 ACR 和正式
   Let's Encrypt IP 证书；
-- **Not deployed**：五个镜像发布、Compose 启动、正式路由/校准证据激活及公网
-  浏览器 E2E 尚未验收。
+- **Published**：release `2026.07.28-1` 已从提交
+  `912f8ae05a0c3a08120bf7dcf4634273986a3a53` 发布五个私有 ACR 镜像并记录
+  digest；
+- **Not deployed**：镜像尚未在目标 ECS 完成精确对账，Compose、正式路由/校准
+  证据激活及公网浏览器 E2E 尚未验收。
 
 部署状态的权威定义见 [项目状态](../status.md)。
+已发布镜像见 [ACR release `2026.07.28-1`](releases/2026.07.28-1.md)。
 
 ## 部署拓扑
 

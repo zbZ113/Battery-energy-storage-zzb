@@ -196,6 +196,25 @@ def test_public_evidence_bytes_have_stable_git_attributes() -> None:
     )
 
 
+def test_readme_links_the_published_competition_release_record() -> None:
+    readme = _read("README.md")
+    release = _read("docs/deployment/releases/2026.07.28-1.md")
+
+    assert "docs/deployment/releases/2026.07.28-1.md" in readme
+    for marker in (
+        "2026.07.28-1",
+        "912f8ae05a0c3a08120bf7dcf4634273986a3a53",
+        "quanxin-backend@sha256:6832cc958e0699d1e37a9057e128c2168076d7b47cca911f2c5d4e378fc1532d",
+        "quanxin-frontend@sha256:25dc676f4e96db57eceb7512468c4800afc0f6bf2401cc6bf51a936365030cde",
+        "quanxin-postgres@sha256:87f0ea0960ba8e719fc2202594fde52fc9f53384a23dd937f924741d87070697",
+        "quanxin-redis@sha256:5fd679dbad4f101639b55d1c49a2aedfc15a2e7ddc43a83b783671b8d9541134",
+        "quanxin-nginx@sha256:ebee5f752c662a314744c6e1e6ba57f10f15a98f5c797872e0505a1dbfa56720",
+    ):
+        assert marker in release
+
+    assert "https://47.98.37.232" in release
+
+
 def test_runtime_guide_covers_windows_linux_and_operator_owned_inputs() -> None:
     guide = _read("docs/runtime-setup.md")
 

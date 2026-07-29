@@ -20,13 +20,14 @@ Next.js UI。个人比赛单机部署代码及 ECS/TLS 前置设施已经准备�
 | --- | --- | --- |
 | **Implemented** | 代码、契约、配置或 migration 已存在 | Advanced 产品链、竞赛 Compose、API、Worker、Next.js、Nginx、ADMIN bootstrap |
 | **Validated** | 有正式实验、测试、哈希或受控 E2E | 80 次 A100 Final、逐样本对账、Conformal、项目纵向 E2E、部署契约 |
-| **Published** | 不可变镜像或发布包已进入目标 registry | **否**；ACR workflow 仅为 Implemented，五个 digest 尚待确认 |
+| **Published** | 不可变镜像或发布包已进入目标 registry | **是**；`2026.07.28-1` 五个私有 ACR 镜像及 digest 已冻结 |
 | **Deployed** | 已在目标 ECS 启动并通过服务验收 | **否**；ECS、Docker、UFW、ACR、TLS 前置就绪，应用栈尚未启动 |
 | **Demonstrated** | 公网浏览器真实业务路径通过 | **否**；尚待完成 |
 | **Planned** | 仍需实现、实验或外部输入 | HUST、删失感知区间、企业 BMS/EMS、HA 与长期运维 |
 
 完整矩阵见[项目状态](docs/status.md)，禁止性表述见
-[已知限制](docs/limitations.md)。
+[已知限制](docs/limitations.md)。本次镜像身份见
+[ACR release `2026.07.28-1`](docs/deployment/releases/2026.07.28-1.md)。
 
 ## 已验证结果
 

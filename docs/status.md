@@ -85,6 +85,17 @@ cutoff：20 / 50 / 100 / 150
 - 路由改变会使旧 calibration materialization 变为 `STALE`；
 - 服务端从当前 active route 解析模型和校准证据，客户端不能提交路径、哈希或样本数组。
 
+## 当前竞赛发布状态
+
+私有 ACR release `2026.07.28-1` 已于 GitHub Actions 成功发布并记录五个不可变镜像
+digest，来源提交为 `912f8ae05a0c3a08120bf7dcf4634273986a3a53`，前端公开
+Origin 为 `https://47.98.37.232`。
+
+这使竞赛镜像状态达到 `Published`，但尚未达到 `Deployed`：目标 ECS 仍需完成 ACR
+登录、精确 digest 对账、Compose、migration、正式模型/calibration 激活和公网
+浏览器 E2E。完整发布记录见
+[ACR release `2026.07.28-1`](deployment/releases/2026.07.28-1.md)。
+
 ## 未完成事项
 
 ### 研究
