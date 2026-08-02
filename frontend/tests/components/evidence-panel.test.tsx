@@ -16,9 +16,18 @@ describe("EvidencePanel", () => {
           result_id: "result-001",
           tool_name: "predict_cycle_life",
           tool_version: "1.0.0",
+          model_version: "model-v1",
+          data_version: "data-v1",
+          feature_version: "feature-v1",
           input_hash: "sha256:abc",
-          values: { status: "RECHECK" },
-          uncertainty: null,
+          values: {
+            artifact: {
+              prediction_result_id: "prediction-result-1",
+              calibration_result_id: "calibration-result-1",
+            },
+            status: "RECHECK",
+          },
+          uncertainty: { coverage_target: 0.9 },
           provenance: [
             {
               source_id: "dataset:hust-reviewed",
@@ -40,5 +49,11 @@ describe("EvidencePanel", () => {
     expect(screen.getByText("经过审核的HUST安全转换数据")).toBeInTheDocument();
     expect(screen.getByText("OBSERVED")).toBeInTheDocument();
     expect(screen.getByText("目标域仍需复检")).toBeInTheDocument();
+    expect(screen.getByText("model-v1")).toBeInTheDocument();
+    expect(screen.getByText("data-v1")).toBeInTheDocument();
+    expect(screen.getByText("feature-v1")).toBeInTheDocument();
+    expect(screen.getByText("prediction-result-1")).toBeInTheDocument();
+    expect(screen.getByText("calibration-result-1")).toBeInTheDocument();
+    expect(screen.getByText(/"coverage_target": 0.9/)).toBeInTheDocument();
   });
 });

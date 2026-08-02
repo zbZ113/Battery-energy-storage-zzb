@@ -56,15 +56,17 @@ function EvidenceStack({ results }: { results: LoadedResults }) {
 
 function WaitingState({
   missingKeys,
+  runTerminal,
 }: {
   missingKeys: ResultKey[];
+  runTerminal: boolean;
 }) {
   return (
     <section className="result-waiting" aria-live="polite" role="status">
-      <LoaderCircle aria-hidden="true" />
+      {runTerminal ? <CircleAlert aria-hidden="true" /> : <LoaderCircle aria-hidden="true" />}
       <div>
-        <h2>等待服务端签发分析结果</h2>
-        <p>尚缺 {missingKeys.length} 项 ToolResult</p>
+        <h2>{runTerminal ? "运行已结束，部分结果未签发" : "等待服务端签发分析结果"}</h2>
+        <p>{runTerminal ? "未签发" : "尚缺"} {missingKeys.length} 项 ToolResult</p>
         <ul>
           {missingKeys.map((key) => <li key={key}>{RESULT_LABELS[key]}</li>)}
         </ul>
@@ -115,11 +117,15 @@ function SingleCellAnalysisLoader({
   projectId,
   recordBatchId,
   resultIds,
+  runTerminal,
+  showEvidence,
 }: {
   loadResult: ProjectResultLoader;
   projectId: string;
   recordBatchId: string;
   resultIds: SingleCellResultIds;
+  runTerminal: boolean;
+  showEvidence: boolean;
 }) {
   const [results, setResults] = useState<LoadedResults>({});
   const [loadErrors, setLoadErrors] = useState<ResultKey[]>([]);
@@ -196,7 +202,7 @@ function SingleCellAnalysisLoader({
   if (!requestedResults.length) {
     return (
       <div className="single-cell-analysis">
-        <WaitingState missingKeys={missingKeys} />
+        <WaitingState missingKeys={missingKeys} runTerminal={runTerminal} />
         <ExportStatus />
       </div>
     );
@@ -204,7 +210,7 @@ function SingleCellAnalysisLoader({
 
   return (
     <div className="single-cell-analysis">
-      {missingKeys.length ? <WaitingState missingKeys={missingKeys} /> : null}
+      {missingKeys.length ? <WaitingState missingKeys={missingKeys} runTerminal={runTerminal} /> : null}
       {loading ? (
         <div className="loading-state" role="status">
           <LoaderCircle className="spin" aria-hidden="true" />正在核验项目 ToolResult…
@@ -318,7 +324,7 @@ function SingleCellAnalysisLoader({
       ) : null}
 
       {validationError ? null : <Warnings results={results} />}
-      <EvidenceStack results={results} />
+      {showEvidence ? <EvidenceStack results={results} /> : null}
       <ExportStatus />
     </div>
   );
@@ -329,11 +335,15 @@ export function SingleCellAnalysis({
   projectId,
   recordBatchId,
   resultIds,
+  runTerminal = false,
+  showEvidence = true,
 }: {
   loadResult?: ProjectResultLoader;
   projectId: string;
   recordBatchId: string;
   resultIds: SingleCellResultIds;
+  runTerminal?: boolean;
+  showEvidence?: boolean;
 }) {
   const requestSignature = JSON.stringify([
     projectId,
@@ -343,6 +353,8 @@ export function SingleCellAnalysis({
     resultIds.rulResultId,
     resultIds.sohConformalResultId,
     resultIds.sohResultId,
+    runTerminal,
+    showEvidence,
   ]);
   return (
     <SingleCellAnalysisLoader
@@ -351,6 +363,8 @@ export function SingleCellAnalysis({
       projectId={projectId}
       recordBatchId={recordBatchId}
       resultIds={resultIds}
+      runTerminal={runTerminal}
+      showEvidence={showEvidence}
     />
   );
 }

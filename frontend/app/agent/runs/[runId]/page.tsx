@@ -1,13 +1,15 @@
 "use client";
 
 import { use, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Radio, RefreshCw } from "lucide-react";
 
 import { AgentTimeline, type EventConnectionState } from "@/components/agent-timeline";
 import { ApprovalPanel } from "@/components/approval-panel";
 import { AppShell } from "@/components/app-shell";
-import { NineStepTracker, RUNTIME_V7_STEPS } from "@/components/nine-step-tracker";
+import { NineStepTracker } from "@/components/nine-step-tracker";
 import { SseConnectionNotice } from "@/components/sse-connection-notice";
+import { isFixedAdvancedRun } from "@/lib/advanced-analysis-contract";
 import { AGENT_EVENT_NAMES, decodeAgentEvent, findPendingApproval, isTerminalAgentEvent } from "@/lib/agent-events";
 import {
   agentEventsUrl,
@@ -16,18 +18,6 @@ import {
   rejectAgentRun,
 } from "@/lib/api-client";
 import type { AgentEvent, AgentRunRecord } from "@/lib/types";
-
-function isRuntimeV7Run(run: AgentRunRecord): boolean {
-  const plan = run.plan;
-  if (typeof plan !== "object" || plan === null) return false;
-  const steps = (plan as { steps?: unknown }).steps;
-  if (!Array.isArray(steps) || steps.length !== RUNTIME_V7_STEPS.length) return false;
-  return steps.every((step, index) => (
-    typeof step === "object"
-    && step !== null
-    && (step as { step_id?: unknown }).step_id === RUNTIME_V7_STEPS[index].id
-  ));
-}
 
 export default function AgentRunPage({ params }: { params: Promise<{ runId: string }> }) {
   const { runId } = use(params);
@@ -103,10 +93,18 @@ function AgentRunLiveSession({
   const pendingApproval = run?.status === "AWAITING_APPROVAL"
     ? findPendingApproval(events)
     : null;
+  const resultBatchId = run
+    && ["COMPLETED", "FAILED", "CANCELLED"].includes(run.status)
+    && isFixedAdvancedRun(run)
+    ? run.intent.dataset_ids[0]
+    : null;
+  const resultLinkLabel = run?.status === "COMPLETED"
+    ? "查看本次分析结果"
+    : "查看结果目录";
 
   return (
     <AppShell workflowStage="agent">
-      <header className="page-header"><div><p className="eyebrow">AGENT RUN</p><h1>多智能体运行时间线</h1><p>运行 ID：<code>{runId}</code></p></div><span className={`status-pill status-${run?.status?.toLowerCase() ?? "loading"}`}><Radio />{run?.status ?? "读取中"}</span></header>
+      <header className="page-header"><div><p className="eyebrow">AGENT RUN</p><h1>多智能体运行时间线</h1><p>运行 ID：<code>{runId}</code></p></div><div className="run-header-actions"><span className={`status-pill status-${run?.status?.toLowerCase() ?? "loading"}`}><Radio />{run?.status ?? "读取中"}</span>{resultBatchId ? <Link className="button button-primary" href={`/projects/${encodeURIComponent(run!.project_id)}/cells/${encodeURIComponent(resultBatchId)}?run_id=${encodeURIComponent(runId)}`}>{resultLinkLabel}</Link> : null}</div></header>
       {!run && !error ? <div className="loading-state"><RefreshCw className="spin" />正在读取运行状态…</div> : null}
       {error ? <p className="alert alert-error" role="alert">{error}</p> : null}
       {pendingApproval ? (
@@ -136,11 +134,11 @@ function AgentRunLiveSession({
         <aside className="workspace-panel run-status-panel">
           <div className="panel-heading"><Radio aria-hidden="true" /><div><h2>九步实时进度</h2><p>只映射 Runtime V7 固定步骤身份。</p></div></div>
           {!run ? <p className="muted" role="status">正在核验运行计划…</p> : null}
-          {run && !isRuntimeV7Run(run) ? <p className="muted" role="status">当前运行不是 Runtime V7 九步计划</p> : null}
-          {run && isRuntimeV7Run(run) && events.length === 0 && connection !== "open" ? (
+          {run && !isFixedAdvancedRun(run) ? <p className="muted" role="status">当前运行不是 Runtime V7 九步计划</p> : null}
+          {run && isFixedAdvancedRun(run) && events.length === 0 && connection !== "open" ? (
             <p className="muted" role="status">九步进度尚未加载；页面不会推测步骤状态。</p>
           ) : null}
-          {run && isRuntimeV7Run(run) && (events.length > 0 || connection === "open") ? (
+          {run && isFixedAdvancedRun(run) && (events.length > 0 || connection === "open") ? (
             <NineStepTracker events={events} />
           ) : null}
         </aside>

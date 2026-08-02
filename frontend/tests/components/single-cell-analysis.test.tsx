@@ -264,6 +264,27 @@ describe("SingleCellAnalysis", () => {
     expect(screen.getByText("尚缺 5 项 ToolResult")).toBeInTheDocument();
   });
 
+  it("does not tell users to keep waiting after a terminal run", () => {
+    render(
+      <SingleCellAnalysis
+        loadResult={vi.fn()}
+        projectId="project-1"
+        recordBatchId="batch-1"
+        resultIds={{
+          reportResultId: null,
+          rulConformalResultId: null,
+          rulResultId: null,
+          sohConformalResultId: null,
+          sohResultId: null,
+        }}
+        runTerminal
+      />,
+    );
+
+    expect(screen.getByText("运行已结束，部分结果未签发")).toBeInTheDocument();
+    expect(screen.queryByText("等待服务端签发分析结果")).not.toBeInTheDocument();
+  });
+
   it("keeps export unavailable until the server provides a signed artifact", () => {
     render(
       <SingleCellAnalysis

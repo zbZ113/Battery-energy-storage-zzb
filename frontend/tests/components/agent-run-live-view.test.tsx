@@ -9,6 +9,26 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), refresh: vi.fn() }),
 }));
 
+vi.mock("@/lib/advanced-analysis-contract", () => ({
+  isFixedAdvancedRun: (value: AgentRunRecord) => {
+    const stepIds = [
+      "advanced-input", "rul-point", "rul-coverage", "soh", "rul-calibration",
+      "rul-interval", "soh-calibration", "soh-band", "report",
+    ];
+    const intent = value.intent as { dataset_ids?: unknown; requested_outputs?: unknown } | undefined;
+    const plan = value.plan as { steps?: { step_id?: unknown }[] } | undefined;
+    const rawRequestedOutputs = intent?.requested_outputs;
+    const requestedOutputs = Array.isArray(rawRequestedOutputs) ? rawRequestedOutputs : [];
+    const datasetIds = intent?.dataset_ids;
+    return requestedOutputs[0] === "advanced_single_cell_analysis"
+      && Array.isArray(datasetIds)
+      && datasetIds.length === 1
+      && Array.isArray(plan?.steps)
+      && plan.steps.length === stepIds.length
+      && plan.steps.every((step, index) => step.step_id === stepIds[index]);
+  },
+}));
+
 class FakeEventSource {
   static instance: FakeEventSource | null = null;
   onopen: (() => void) | null = null;
@@ -44,8 +64,8 @@ function run(
       intent_id: "intent-1",
       project_id: "project-1",
       goal: "运行可信分析",
-      dataset_ids: ["dataset-1"],
-      requested_outputs: ["cycle_life"],
+      dataset_ids: ["record-batch-1"],
+      requested_outputs: ["advanced_single_cell_analysis"],
       created_at: "2026-07-16T09:00:00Z",
     },
     plan: {
@@ -181,6 +201,41 @@ describe("AgentRunLiveView", () => {
     expect(await screen.findByText("当前运行不是 Runtime V7 九步计划")).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "九步执行状态" })).not.toBeInTheDocument();
   });
+
+  it("offers a result entry for a completed fixed advanced run", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    render(
+      <AgentRunLiveView
+        eventsUrl={() => "http://localhost/events"}
+        loadRun={vi.fn().mockResolvedValue(run("COMPLETED"))}
+        runId="run-1"
+      />,
+    );
+
+    expect(await screen.findByRole("link", { name: "查看本次分析结果" })).toHaveAttribute(
+      "href",
+      "/projects/project-1/cells/record-batch-1?run_id=run-1",
+    );
+  });
+
+  it.each(["FAILED", "CANCELLED"])(
+    "offers the partial result catalog for a %s fixed advanced run",
+    async (status) => {
+      vi.stubGlobal("EventSource", FakeEventSource);
+      render(
+        <AgentRunLiveView
+          eventsUrl={() => "http://localhost/events"}
+          loadRun={vi.fn().mockResolvedValue(run(status))}
+          runId="run-1"
+        />,
+      );
+
+      expect(await screen.findByRole("link", { name: "查看结果目录" })).toHaveAttribute(
+        "href",
+        "/projects/project-1/cells/record-batch-1?run_id=run-1",
+      );
+    },
+  );
 
   it("clears the previous run evidence when the route changes", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
