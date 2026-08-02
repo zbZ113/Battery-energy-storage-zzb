@@ -1,13 +1,13 @@
 # Codex 完整交接：泉芯智寿产品化
 
-> 更新时间：2026-08-02 18:01:42 +08:00（Asia/Shanghai）
+> 更新时间：2026-08-02 19:25:58 +08:00（Asia/Shanghai）
 > 当前实施目标：`docs/superpowers/plans/2026-08-02-quanxin-productization-master-plan.md`
 > 当前公网入口：`https://47.99.69.138`
 > 本文件只记录可由当前 Git、代码、测试和只读探测支持的事实，不包含密码、私钥、Cookie、连接串或业务数值。
 
 ## 0. 一句话状态
 
-Task 0、Task 1 和 Task 2 已完成：可信计算链、固定九步 Agent、B「双栏分析」前端、Runtime V7 修复、真实 PostgreSQL CI 与不可变镜像基线已经形成。提交 `daca47a` 的 Python、PostgreSQL 和前端 CI run `30738774242` 全绿；ACR release `2026.08.02-1` 已由 run `30739080847` 成功发布五张镜像并记录 digest。2026-08-02 ECS 只读审计已经补齐内部事实：migration `0015`、Worker、严格 TLS 和历史九步 ToolResult 可用，但 ECS 仍运行 `2026.07.29-1`、旧 digest、空 OCI 身份和 Runtime V7/Gateway bind mount，Redis AOF 还有 ACL `NOPERM` 风险。因此当前 release 仍是 `Published`，不是 `Deployed/Demonstrated`。下一实施任务是 Task 3 的项目、数据和分析目录 API。
+Task 0 至 Task 3 已完成：可信计算链、固定九步 Agent、B「双栏分析」前端、Runtime V7、不变镜像基线以及项目/数据/运行/结果目录 API 已形成。Task 3 由 `bd78259` 和 `c7d8a76` 提交，当前工作区只保留受保护的未跟踪内容；最新完整门禁为 Python `1786 passed, 9 skipped`、前端 `82 passed`，Ruff、mypy、compileall、ESLint、TypeScript 和 Next.js build 通过。ACR release `2026.08.02-1` 仍仅包含 Task 2 基线，ECS 仍运行旧 `2026.07.29-1` 与 bind mount，Redis AOF 还有 ACL `NOPERM` 风险，因此公网状态仍是旧部署可用、新源码未部署。下一实施任务是 Task 4：把真实目录 API 接入 B 工作台，形成不需要 UUID 的可点击主流程。
 
 ## 1. 当前 Git 与工作区快照
 
@@ -15,13 +15,13 @@ Task 0、Task 1 和 Task 2 已完成：可信计算链、固定九步 Agent、B�
 | --- | --- |
 | 工作区 | `D:\guet_learning\26 AI acting\Battery-energy-storage-zzb` |
 | 分支 | `codex/quanxin-full` |
-| 当前 HEAD | `45a38887dda785a74a6cad7acc015a44c88c5b7c` |
-| HEAD 摘要 | `docs: record immutable ACR release evidence` |
+| 当前 HEAD | `c7d8a76` |
+| HEAD 摘要 | `feat(api): add analysis catalogs and fixed advanced runs` |
 | 当前 release 源码 | `daca47a7d0a2f8e82a7c549b6b97d0f25b5596a7` |
-| 远端关系 | 用户已 push，当前工作区无受跟踪差异；仅保留明确保护的未跟踪内容 |
+| 远端关系 | `origin/codex/quanxin-full` 当前停在 `8bc2402`；`bd78259` 与 `c7d8a76` 待用户 push |
 | 当前 release | `2026.08.02-1`，基于 `daca47a...`，状态 `Published` |
 | 历史 release | `2026.07.28-1`，基于旧提交 `912f8ae...` 和旧 IP，仅保留为历史证据 |
-| 当前任务 | Task 0、Task 1、Task 2 已完成；准备进入 Task 3，ECS 部署与运营闭环归入 Task 8 |
+| 当前任务 | Task 0 至 Task 3 已完成；进入 Task 4 工作台真实接线，ECS 部署与运营闭环归入 Task 8 |
 
 Task 2 实现与 CI 修复提交：
 
@@ -36,9 +36,16 @@ ec4cd8b fix(agent): persist auditable results and enforce frozen batches
 daca47a test: assemble complete postgres agent runtime
 ```
 
+Task 3 提交：
+
+```text
+bd78259 fix: recover concurrent calibration commits
+c7d8a76 feat(api): add analysis catalogs and fixed advanced runs
+```
+
 ### 1.1 当前 `git status --short`
 
-以下是本轮 ECS 审计文档提交完成后的预期状态：
+以下是 Task 3 提交完成后的实际状态：
 
 ```text
 ?? .playwright-mcp/
@@ -52,7 +59,7 @@ daca47a test: assemble complete postgres agent runtime
 ?? tmp/
 ```
 
-除本轮 ECS audit/status/handoff 文档外，所有受跟踪产品修改已经按审查边界提交；没有业务源码差异。`.gitignore` 的用户修改已按原样独立提交。`frontend/pnpm-workspace.yaml` 是工具运行期间意外生成的未跟踪占位文件，继续保留。
+所有 Task 3 受跟踪产品修改已经按审查边界提交；`git diff` 与 `git diff --cached` 为空。`.gitignore` 的用户修改已按原样独立提交。`frontend/pnpm-workspace.yaml` 是工具运行期间意外生成的未跟踪占位文件，继续保留。
 
 ### 1.2 本地提交边界
 
@@ -65,11 +72,13 @@ daca47a test: assemble complete postgres agent runtime
 - `aa5aa40`：用户已有 `/server-results/` 忽略规则；
 - `41fcd1d`：产品化总计划和 Task 0/Task 1 交接；
 - `45a3888`：当前 release、公开状态、ECS 手册和不可变 ACR 证据；
-- 本轮 ECS 审计文档提交：VNC 只读对账、公开状态、ECS 手册和本交接的实际证据更新。
+- `8bc2402`：VNC 只读对账、公开状态、ECS 手册和本交接的 ECS 证据更新；
+- `bd78259`：SQLite 并发 exact calibration commit 在退出旧快照后恢复已提交 READY 物化；
+- `c7d8a76`：六个目录/编排 API、固定九步高级分析、结果目录 fail-closed 校验与前端 client 契约。
 
 ### 1.3 受跟踪工作区
 
-本轮 ECS 审计文档提交完成后，`git diff` 与 `git diff --cached` 应为空。发布源码、测试、配置和 release 证据 `45a3888` 已 push 到 `origin/codex/quanxin-full`；新增 ECS 审计文档由根 Agent 本地提交后，仍需用户通过 GitHub Desktop push。
+当前 `git diff` 与 `git diff --cached` 为空。`8bc2402` 已在远端；Task 3 的 `bd78259` 与 `c7d8a76` 仍需用户通过 GitHub Desktop push。当前生产 release `2026.08.02-1` 不包含这两个提交。
 
 ### 1.4 未跟踪内容
 
@@ -138,11 +147,14 @@ Next.js 产品工作台
 - backend/frontend/gateway build summary 均确认 `org.opencontainers.image.revision=daca47a...` 与 `org.opencontainers.image.version=2026.08.02-1`；frontend 还确认内置 public origin 为 `https://47.99.69.138`。
 - 基线提交 `e91ce7c` 已修复旧 0013 PostgreSQL Boolean 可移植性、0013/0015 PostgreSQL native alter 路径，并补齐 backend `llm` extra；Task 2 的 Runtime、Agent、前端和发布提交位于其后。旧交接中的 migration blocker 对当前源码已经过时。
 - 公网 `47.99.69.138` 的严格 TLS、Gateway、Frontend 和受认证 API 路由可达，详见第 7 节。
+- 项目目录 API：项目 datasets、dataset batches、冻结 analysis inputs、项目 Agent runs 和按 step ordinal 返回的结果目录。
+- 产品级 `advanced-analyses` 只接收 record batch、电芯、cutoff 与幂等键；服务端复核项目权限、冻结状态、内容哈希、电芯/cutoff，并使用显式固定九步 planner，绕过通用/LLM planner。
+- 结果目录对 plan hash、持久 step 身份、状态与 ToolResult 绑定 fail closed；重复 Conformal 工具通过 `step_id + ordinal + result` 区分。
 
 ### 3.2 部分完成
 
-- Agent 产品入口：视觉与唯一主操作已完成，但目录 API 尚未提供可选择的数据集、电芯和 cutoff，底层表单仍依赖现有 UUID/参数契约，尚不能完成普通用户的一键闭环。
-- 实时进度：固定九步名称、序号、可信失败/重试状态、SSE 校验、重连和审计事件已具备；步骤耗时、自动结果发现和真实纵向运行仍待后续目录 API 与 E2E。
+- Agent 产品入口：目录 API 和前端 client 已完成，但页面尚未调用它们；底层表单仍依赖现有 UUID/参数契约，尚不能完成普通用户的一键闭环。
+- 实时进度：固定九步名称、序号、可信失败/重试状态、SSE 校验、重连和审计事件已具备；步骤耗时、自动结果发现和真实纵向运行仍待 Task 4 页面接线与后续 E2E。
 - 单电芯结果：RUL/SOH/Conformal/报告组件存在，但调用者必须提供 record batch 和多个 result ID，运行结果不可自动发现。
 - 报告导出：通用后端具备 JSON、Markdown、PDF、DOCX 能力；competition runtime 未确认注入 report exporter，前端没有下载中心。
 - 上传：后端只有单电芯、单 cutoff、JSON base64 canonical CSV 的底层接口和内容寻址对象存储；没有产品上传会话。
@@ -150,13 +162,6 @@ Next.js 产品工作台
 
 ### 3.3 未完成
 
-- Task 3 的目录/编排 API 尚未实现：
-  - `GET /v1/projects/{project_id}/analysis-inputs`
-  - `GET /v1/projects/{project_id}/datasets`
-  - `GET /v1/datasets/{dataset_id}/batches`
-  - `GET /v1/projects/{project_id}/agent/runs`
-  - `GET /v1/agent/runs/{run_id}/results`
-  - `POST /v1/projects/{project_id}/advanced-analyses`
 - 项目首页中的内置样例、电芯/cutoff、最近运行、数据状态和结果目录。
 - CSV/Parquet/多文件/ZIP、`metadata.csv`、16 MiB 分块、暂停/重试/续传、质量确认、异步导入和四 cutoff 自动生成。
 - 由真实目录 API 驱动的完整工作台、整合结果页、证据抽屉、报告阅读页和下载中心；当前 B 方案实现的是可信布局与状态骨架。
@@ -218,7 +223,7 @@ POST /v1/datasets/{dataset_id}/batches/canonical-csv
 - 只允许授权用户向 ACTIVE project 的 DRAFT dataset 写入；
 - 服务端派生 project/dataset/content ID 和哈希，调用方不能注入；
 - 解码后 CSV 上限为 25 MiB，要求 UTF-8、固定字段、已登记 metadata/version/provenance；
-- dataset 只有创建、单项读取和冻结，没有项目 datasets 列表或 batch 列表；
+- dataset 已有项目 datasets 列表和 batch 列表；现有写入仍只有单批 canonical CSV 与冻结接口；
 - MinIO adapter 有内容寻址和读取时 SHA 校验，但没有隔离区、upload session 或异步导入产品流程。
 
 ## 5. Runtime V7 与 Agent 关键模块
@@ -308,7 +313,7 @@ Compose 包含 7 个服务：PostgreSQL、Redis、一次性 `migrate`、API、Wo
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-结果：`1777 passed, 9 skipped, 50 warnings`，exit 0，耗时 9 分 35.26 秒。警告为 Starlette/httpx 弃用和 PyTorch Transformer nested tensor 提示。新增 2 个 skip 是真实 PostgreSQL 专用测试在本机没有显式 passwordless loopback DSN 时的预期结果。
+结果：`1786 passed, 9 skipped, 50 warnings`，exit 0。警告为 Starlette/httpx 弃用和 PyTorch Transformer nested tensor 提示。skip 包括真实 PostgreSQL 专用测试在本机没有显式 passwordless loopback DSN 时的预期结果。
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check .
@@ -320,7 +325,7 @@ Compose 包含 7 个服务：PostgreSQL、Redis、一次性 `migrate`、API、Wo
 .\.venv\Scripts\python.exe -m mypy
 ```
 
-结果：`Success: no issues found in 207 source files`
+结果：`Success: no issues found in 208 source files`
 
 ```powershell
 .\.venv\Scripts\python.exe -m compileall -q src workbench deploy migrations
@@ -341,13 +346,20 @@ frontend\node_modules\.bin\next.cmd build
 
 结果：
 
-- Vitest：21 files、`81 passed`；
+- Vitest：21 files、`82 passed`；
 - ESLint：exit 0；
 - TypeScript：exit 0；
 - Next.js 16 production build：exit 0，`/icon.svg` 与全部当前路由编译/预渲染成功；
 - build 仅提示 `baseline-browser-mapping` 数据较旧，不是构建失败。
 
-### 8.3 Task 2 定向验证
+### 8.3 Task 3 定向验证
+
+- Task 3 API/application/runtime 五文件集合：`31 passed, 1 warning`；
+- 前端 API client：`12 passed`；
+- SQLite 并发 exact calibration commit：`1 passed`，并在实现完成后连续运行 10 次通过；
+- `git diff --check` 与每次 `git diff --cached --check`：exit 0，仅有既有 Windows LF/CRLF 提示。
+
+### 8.4 Task 2 定向验证
 
 - Runtime V7/Agent 聚焦回归：`120 passed`；补充外键与 scope 后两文件回归：`26 passed`。
 - 发布、Compose、CI、运行文档和 PostgreSQL 测试收集：`37 passed, 2 skipped`。
@@ -356,7 +368,7 @@ frontend\node_modules\.bin\next.cmd build
 
 生产预览使用 `NEXT_PUBLIC_API_BASE_URL=https://qa.quanxin.invalid` 构建，当前本地入口为 `http://127.0.0.1:3011`。
 
-### 8.4 GitHub Actions 与不可变发布
+### 8.5 GitHub Actions 与不可变发布
 
 - CI run `30738774242`，source `daca47a...`：`python-quality`、`postgres-quality`、`frontend-quality` 全部成功；
 - `python-quality`：6 分 2 秒，pytest、Ruff、mypy 和 compileall 全部成功；
@@ -367,7 +379,7 @@ frontend\node_modules\.bin\next.cmd build
 
 GitHub Actions 的 Node.js 20 弃用注释来自 action 运行时被强制切到 Node.js 24，不是本次 CI 或发布失败，也不改变镜像 source identity。
 
-### 8.5 浏览器 Design QA
+### 8.6 浏览器 Design QA
 
 - 登录页已在 `1440×1024`、`1024×768`、`390×844` 核验；手机端表单先于品牌说明，且无整页横向溢出。
 - 项目工作台已在三种视口核验；桌面保持约 62/38 双栏，平板/手机操作与进度区先于结果与审计区，流程条只在自身区域滚动。
@@ -379,7 +391,7 @@ GitHub Actions 的 Node.js 20 弃用注释来自 action 运行时被强制切到
 
 一次直接 `pnpm` 调用因 Codex 运行时包装器尝试执行 install，并被 ignored build scripts 策略拒绝；未执行 `pnpm approve-builds`，未安装依赖。随后使用现存本地二进制完成上述门禁。该过程留下 `frontend/pnpm-workspace.yaml` 占位文件，当前保留。
 
-### 8.6 仍缺少的验证
+### 8.7 仍缺少的验证
 
 - 本机没有 Docker/Podman/nerdctl，未运行本地 `docker compose config` 或容器 smoke；真实镜像 build 已由 GitHub Actions 完成；
 - 当前 release 尚未部署；ECS 仍运行旧 tag、旧 digest 和热修复 bind mount；
@@ -395,7 +407,7 @@ Task 2 已降低未来发布继续产生该断层的概率：release tag 不可�
 第二层风险：
 
 - 本轮 release 文档提交仍需用户 push；如果 GitHub Desktop 误选全部未跟踪文件，会混入浏览器日志、临时数据库、论文过程文件和意外 pnpm 占位配置；
-- 产品目录 API 尚不存在，前端若先编码会继续依赖 UUID 和临时查询参数；
+- Task 3 列表端点暂未分页，`analysis-inputs` 与运行目录存在 N+1/大响应风险；Task 4 先服务比赛级规模，Task 5 引入多电芯后必须增加上限或分页与批量查询；
 - v1/v2 artifact 目录若同时存在会 fail closed，发布前必须核验 catalog 和 ECS artifact 目录；
 - migration 对不兼容历史审计行应 fail closed，上线前需要真实 DB 预检和备份；
 - 上传是外部不可信输入，未来必须覆盖大小、哈希、ZIP 路径穿越、单位、重复电芯、周期不足、部分失败和幂等。
@@ -415,23 +427,22 @@ Task 2 已降低未来发布继续产生该断层的概率：release tag 不可�
 - 用户选定三套视觉方案之一后才允许前端视觉编码；选定图是实现的视觉真相。
 - 密码只由用户在交互提示中输入，不读、不输出、不保存。
 
-## 11. Task 2 当前状态与下一步
+## 11. Task 3 当前状态与下一步
 
-Task 0、Task 1、Task 2 已完成。Runtime V7 差异已审计并合入正常源码；外键父记录顺序、Agent scope、canonical input、固定九步和共享 `AuditLedger` 已有回归；Python、真实 PostgreSQL 和前端 CI 全绿；backend、frontend、gateway 已作为不可变镜像构建，Gateway 不再依赖配置 bind mount；release `2026.08.02-1` 已发布并记录五个 digest 和三张自建镜像的 OCI revision/version。
+Task 0 至 Task 3 已完成。Runtime V7、固定九步、项目/数据/运行目录、产品级高级分析启动和结果集合契约均已进入正常源码。并发恢复修复提交为 `bd78259`，Task 3 主提交为 `c7d8a76`。最新当前工作区完整门禁为 Python `1786 passed, 9 skipped, 50 warnings`、前端 21 files / `82 passed`；Ruff、mypy 208 个源文件、compileall、ESLint、TypeScript 与 Next.js production build 均通过。
 
-下一步进入 Task 3：先实现项目、数据和分析目录 API，消除普通用户手填 UUID。ECS 只读审计已完成，确认旧部署可用但当前 release 未部署；新 release 部署、Redis 恢复专项、route/calibration、报告链和发布后九步 E2E 归入 Task 8，不阻塞 Task 3 源码开发。任何公网演示仍必须标明运行的是旧 release，直到 `2026.08.02-1` 完成 RepoDigest/OCI/无 bind mount 对账。
+下一步进入 Task 4：让项目页读取 `analysis-inputs` 和最近运行，按可读名称选择 record batch、电芯与 cutoff，调用 `advanced-analyses`，跳转到 Agent SSE 页面，并在完成后通过结果目录自动组装 RUL/SOH/Conformal/报告。任何公网演示仍必须标明运行的是旧 release，直到包含 Task 3/4 的新 release 完成 RepoDigest/OCI/无 bind mount 对账。
 
 ## 12. 后续实施顺序
 
 按总计划依赖顺序继续：
 
-1. Task 2：已完成，包含 Runtime V7 整理、全量门禁、真实 PostgreSQL CI 和不可变 release `2026.08.02-1`。
-2. Task 3：当前下一任务，先实现目录/编排 API，避免前端继续手填 UUID。
-3. Task 4：在 B 方案可信布局骨架上接入目录 API，形成完整产品工作台。
-4. Task 5：实现分块上传、隔离校验、异步导入和多电芯管理。
-5. Task 6：实现完整报告与 ToolResult 导出。
-6. Task 7：真实浏览器纵向验收，并逐项对账 ToolResult。
-7. Task 8：新 release、严格 TLS、备份恢复、回滚和运维闭环。
+1. Task 0 至 Task 3：已完成；Task 3 提交待用户 push。
+2. Task 4：当前任务，在 B 方案骨架上接入目录、固定启动、运行历史和结果自动发现。
+3. Task 5：实现分块上传、隔离校验、异步导入和多电芯管理。
+4. Task 6：实现完整报告与 ToolResult 导出。
+5. Task 7：真实浏览器纵向验收，并逐项对账 ToolResult。
+6. Task 8：新 release、严格 TLS、备份恢复、回滚和运维闭环。
 
 ## 13. 用户协作偏好
 
@@ -452,5 +463,5 @@ Task 0、Task 1、Task 2 已完成。Runtime V7 差异已审计并合入正常�
 3. 保护 `.playwright-mcp/`、`tmp/`、`frontend/pnpm-workspace.yaml` 和 6 张未提交的中间截图；不要在 GitHub Desktop 中全选未跟踪文件。
 4. 不把旧 IP、旧 release 或旧 migration 阻塞当成当前事实；公网 IP 是 `47.99.69.138`。
 5. Task 1 已完成且用户已确认 B「双栏分析」；不得回退到重新选方案，也不得把未来目录、上传或导出能力写成当前已接通。
-6. Task 2 已完成并发布为 `2026.08.02-1`；release 证据 `45a3888` 已 push，本轮 ECS 审计文档提交后仍由用户在 GitHub Desktop push。下一任务是 Task 3。
+6. Task 3 已由 `bd78259` 与 `c7d8a76` 完成，仍由用户在 GitHub Desktop push。下一任务是 Task 4 工作台真实接线；不要重新实现目录 API或回退到通用 UUID 表单。
 7. 任何生产结论必须有当前命令、ToolResult、API、数据库、镜像 digest 或浏览器证据；无法核验就明确写 `unverified`。

@@ -22,7 +22,8 @@
 | target-aware RUL / finite-horizon SOH | 是 | 工具、API、Agent、报告测试 | 否 | 公网真实模型验收 |
 | exact `AgentStep` 与原子 ledger | 是 | claim/recovery 测试 | 否 | 多副本压力测试 |
 | calibration materialization | 是 | ADMIN API、Worker、UI、纵向 E2E | 否 | 真实 Worker 与证据部署 |
-| Next.js 项目门户 | 是 | 单元测试、类型检查、构建、E2E | 否 | 公网浏览器验收 |
+| 项目/数据/运行/结果目录 API | 是 | 目录权限、固定九步、幂等与 fail-closed 集成测试 | 否 | 前端工作台接线、分页与规模优化 |
+| Next.js 项目门户 | B 方案骨架与目录 client 已实现 | 单元测试、类型检查、构建、Design QA | 否 | 接入真实目录、启动、运行历史与结果自动发现 |
 | 竞赛单机服务栈 | Compose、API、Worker、迁移、网关已实现 | 完整 CI、真实 PostgreSQL、不可变 ACR 构建、ECS 只读审计 | 否（ECS 仍运行旧 release） | 部署 `2026.08.02-1`、Redis 恢复核验、备份与演练 |
 | HUST 外部验证 | 接入与安全转换组件存在 | 尚无正式零样本结果 | 否 | 零样本、重校准、域适配 |
 | 工业 BMS/EMS | 协议沙箱存在 | 沙箱测试 | 否 | 企业凭证、网络、设备和安全联锁 |
@@ -101,6 +102,13 @@ Gateway 仍依赖宿主机配置绑定。完整发布记录见
 [2026-08-02 ECS 只读审计](deployment/ecs-audit-2026-08-02.md)。
 
 ## 未完成事项
+
+### 产品化
+
+1. 将 `analysis-inputs`、项目运行目录和 `advanced-analyses` 接入 B 工作台，消除 UUID 主流程；
+2. 完成 CSV/Parquet/多文件/ZIP 分块上传、隔离校验、异步导入和多电芯管理；
+3. 完成九步 ToolResult 集合、派生 CSV、PDF/Word 和带 manifest/SHA-256 的异步 ZIP 下载中心；
+4. 使用真实浏览器完成登录、上传、九步 Worker、结果、报告和下载的纵向对账。
 
 ### 研究
 
