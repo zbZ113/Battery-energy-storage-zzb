@@ -52,6 +52,32 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Refuse an existing release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          for repository in \
+            quanxin-backend \
+            quanxin-frontend \
+            quanxin-postgres \
+            quanxin-redis \
+            quanxin-nginx
+          do
+            reference="${ACR_REGISTRY}/${ACR_NAMESPACE}/${repository}:${RELEASE_TAG}"
+            error_file="$(mktemp)"
+            if docker buildx imagetools inspect "${reference}" >/dev/null 2>"${error_file}"; then
+              echo "::error::Release tag already exists for ${repository}; choose a new immutable tag."
+              rm -f "${error_file}"
+              exit 1
+            fi
+            if ! grep -Eiq 'manifest unknown|not found|no such manifest' "${error_file}"; then
+              cat "${error_file}" >&2
+              rm -f "${error_file}"
+              exit 1
+            fi
+            rm -f "${error_file}"
+          done
+
       - name: Build and publish the backend runtime
         uses: docker/build-push-action@v6
         with:
@@ -60,6 +86,9 @@ jobs:
           push: true
           tags: ${{ secrets.ACR_REGISTRY }}/${{ vars.ACR_NAMESPACE }}/quanxin-backend:${{ inputs.release_tag }}
           provenance: false
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ inputs.release_tag }}
 
       - name: Build and publish the frontend runtime
         uses: docker/build-push-action@v6
@@ -70,6 +99,21 @@ jobs:
           tags: ${{ secrets.ACR_REGISTRY }}/${{ vars.ACR_NAMESPACE }}/quanxin-frontend:${{ inputs.release_tag }}
           build-args: |
             NEXT_PUBLIC_API_BASE_URL=${{ inputs.public_origin }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ inputs.release_tag }}
+
+      - name: Build and publish the gateway runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.gateway
+          push: true
+          tags: ${{ secrets.ACR_REGISTRY }}/${{ vars.ACR_NAMESPACE }}/quanxin-nginx:${{ inputs.release_tag }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ inputs.release_tag }}
           provenance: false
 
       - name: Mirror reviewed infrastructure images into private ACR
@@ -88,7 +132,6 @@ jobs:
           }
           mirror "pgvector/pgvector:0.8.1-pg16" "quanxin-postgres"
           mirror "redis:7.4.2-alpine" "quanxin-redis"
-          mirror "nginx:1.27.4-alpine" "quanxin-nginx"
 
       - name: Record immutable image digests
         shell: bash

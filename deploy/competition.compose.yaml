@@ -228,7 +228,6 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/competition.conf:/etc/nginx/conf.d/default.conf:ro
       - ${LETSENCRYPT_ROOT:-/etc/letsencrypt}:/etc/letsencrypt:ro
       - ${ACME_WEBROOT:-/srv/quanxin/acme}:/var/www/certbot:ro
     networks:

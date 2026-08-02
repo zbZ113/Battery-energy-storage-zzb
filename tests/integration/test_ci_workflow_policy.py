@@ -27,3 +27,17 @@ def test_python_ci_installs_extras_imported_by_the_full_test_suite() -> None:
     assert editable_install is not None
     installed_extras = {value.strip() for value in editable_install.group(1).split(",")}
     assert {"knowledge", "llm", "reporting"} <= installed_extras
+
+
+def test_ci_runs_runtime_v7_regressions_against_real_postgresql() -> None:
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "postgres-quality:" in workflow
+    assert "pgvector/pgvector:0.8.1-pg16" in workflow
+    assert "POSTGRES_HOST_AUTH_METHOD: trust" in workflow
+    assert (
+        "QUANXIN_TEST_POSTGRES_URL: "
+        "postgresql+psycopg://postgres@127.0.0.1:5432/postgres"
+    ) in workflow
+    assert "python -m pytest -q tests/postgres" in workflow
+    assert Path("tests/postgres/test_runtime_v7_postgres.py").is_file()

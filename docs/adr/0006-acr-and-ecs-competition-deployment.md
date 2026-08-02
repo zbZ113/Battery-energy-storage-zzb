@@ -23,6 +23,7 @@
 9. secret 由 root-owned 文件提供，不进入 Git、镜像或聊天记录；
 10. 模型、数据、策略、注册表和 calibration evidence 使用显式受管挂载；
 11. 正式部署记录使用镜像 digest，不只依赖可变 tag。
+12. Gateway 配置固化在 `quanxin-nginx` 镜像中，release workflow 拒绝覆盖已存在 tag。
 
 ## 资源策略
 
@@ -65,8 +66,8 @@ Compose 对各服务设置资源上限，Worker 并发为 1。该选择优先保
 
 - `.github/workflows/publish-acr.yml`；
 - `deploy/competition.compose.yaml`；
-- `deploy/Dockerfile.backend` 与 `frontend/Dockerfile`；
-- workflow 中固定的 pgvector/PostgreSQL、Redis 与 Nginx 上游镜像版本；
+- `deploy/Dockerfile.backend`、`frontend/Dockerfile` 与 `deploy/Dockerfile.gateway`；
+- workflow 中固定的 pgvector/PostgreSQL、Redis 与 Gateway 基础镜像版本；
 - `deploy/nginx/competition.conf`；
 - `deploy/runtime_settings.py`；
 - `deploy/competition_runtime.py`；

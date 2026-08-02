@@ -42,11 +42,39 @@ def test_acr_release_publishes_application_and_owned_infrastructure_images() -> 
 
     assert "deploy/Dockerfile.backend" in workflow
     assert "frontend/Dockerfile" in workflow
+    assert "deploy/Dockerfile.gateway" in workflow
     assert "pgvector/pgvector:0.8.1-pg16" in workflow
     assert "redis:7.4.2-alpine" in workflow
-    assert "nginx:1.27.4-alpine" in workflow
     assert "NEXT_PUBLIC_API_BASE_URL" in workflow
     assert "https://" in workflow
+
+
+def test_acr_release_refuses_to_overwrite_an_existing_release_tag() -> None:
+    workflow = _read(".github/workflows/publish-acr.yml")
+
+    guard_position = workflow.index("Refuse an existing release tag")
+    build_position = workflow.index("Build and publish the backend runtime")
+
+    assert guard_position < build_position
+    assert "docker buildx imagetools inspect" in workflow[guard_position:build_position]
+    for repository in (
+        "quanxin-backend",
+        "quanxin-frontend",
+        "quanxin-postgres",
+        "quanxin-redis",
+        "quanxin-nginx",
+    ):
+        assert repository in workflow[guard_position:build_position]
+
+
+def test_owned_runtime_images_record_source_revision_and_release_version() -> None:
+    workflow = _read(".github/workflows/publish-acr.yml")
+
+    revision_label = "org.opencontainers.image.revision=${{ github.sha }}"
+    version_label = "org.opencontainers.image.version=${{ inputs.release_tag }}"
+
+    assert workflow.count(revision_label) == 3
+    assert workflow.count(version_label) == 3
 
 
 def test_backend_image_contains_runtime_code_but_not_local_results() -> None:
@@ -88,3 +116,10 @@ def test_frontend_image_uses_locked_standalone_next_build() -> None:
     assert ".next/static" in dockerfile
     assert 'NEXT_OUTPUT === "standalone"' in next_config
     assert "ENV NEXT_OUTPUT=standalone" in dockerfile
+
+
+def test_gateway_image_bakes_the_reviewed_nginx_configuration() -> None:
+    dockerfile = _read("deploy/Dockerfile.gateway")
+
+    assert "FROM nginx:1.27.4-alpine" in dockerfile
+    assert "COPY deploy/nginx/competition.conf /etc/nginx/conf.d/default.conf" in dockerfile

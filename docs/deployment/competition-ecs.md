@@ -90,6 +90,10 @@ quanxin-redis
 quanxin-nginx
 ```
 
+发布前会逐个检查五个仓库；只要任一仓库已经存在同名 tag，工作流就会失败，禁止覆盖
+既有 release 身份。`quanxin-nginx` 由 `deploy/Dockerfile.gateway` 构建，并把受审
+`competition.conf` 固化进镜像。
+
 成功后将 job summary 中的 source commit、release tag 和五个 digest 保存到部署
 记录。不得使用 `latest`，不得只记录可变 tag。
 
@@ -100,7 +104,6 @@ quanxin-nginx
 ```bash
 sudo install -d -o quanxin -g quanxin -m 0750 \
   /srv/quanxin/deploy \
-  /srv/quanxin/deploy/nginx \
   /srv/quanxin/data \
   /srv/quanxin/artifacts \
   /srv/quanxin/policies \
@@ -119,7 +122,6 @@ sudo install -d -o root -g quanxin -m 0750 /etc/quanxin/secrets
 ```text
 /srv/quanxin/deploy/competition.compose.yaml
 /srv/quanxin/deploy/competition.env.example
-/srv/quanxin/deploy/nginx/competition.conf
 ```
 
 例如从已核验的源目录执行：
@@ -129,12 +131,10 @@ install -m 0644 deploy/competition.compose.yaml \
   /srv/quanxin/deploy/competition.compose.yaml
 install -m 0644 deploy/competition.env.example \
   /srv/quanxin/deploy/competition.env.example
-install -D -m 0644 deploy/nginx/competition.conf \
-  /srv/quanxin/deploy/nginx/competition.conf
 ```
 
-`competition.compose.yaml` 绑定 `./nginx/competition.conf`，丢失 `nginx/` 层级会使
-gateway 启动失败。
+Gateway 配置已经固化在不可变 `quanxin-nginx` 镜像中；Compose 只挂载证书和 ACME
+webroot，不再从 ECS 宿主机 bind mount Nginx 配置。
 
 不要把完整仓库、15 GB Advanced Final、原始 MATR 数据或训练检查点全集复制到 ECS。
 部署 registry 只包含运行所需的 15 个代表候选及其闭包。

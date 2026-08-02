@@ -89,6 +89,14 @@ def test_competition_compose_mounts_certificates_and_evidence_with_safe_modes() 
     assert "mem_limit:" in compose
 
 
+def test_gateway_configuration_comes_from_the_immutable_image() -> None:
+    compose = _read("deploy/competition.compose.yaml")
+
+    assert "./nginx/competition.conf:/etc/nginx/conf.d/default.conf:ro" not in compose
+    assert "${LETSENCRYPT_ROOT:-/etc/letsencrypt}:/etc/letsencrypt:ro" in compose
+    assert "${ACME_WEBROOT:-/srv/quanxin/acme}:/var/www/certbot:ro" in compose
+
+
 def test_nginx_terminates_tls_serves_acme_and_proxies_same_origin_routes() -> None:
     nginx = _read("deploy/nginx/competition.conf")
 
