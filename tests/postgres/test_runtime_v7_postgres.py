@@ -22,6 +22,7 @@ from quanxin_life.application.agent_run_execution import AgentRunExecutionWorker
 from quanxin_life.application.agent_runs import AgentRunService
 from quanxin_life.application.datasets import DatasetService
 from quanxin_life.application.projects import ProjectService
+from quanxin_life.audit import AuditLedger
 from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import (
     AgentRunStatus,
@@ -190,7 +191,7 @@ def _tool_result(tool_name: StandardToolName, value: ContractModel) -> ToolResul
         result_id=str(uuid4()),
         tool_name=tool_name.value,
         tool_version="runtime-v7-postgres-test-v1",
-        model_version=None,
+        model_version="runtime-v7-postgres-test-model-v1",
         data_version="runtime-v7-postgres-test-data-v1",
         feature_version="runtime-v7-postgres-test-features-v1",
         input_hash=sha256_canonical(input_value),
@@ -233,7 +234,7 @@ def _tool_service() -> tuple[ToolInvocationService, list[StandardToolName]]:
     register(StandardToolName.PREDICT_SOH_TRAJECTORY, _PredictionInput)
     register(StandardToolName.CALIBRATE_PREDICTION_INTERVAL, _ConformalInput)
     register(StandardToolName.GENERATE_AUDITED_REPORT, _ReportInput)
-    return ToolInvocationService(registry=registry), calls
+    return ToolInvocationService(registry=registry, audit_ledger=AuditLedger()), calls
 
 
 def test_postgresql_migrations_reach_runtime_v7_head(
