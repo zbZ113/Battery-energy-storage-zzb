@@ -17,6 +17,7 @@ describe("AgentTimeline", () => {
         events={[
           {
             event_id: "evt-1",
+            run_id: "run-1",
             sequence: 1,
             event_type: "STEP_COMPLETED",
             created_at: "2026-07-16T08:30:00Z",
@@ -41,6 +42,7 @@ describe("AgentTimeline", () => {
         events={[
           {
             event_id: "evt-approval",
+            run_id: "run-1",
             sequence: 2,
             event_type: "APPROVAL_APPROVED",
             created_at: "2026-07-16T08:31:00Z",

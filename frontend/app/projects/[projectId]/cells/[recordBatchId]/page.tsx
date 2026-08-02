@@ -39,7 +39,7 @@ export default function SingleCellPage({
   };
 
   return (
-    <AppShell>
+    <AppShell workflowStage="results">
       <header className="page-header">
         <div>
           <p className="eyebrow">VERIFIED SINGLE-CELL ANALYSIS</p>

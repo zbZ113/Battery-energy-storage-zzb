@@ -36,7 +36,7 @@ export default function ProjectsPage() {
   }, []);
 
   return (
-    <AppShell>
+    <AppShell workflowStage="project">
       <header className="page-header"><div><p className="eyebrow">PROJECTS</p><h1>项目总览</h1><p>进入获授权的电芯研究项目，查看运行任务和可信证据。</p></div></header>
       {projects === null && error === null ? <div className="loading-state"><RefreshCw className="spin" />正在加载项目…</div> : null}
       {error ? <section className="alert alert-error" role="alert"><p>{error}</p><button className="button button-quiet" onClick={() => void load()}>重新加载</button></section> : null}

@@ -12,7 +12,7 @@ describe("CreateAgentRunForm", () => {
 
     await user.type(screen.getByLabelText("你想让 Agent 完成什么"), "分析电芯寿命风险");
     await user.type(screen.getByLabelText("冻结数据集 ID"), "dataset-1, dataset-2\ndataset-1");
-    await user.click(screen.getByRole("button", { name: "创建分析任务" }));
+    await user.click(screen.getByRole("button", { name: "启动全新九步 Agent" }));
 
     expect(onCreate).toHaveBeenCalledWith({
       project_id: "project-1",
@@ -27,7 +27,7 @@ describe("CreateAgentRunForm", () => {
     const user = userEvent.setup();
     render(<CreateAgentRunForm onCreate={onCreate} projectId="project-1" />);
     await user.type(screen.getByLabelText("你想让 Agent 完成什么"), "分析电芯寿命风险");
-    await user.click(screen.getByRole("button", { name: "创建分析任务" }));
+    await user.click(screen.getByRole("button", { name: "启动全新九步 Agent" }));
     expect(onCreate).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent("至少填写一个已冻结的数据集 ID");
   });

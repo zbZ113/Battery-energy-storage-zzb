@@ -5,6 +5,7 @@ import {
   BatteryCharging,
   ChartNoAxesCombined,
   CircleAlert,
+  Download,
   FileText,
   LoaderCircle,
   Route,
@@ -67,6 +68,18 @@ function WaitingState({
         <ul>
           {missingKeys.map((key) => <li key={key}>{RESULT_LABELS[key]}</li>)}
         </ul>
+      </div>
+    </section>
+  );
+}
+
+function ExportStatus() {
+  return (
+    <section aria-label="下载状态" className="export-status" role="status">
+      <Download aria-hidden="true" />
+      <div>
+        <h2>下载</h2>
+        <p>待服务端提供导出；页面不会在浏览器中拼装业务报告。</p>
       </div>
     </section>
   );
@@ -180,7 +193,14 @@ function SingleCellAnalysisLoader({
     }
   }
 
-  if (!requestedResults.length) return <WaitingState missingKeys={missingKeys} />;
+  if (!requestedResults.length) {
+    return (
+      <div className="single-cell-analysis">
+        <WaitingState missingKeys={missingKeys} />
+        <ExportStatus />
+      </div>
+    );
+  }
 
   return (
     <div className="single-cell-analysis">
@@ -299,6 +319,7 @@ function SingleCellAnalysisLoader({
 
       {validationError ? null : <Warnings results={results} />}
       <EvidenceStack results={results} />
+      <ExportStatus />
     </div>
   );
 }

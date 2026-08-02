@@ -65,7 +65,7 @@ export function CreateAgentRunForm({
       <p className="form-note form-note-left">默认安全输出：循环寿命（cycle_life）。工程数值仍只由后端工具签发。</p>
       {error ? <p className="alert alert-error" role="alert">{error}</p> : null}
       <button className="button button-primary" disabled={pending} type="submit">
-        <Play aria-hidden="true" size={17} />{pending ? "正在创建…" : "创建分析任务"}
+        <Play aria-hidden="true" size={17} />{pending ? "正在启动…" : "启动全新九步 Agent"}
       </button>
     </form>
   );

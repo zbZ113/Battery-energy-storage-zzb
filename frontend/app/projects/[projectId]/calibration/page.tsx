@@ -62,7 +62,7 @@ export default function CalibrationPage({
   }, [projectId]);
 
   return (
-    <AppShell>
+    <AppShell workflowStage="results">
       <header className="page-header calibration-page-header">
         <div>
           <p className="eyebrow">

@@ -18,7 +18,7 @@ export default function ResultPage({
   const runId = typeof rawRunId === "string" && rawRunId.trim() ? rawRunId.trim() : null;
 
   return (
-    <AppShell>
+    <AppShell workflowStage="results">
       <header className="page-header"><div><p className="eyebrow">VERIFIED RESULT</p><h1>结果与证据</h1><p>结果 ID：<code>{resultId}</code></p></div><FileSearch aria-hidden="true" className="header-icon" /></header>
       <ScopedResultLoader resultId={resultId} runId={runId} />
     </AppShell>

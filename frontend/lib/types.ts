@@ -34,6 +34,7 @@ export interface AgentRunCreateRequest {
 
 export interface AgentEvent {
   event_id: string;
+  run_id: string;
   sequence: number;
   event_type: string;
   created_at: string;

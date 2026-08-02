@@ -264,6 +264,27 @@ describe("SingleCellAnalysis", () => {
     expect(screen.getByText("尚缺 5 项 ToolResult")).toBeInTheDocument();
   });
 
+  it("keeps export unavailable until the server provides a signed artifact", () => {
+    render(
+      <SingleCellAnalysis
+        loadResult={vi.fn()}
+        projectId="project-1"
+        recordBatchId="batch-1"
+        resultIds={{
+          reportResultId: null,
+          rulConformalResultId: null,
+          rulResultId: null,
+          sohConformalResultId: null,
+          sohResultId: null,
+        }}
+      />,
+    );
+
+    const exportStatus = screen.getByRole("status", { name: "下载状态" });
+    expect(exportStatus).toHaveTextContent("待服务端提供导出");
+    expect(screen.queryByRole("link", { name: /下载/ })).not.toBeInTheDocument();
+  });
+
   it("loads every supplied result through the project-scoped loader and renders issued values", async () => {
     const results = validResults();
     const loadResult = vi.fn(
