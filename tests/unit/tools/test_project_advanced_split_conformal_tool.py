@@ -488,6 +488,56 @@ def test_calibration_sample_rejects_provenance_identity_mismatch() -> None:
         )
 
 
+def test_soh_calibration_sample_accepts_verified_sparse_finite_axis() -> None:
+    runtime = _runtime(
+        task=AdvancedModelTask.SOH,
+        role=AdvancedModelRouteRole.TAIL_EFFICIENCY,
+    )
+    cycles = [cycle for cycle in range(21, 501) if cycle != 39]
+    baseline = [
+        1.0 - index * 0.0005 for index in range(len(cycles))
+    ]
+    samples = tuple(
+        _result(
+            ADVANCED_SOH_CALIBRATION_SAMPLE_EVIDENCE_TYPE,
+            {
+                **runtime,
+                "cell_id": f"sparse-cal-{index}",
+                "cutoff_cycle": 20,
+                "materialization_id": MATERIALIZATION_ID,
+                "source_registration_id": SOURCE_REGISTRATION_ID,
+                "source_identity_sha256": SOURCE_IDENTITY_SHA256,
+                "split_partition": "calibration",
+                "prediction_cycles": cycles,
+                "predicted_soh": baseline,
+                "observed_soh": [
+                    value - residual for value in baseline
+                ],
+                "finite_horizon_only": True,
+                "horizon_end_cycle": 500,
+            },
+            tool_name=StandardToolName.PREDICT_SOH_TRAJECTORY,
+        )
+        for index, residual in enumerate((0.05,) * 8 + (0.10,))
+    )
+
+    calibration = execute_advanced_split_conformal_tool(
+        AdvancedSplitConformalToolInput(
+            operation="calibrate",
+            task=AdvancedModelTask.SOH,
+            route_role=AdvancedModelRouteRole.TAIL_EFFICIENCY,
+            alpha=0.10,
+            calibration_sample_result_ids=tuple(
+                result.result_id for result in samples
+            ),
+        ),
+        context=_context(),
+        result_resolver=_Resolver(samples),
+    )
+
+    assert calibration.values["artifact"]["prediction_cycles"] == cycles
+
+
 def test_soh_calibration_sample_requires_exact_axis_through_cycle_500() -> None:
     runtime = _runtime(
         task=AdvancedModelTask.SOH,

@@ -656,10 +656,33 @@ def _resume_artifact(
 ) -> DeepModelArtifactManifest | None:
     if resume_root is None:
         return None
-    artifact_id = str(uuid5(NAMESPACE_URL, checkpoint_manifest_sha256))
-    source = resume_root / artifact_id
-    if not source.exists():
+    schema_versions: tuple[
+        Literal["deep-model-artifact-v1", "deep-model-artifact-v2"],
+        ...,
+    ] = (
+        "deep-model-artifact-v2",
+        "deep-model-artifact-v1",
+    )
+    candidates = tuple(
+        (
+            _deployment_artifact_id(
+                checkpoint_manifest_sha256,
+                schema_version=schema_version,
+            ),
+            resume_root
+            / _deployment_artifact_id(
+                checkpoint_manifest_sha256,
+                schema_version=schema_version,
+            ),
+        )
+        for schema_version in schema_versions
+    )
+    existing = tuple(item for item in candidates if item[1].exists())
+    if not existing:
         return None
+    if len(existing) != 1:
+        raise ValueError("resume root contains multiple artifact schema generations")
+    artifact_id, source = existing[0]
     source = _regular_directory(source, "resumed artifact directory")
     manifest_path = _regular_file(source / "manifest.json", "resumed artifact manifest")
     manifest = DeepModelArtifactManifest.model_validate_json(manifest_path.read_bytes())
@@ -669,7 +692,15 @@ def _resume_artifact(
         "current_hybrid": DeepArtifactKind.CURRENT_HYBRID,
         "hybridpatch_v2": DeepArtifactKind.HYBRIDPATCH_V2,
     }.get(family)
-    if manifest.artifact_id != artifact_id or manifest.artifact_kind is not expected_kind:
+    expected_artifact_id = _deployment_artifact_id(
+        checkpoint_manifest_sha256,
+        schema_version=manifest.schema_version,
+    )
+    if (
+        artifact_id != expected_artifact_id
+        or manifest.artifact_id != expected_artifact_id
+        or manifest.artifact_kind is not expected_kind
+    ):
         raise ValueError("resumed artifact identity differs from its checkpoint route")
     verify_deep_model_artifact(resume_root, manifest)
     weight = next(
@@ -767,7 +798,10 @@ def _rebuild_and_export_artifact(
         model=task.model,
     )
 
-    artifact_id = str(uuid5(NAMESPACE_URL, manifest.manifest_sha256))
+    artifact_id = _deployment_artifact_id(
+        manifest.manifest_sha256,
+        schema_version="deep-model-artifact-v2",
+    )
     early = _early_batch_for_family(rebuilt.data, family)
     if family == "cyclepatch_direct":
         deep_manifest = export_cyclepatch_direct_artifact(
@@ -866,6 +900,26 @@ def _rebuild_and_export_artifact(
         candidate_config_sha256=manifest.context.candidate_config_sha256,
     )
     return deep_manifest
+
+
+def _deployment_artifact_id(
+    checkpoint_manifest_sha256: str,
+    *,
+    schema_version: Literal[
+        "deep-model-artifact-v1",
+        "deep-model-artifact-v2",
+    ],
+) -> str:
+    checkpoint_sha256 = _sha256(
+        checkpoint_manifest_sha256,
+        "checkpoint manifest SHA-256",
+    )
+    identity = (
+        checkpoint_sha256
+        if schema_version == "deep-model-artifact-v1"
+        else f"{checkpoint_sha256}:{schema_version}"
+    )
+    return str(uuid5(NAMESPACE_URL, identity))
 
 
 @lru_cache(maxsize=4)

@@ -22,6 +22,29 @@ _NOW = datetime(2026, 7, 26, tzinfo=UTC)
 _SHA = "a" * 64
 
 
+def test_v2_artifact_identity_does_not_alias_the_legacy_catalog_candidate() -> None:
+    checkpoint_manifest_sha256 = "1" * 64
+
+    legacy = bundles._deployment_artifact_id(
+        checkpoint_manifest_sha256,
+        schema_version="deep-model-artifact-v1",
+    )
+    runtime_v2 = bundles._deployment_artifact_id(
+        checkpoint_manifest_sha256,
+        schema_version="deep-model-artifact-v2",
+    )
+
+    assert legacy != runtime_v2
+    assert legacy == bundles._deployment_artifact_id(
+        checkpoint_manifest_sha256,
+        schema_version="deep-model-artifact-v1",
+    )
+    assert runtime_v2 == bundles._deployment_artifact_id(
+        checkpoint_manifest_sha256,
+        schema_version="deep-model-artifact-v2",
+    )
+
+
 @pytest.mark.parametrize(
     ("family", "expected_target", "normalizer_name", "expects_reference"),
     (

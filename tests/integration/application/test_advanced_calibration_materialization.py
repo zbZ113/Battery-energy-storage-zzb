@@ -8,7 +8,7 @@ from threading import Barrier
 from uuid import UUID, uuid4, uuid5
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 from quanxin_life.audit import AuditLedgerError, SqlProjectAuditLedger
@@ -282,6 +282,44 @@ def test_atomically_commits_samples_bindings_manifest_and_ready_state(
         assert tuple(item.ordinal for item in bindings) == (0, 1)
         assert tuple(item.cell_id for item in bindings) == ("cell-a", "cell-b")
         assert all(len(item.sample_sha256) == 64 for item in bindings)
+
+
+def test_tool_results_are_inserted_before_fk_dependent_sample_bindings(
+    fixture: _Fixture,
+) -> None:
+    engine = fixture.session_factory.kw["bind"]
+    insert_statements: list[str] = []
+
+    def record_insert_order(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        if statement.lstrip().upper().startswith("INSERT"):
+            insert_statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_insert_order)
+    try:
+        fixture.ledger.commit_advanced_calibration_materialization(
+            _commit(_samples())
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_insert_order)
+
+    tool_result_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO tool_results" in statement
+    )
+    sample_binding_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO advanced_calibration_sample_bindings" in statement
+    )
+    assert tool_result_position < sample_binding_position
 
 
 def test_invalid_sample_rolls_back_every_result_and_binding(

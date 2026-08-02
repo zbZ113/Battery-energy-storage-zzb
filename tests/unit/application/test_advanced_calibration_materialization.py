@@ -394,6 +394,68 @@ def test_produces_exact_finite_soh_sample_tool_results() -> None:
     assert artifact["horizon_end_cycle"] == 500
 
 
+def test_aligns_dense_soh_observations_to_verified_sparse_runtime_axis() -> None:
+    evidence_cycles = tuple(range(101, 501))
+    runtime_cycles = tuple(
+        cycle for cycle in evidence_cycles if cycle != 139
+    )
+    observed_by_cycle = {
+        cycle: 1.0 - cycle / 9000 for cycle in evidence_cycles
+    }
+    evidence = AdvancedSOHCalibrationEvidence(
+        source_identity=_source_identity(),
+        prediction_cycles=evidence_cycles,
+        cells=(
+            AdvancedSOHObservedCell(
+                cell_id="cell-a",
+                observed_soh=tuple(
+                    observed_by_cycle[cycle] for cycle in evidence_cycles
+                ),
+            ),
+        ),
+    )
+
+    class _SparseAxisPredictor(_Predictor):
+        def predict_soh(
+            self,
+            *,
+            source_registration_id: str,
+            source_identity: AdvancedCalibrationSourceIdentity,
+            cell_id: str,
+            runtime: VerifiedSOHRuntime,
+        ) -> tuple[tuple[int, ...], tuple[float, ...]]:
+            del source_registration_id, source_identity, runtime
+            self.soh_calls.append(cell_id)
+            return runtime_cycles, tuple(
+                1.0 - cycle / 10000 for cycle in runtime_cycles
+            )
+
+    producer = AdvancedCalibrationSampleProducer(
+        evidence_resolver=_EvidenceResolver(evidence),
+        runtime_resolver=_RuntimeResolver(_soh_runtime()),
+        predictor=_SparseAxisPredictor(),
+    )
+
+    samples = producer.produce(
+        context=_context(),
+        materialization_id=MATERIALIZATION_ID,
+        request=AdvancedCalibrationMaterializationRequest(
+            project_id=PROJECT_ID,
+            task=AdvancedModelTask.SOH,
+            cutoff_cycle=100,
+            route_role=AdvancedModelRouteRole.MEAN_ACCURACY,
+            source_registration_id="matr-three-batch-final-v1",
+        ),
+        created_at=NOW,
+    )
+
+    artifact = samples[0].result.values["artifact"]
+    assert artifact["prediction_cycles"] == list(runtime_cycles)
+    assert artifact["observed_soh"] == [
+        observed_by_cycle[cycle] for cycle in runtime_cycles
+    ]
+
+
 def test_rejects_runtime_change_after_inference() -> None:
     evidence = AdvancedRULCalibrationEvidence(
         source_identity=_source_identity(),
@@ -577,6 +639,20 @@ class _RuntimeSOHInference:
         return cycles, tuple(1.0 - index / 10000 for index in cycles)
 
 
+class _SparseRuntimeSOHInference(_RuntimeSOHInference):
+    def predict_trajectory(
+        self,
+        raw_sequence: EarlyCycleSequence,
+        *,
+        initial_soh: float,
+    ) -> tuple[tuple[int, ...], tuple[float, ...]]:
+        self.calls.append((raw_sequence.cell_id, initial_soh))
+        cycles = tuple(
+            cycle for cycle in range(101, 501) if cycle != 139
+        )
+        return cycles, tuple(1.0 - index / 10000 for index in cycles)
+
+
 def test_verified_cell_predictor_runs_only_server_resolved_sequence() -> None:
     sequence = _early_sequence()
     source_identity = _source_identity()
@@ -621,6 +697,43 @@ def test_verified_cell_predictor_runs_only_server_resolved_sequence() -> None:
     assert rul_inference.calls == ["cell-a"]
     assert soh_inference.calls == [("cell-a", 0.99)]
     assert len(resolver.calls) == 2
+
+
+def test_verified_cell_predictor_preserves_sparse_runtime_axis() -> None:
+    sequence = _early_sequence()
+    source_identity = _source_identity()
+    resolver = _CalibrationInputResolver(
+        AdvancedCalibrationCellInput(
+            source_registration_id=source_identity.registration_id,
+            source_identity_sha256=source_identity.source_identity_sha256,
+            cell_id=sequence.cell_id,
+            cutoff_cycle=sequence.cutoff_cycle,
+            data_version=sequence.data_version,
+            feature_version=sequence.feature_version,
+            split_version=source_identity.split_version,
+            raw_sequence=sequence,
+            initial_soh=0.99,
+        )
+    )
+    predictor = VerifiedAdvancedCalibrationCellPredictor(
+        input_resolver=resolver
+    )
+    inference = _SparseRuntimeSOHInference()
+    runtime = _soh_runtime()
+    object.__setattr__(runtime, "inference", inference)
+
+    cycles, predicted = predictor.predict_soh(
+        source_registration_id=source_identity.registration_id,
+        source_identity=source_identity,
+        cell_id=sequence.cell_id,
+        runtime=runtime,
+    )
+
+    assert cycles == tuple(
+        cycle for cycle in range(101, 501) if cycle != 139
+    )
+    assert len(predicted) == 399
+    assert inference.calls == [("cell-a", 0.99)]
 
 
 def _early_sequence() -> EarlyCycleSequence:

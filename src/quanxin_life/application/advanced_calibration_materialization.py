@@ -207,11 +207,21 @@ class VerifiedAdvancedCalibrationCellPredictor:
             resolved.raw_sequence,
             initial_soh=resolved.initial_soh,
         )
-        expected = tuple(range(runtime.cutoff_cycle + 1, 501))
+        normalized_cycles = tuple(cycles)
         normalized_values = tuple(float(value) for value in values)
         if (
-            tuple(cycles) != expected
-            or len(normalized_values) != len(expected)
+            not normalized_cycles
+            or normalized_cycles[0] != runtime.cutoff_cycle + 1
+            or normalized_cycles[-1] != 500
+            or len(normalized_values) != len(normalized_cycles)
+            or any(
+                not isinstance(cycle, int) or isinstance(cycle, bool)
+                for cycle in normalized_cycles
+            )
+            or any(
+                current >= following
+                for current, following in pairwise(normalized_cycles)
+            )
             or any(
                 not math.isfinite(value) or value < 0.0 or value > 1.5
                 for value in normalized_values
@@ -224,7 +234,7 @@ class VerifiedAdvancedCalibrationCellPredictor:
             raise ValueError(
                 "Advanced SOH runtime returned an invalid finite trajectory"
             )
-        return expected, normalized_values
+        return normalized_cycles, normalized_values
 
     def _resolve_input(
         self,
@@ -480,14 +490,23 @@ class AdvancedCalibrationSampleProducer:
             cell_id=cell_id,
             runtime=runtime,
         )
-        if prediction_cycles != evidence.prediction_cycles:
-            raise ValueError("SOH runtime prediction axis differs from source evidence")
+        observed_by_cycle = dict(
+            zip(evidence.prediction_cycles, observed_soh, strict=True)
+        )
+        try:
+            aligned_observed_soh = tuple(
+                observed_by_cycle[cycle] for cycle in prediction_cycles
+            )
+        except KeyError as exc:
+            raise ValueError(
+                "SOH runtime prediction axis differs from source evidence"
+            ) from exc
         sample = AdvancedSOHCalibrationSample.model_validate(
             {
                 "cell_id": cell_id,
                 "prediction_cycles": prediction_cycles,
                 "predicted_soh": predicted_soh,
-                "observed_soh": observed_soh,
+                "observed_soh": aligned_observed_soh,
                 "runtime": runtime_identity.model_dump(mode="json"),
             }
         )

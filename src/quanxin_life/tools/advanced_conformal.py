@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 from uuid import UUID, uuid4
 
@@ -142,14 +143,18 @@ class _AdvancedSOHCalibrationSampleArtifact(
     horizon_end_cycle: Literal[500]
 
     @model_validator(mode="after")
-    def require_exact_finite_horizon(
+    def require_verified_finite_horizon(
         self,
     ) -> _AdvancedSOHCalibrationSampleArtifact:
-        expected = tuple(range(self.cutoff_cycle + 1, 501))
         if (
-            self.prediction_cycles != expected
-            or len(self.predicted_soh) != len(expected)
-            or len(self.observed_soh) != len(expected)
+            self.prediction_cycles[0] != self.cutoff_cycle + 1
+            or self.prediction_cycles[-1] != 500
+            or len(self.predicted_soh) != len(self.prediction_cycles)
+            or len(self.observed_soh) != len(self.prediction_cycles)
+            or any(
+                current >= following
+                for current, following in pairwise(self.prediction_cycles)
+            )
         ):
             raise ValueError(
                 "SOH calibration axis must span cutoff + 1 through cycle 500"

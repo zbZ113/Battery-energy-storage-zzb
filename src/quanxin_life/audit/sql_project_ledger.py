@@ -626,27 +626,29 @@ class SqlProjectAuditLedger:
         created_at: datetime,
     ) -> None:
         result = sample.result
-        session.add(
-            ToolResultRecord(
-                id=result.result_id,
-                run_id=None,
-                agent_step_id=None,
-                tool_name=result.tool_name,
-                tool_version=result.tool_version,
-                model_version=result.model_version,
-                data_version=result.data_version,
-                feature_version=result.feature_version,
-                input_hash=result.input_hash,
-                values_json=dict(result.values),
-                uncertainty_json=(
-                    dict(result.uncertainty)
-                    if result.uncertainty is not None
-                    else None
-                ),
-                warnings_json=list(result.warnings),
-                created_at=result.created_at,
-            )
+        tool_result = ToolResultRecord(
+            id=result.result_id,
+            run_id=None,
+            agent_step_id=None,
+            tool_name=result.tool_name,
+            tool_version=result.tool_version,
+            model_version=result.model_version,
+            data_version=result.data_version,
+            feature_version=result.feature_version,
+            input_hash=result.input_hash,
+            values_json=dict(result.values),
+            uncertainty_json=(
+                dict(result.uncertainty)
+                if result.uncertainty is not None
+                else None
+            ),
+            warnings_json=list(result.warnings),
+            created_at=result.created_at,
         )
+        session.add(tool_result)
+        # These tables use scalar foreign keys without ORM relationships, so
+        # SQLAlchemy cannot infer that the ToolResult parent must be inserted first.
+        session.flush((tool_result,))
         for item in result.provenance:
             session.add(
                 ProvenanceRecordRow(
