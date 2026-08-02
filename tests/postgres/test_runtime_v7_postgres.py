@@ -159,18 +159,18 @@ def _principal(session_factory: SessionFactory) -> AuthPrincipal:
         must_change_password=False,
     )
     with session_factory.begin() as session:
-        session.add(
-            User(
-                id=user_id,
-                username=principal.username,
-                credential_hash="test-only-credential-hash",
-                must_change_credential=False,
-                role=principal.role.value,
-                status=UserStatus.ACTIVE.value,
-                created_at=NOW,
-                updated_at=NOW,
-            )
+        user = User(
+            id=user_id,
+            username=principal.username,
+            credential_hash="test-only-credential-hash",
+            must_change_credential=False,
+            role=principal.role.value,
+            status=UserStatus.ACTIVE.value,
+            created_at=NOW,
+            updated_at=NOW,
         )
+        session.add(user)
+        session.flush((user,))
         session.add(
             SessionRecord(
                 id=session_id,
