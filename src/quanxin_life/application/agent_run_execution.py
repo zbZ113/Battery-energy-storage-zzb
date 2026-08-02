@@ -375,11 +375,22 @@ class AgentRunExecutionWorker:
                         context_resolver=self._context_resolver,
                         completed_results=completed,
                     )
-                except AgentExecutionReferenceError as exc:
+                    canonical_input = (
+                        self._tool_service.registry.canonical_input_value(
+                            compiled.tool_name,
+                            compiled.input_value,
+                        )
+                    )
+                except (
+                    AgentExecutionReferenceError,
+                    ToolRegistryError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
                     raise AgentRunExecutionError(
                         "persisted ToolResult input references cannot be reconstructed"
                     ) from exc
-                if result.input_hash != sha256_canonical(compiled.input_value):
+                if result.input_hash != sha256_canonical(canonical_input):
                     raise AgentRunExecutionError(
                         "persisted ToolResult input hash does not match trusted references"
                     )
@@ -601,23 +612,25 @@ class AgentRunExecutionWorker:
                 if existing.id != result.result_id:
                     raise AgentRunExecutionError("Agent step already owns another ToolResult")
                 return
-            session.add(
-                ToolResultRecord(
-                    id=result.result_id,
-                    run_id=run_id,
-                    agent_step_id=step.id,
-                    tool_name=result.tool_name,
-                    tool_version=result.tool_version,
-                    model_version=result.model_version,
-                    data_version=result.data_version,
-                    feature_version=result.feature_version,
-                    input_hash=result.input_hash,
-                    values_json=_json_mapping(result.values),
-                    uncertainty_json=_json_mapping(result.uncertainty),
-                    warnings_json=list(result.warnings),
-                    created_at=result.created_at,
-                )
+            tool_result = ToolResultRecord(
+                id=result.result_id,
+                run_id=run_id,
+                agent_step_id=step.id,
+                tool_name=result.tool_name,
+                tool_version=result.tool_version,
+                model_version=result.model_version,
+                data_version=result.data_version,
+                feature_version=result.feature_version,
+                input_hash=result.input_hash,
+                values_json=_json_mapping(result.values),
+                uncertainty_json=_json_mapping(result.uncertainty),
+                warnings_json=list(result.warnings),
+                created_at=result.created_at,
             )
+            session.add(tool_result)
+            # Scalar foreign keys do not give SQLAlchemy enough relationship
+            # information to order the ToolResult before provenance rows.
+            session.flush((tool_result,))
             for item in result.provenance:
                 session.add(
                     ProvenanceRecordRow(

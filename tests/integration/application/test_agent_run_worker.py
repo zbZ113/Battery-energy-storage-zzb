@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, select
 
 from quanxin_life.agents.supervisor import (
     SupervisorPlanningRequest,
@@ -67,6 +67,11 @@ NOW = datetime(2026, 7, 16, 13, 0, tzinfo=UTC)
 
 class _FeaturesInput(ContractModel):
     record_batch_id: str = Field(min_length=1)
+
+
+class _CanonicalFeaturesInput(ContractModel):
+    record_batch_id: str = Field(min_length=1)
+    input_schema_version: str = "canonical-features-v1"
 
 
 class _PredictionInput(ContractModel):
@@ -143,6 +148,8 @@ class _Planner:
 
 
 class _CountingTools:
+    features_input_model: type[ContractModel] = _FeaturesInput
+
     def __init__(self, *, fail_feature_attempts: int = 0) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.fail_feature_attempts = fail_feature_attempts
@@ -153,7 +160,7 @@ class _CountingTools:
             ToolDefinition(
                 tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
                 tool_version="worker-tool-v1",
-                input_model=_FeaturesInput,
+                input_model=self.features_input_model,
                 executor=self._features,
             )
         )
@@ -198,7 +205,7 @@ class _CountingTools:
             ToolDefinition(
                 tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
                 tool_version="worker-tool-v1",
-                input_model=_FeaturesInput,
+                input_model=self.features_input_model,
                 executor=None,
                 execution_scope=ToolExecutionScope.PROJECT,
                 project_executor=lambda value, context: self._features(value),
@@ -227,6 +234,10 @@ class _CountingTools:
             ),
             resolver,
         )
+
+
+class _CanonicalizingCountingTools(_CountingTools):
+    features_input_model = _CanonicalFeaturesInput
 
 
 def _tool_result(tool_name: StandardToolName, input_value: dict[str, object]) -> ToolResult:
@@ -424,6 +435,46 @@ def test_worker_executes_each_step_once_and_resumes_duplicate_delivery_without_r
     ]
 
 
+def test_non_project_worker_inserts_tool_result_before_fk_dependent_provenance(
+    tmp_path: Path,
+) -> None:
+    run_service, member, session_factory, run_id, tools = _setup(tmp_path)
+    engine = session_factory.kw["bind"]
+    insert_statements: list[str] = []
+
+    def record_insert_order(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _execution_context: object,
+        _executemany: object,
+    ) -> None:
+        if statement.lstrip().upper().startswith("INSERT"):
+            insert_statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_insert_order)
+    try:
+        _worker(run_service, session_factory, tools).advance_once(
+            run_id=run_id,
+            plan_hash=run_service.get_run(member, run_id).plan.plan_hash,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_insert_order)
+
+    tool_result_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO tool_results" in statement
+    )
+    provenance_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO provenance_records" in statement
+    )
+    assert tool_result_position < provenance_position
+
+
 def test_project_worker_atomically_binds_each_step_and_duplicate_delivery_does_not_rerun(
     tmp_path: Path,
 ) -> None:
@@ -491,6 +542,40 @@ def test_project_worker_resumes_after_restart_from_atomically_committed_step(
             )
         )
     assert len(bindings) == 2
+
+
+def test_project_worker_reapplies_canonical_input_defaults_when_resuming(
+    tmp_path: Path,
+) -> None:
+    run_service, member, session_factory, run_id, _ = _setup(tmp_path)
+    tools = _CanonicalizingCountingTools()
+    plan_hash = run_service.get_run(member, run_id).plan.plan_hash
+
+    first = _project_worker(run_service, session_factory, tools).advance_once(
+        run_id=run_id,
+        plan_hash=plan_hash,
+    )
+    completed = _project_worker(run_service, session_factory, tools).execute(
+        run_id=run_id,
+        plan_hash=plan_hash,
+    )
+
+    assert first.status is AgentRunStatus.RUNNING
+    assert first.completed_step_ids == ("features",)
+    assert completed.status is AgentRunStatus.COMPLETED
+    assert completed.completed_step_ids == ("features", "predict")
+    with session_factory() as session:
+        first_step = session.scalar(
+            select(AgentStep).where(
+                AgentStep.run_id == run_id,
+                AgentStep.step_id == "features",
+            )
+        )
+        assert first_step is not None
+        assert first_step.resolved_input_json == {
+            "record_batch_id": "verified-worker-record-batch-v1",
+            "input_schema_version": "canonical-features-v1",
+        }
 
 
 def test_worker_can_advance_exactly_one_professional_agent_step_at_a_time(

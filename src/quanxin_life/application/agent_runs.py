@@ -51,6 +51,7 @@ from quanxin_life.persistence.models import (
     Dataset,
     Project,
     ProvenanceRecordRow,
+    RecordBatchBinding,
     ToolResultRecord,
 )
 from quanxin_life.tools import StandardToolName
@@ -74,6 +75,9 @@ class AgentRunDispatchError(RuntimeError):
 
 class AgentRunStateError(RuntimeError):
     """Raised when a requested transition is unsafe for current state."""
+
+
+_ADVANCED_SINGLE_CELL_OUTPUT = "advanced_single_cell_analysis"
 
 
 class AgentPlanner(Protocol):
@@ -201,7 +205,12 @@ class AgentRunService:
         run_id = str(uuid4())
         try:
             with session_scope(self._session_factory) as session:
-                self._validate_run_scope_in_session(session, principal, validated)
+                self._validate_run_scope_in_session(
+                    session,
+                    principal,
+                    validated,
+                    plan=planning.plan,
+                )
                 run = AgentRun(
                     id=run_id,
                     project_id=validated.project_id,
@@ -220,6 +229,9 @@ class AgentRunService:
                     completed_at=None,
                 )
                 session.add(run)
+                # These audit tables use scalar foreign keys without ORM
+                # relationships, so flush the parent before its dependent rows.
+                session.flush((run,))
                 for ordinal, step in enumerate(planning.plan.steps, start=1):
                     session.add(
                         AgentStep(
@@ -734,6 +746,8 @@ class AgentRunService:
         session: Session,
         principal: AuthPrincipal,
         request: SupervisorPlanningRequest,
+        *,
+        plan: AgentPlan | None = None,
     ) -> None:
         visible_project = session.scalar(
             ProjectService.visible_projects_statement(principal).where(
@@ -745,17 +759,50 @@ class AgentRunService:
             raise AgentRunNotFoundError("project was not found")
         if not request.dataset_ids:
             return
+        requested_ids = tuple(request.dataset_ids)
         datasets = tuple(
             session.scalars(
                 select(Dataset).where(
                     Dataset.project_id == request.project_id,
-                    Dataset.id.in_(request.dataset_ids),
+                    Dataset.id.in_(requested_ids),
                 )
             ).all()
         )
-        if len(datasets) != len(request.dataset_ids):
+        record_batches = tuple(
+            session.execute(
+                select(RecordBatchBinding.id, Dataset.status)
+                .join(Dataset, Dataset.id == RecordBatchBinding.dataset_id)
+                .where(
+                    RecordBatchBinding.project_id == request.project_id,
+                    Dataset.project_id == request.project_id,
+                    RecordBatchBinding.id.in_(requested_ids),
+                )
+            ).all()
+        )
+        requires_record_batch = (
+            _ADVANCED_SINGLE_CELL_OUTPUT in request.requested_outputs
+            or (
+                plan is not None
+                and any(step.step_id == "advanced-input" for step in plan.steps)
+            )
+        )
+        if requires_record_batch and (
+            len(requested_ids) != 1
+            or len(record_batches) != 1
+            or record_batches[0].id != requested_ids[0]
+        ):
+            raise AgentRunStateError(
+                "advanced Agent runs require exactly one frozen record batch"
+            )
+        visible_ids = {dataset.id for dataset in datasets}
+        visible_ids.update(row.id for row in record_batches)
+        if len(visible_ids) != len(requested_ids):
             raise AgentRunNotFoundError("dataset was not found")
-        if any(dataset.status != DatasetStatus.FROZEN.value for dataset in datasets):
+        if any(
+            dataset.status != DatasetStatus.FROZEN.value for dataset in datasets
+        ) or any(
+            row.status != DatasetStatus.FROZEN.value for row in record_batches
+        ):
             raise AgentRunStateError("Agent runs require frozen datasets")
 
     def _find_idempotent(

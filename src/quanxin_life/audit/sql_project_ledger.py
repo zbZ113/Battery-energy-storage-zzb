@@ -141,27 +141,29 @@ class SqlProjectAuditLedger:
                     raise DuplicateAuditResultError(
                         f"duplicate ToolResult result_id: {normalized.result_id}"
                     )
-                session.add(
-                    ToolResultRecord(
-                        id=normalized.result_id,
-                        run_id=verified.agent_run_id,
-                        agent_step_id=None,
-                        tool_name=normalized.tool_name,
-                        tool_version=normalized.tool_version,
-                        model_version=normalized.model_version,
-                        data_version=normalized.data_version,
-                        feature_version=normalized.feature_version,
-                        input_hash=normalized.input_hash,
-                        values_json=dict(normalized.values),
-                        uncertainty_json=(
-                            dict(normalized.uncertainty)
-                            if normalized.uncertainty is not None
-                            else None
-                        ),
-                        warnings_json=list(normalized.warnings),
-                        created_at=normalized.created_at,
-                    )
+                tool_result = ToolResultRecord(
+                    id=normalized.result_id,
+                    run_id=verified.agent_run_id,
+                    agent_step_id=None,
+                    tool_name=normalized.tool_name,
+                    tool_version=normalized.tool_version,
+                    model_version=normalized.model_version,
+                    data_version=normalized.data_version,
+                    feature_version=normalized.feature_version,
+                    input_hash=normalized.input_hash,
+                    values_json=dict(normalized.values),
+                    uncertainty_json=(
+                        dict(normalized.uncertainty)
+                        if normalized.uncertainty is not None
+                        else None
+                    ),
+                    warnings_json=list(normalized.warnings),
+                    created_at=normalized.created_at,
                 )
+                session.add(tool_result)
+                # These tables use scalar foreign keys without ORM relationships, so
+                # SQLAlchemy cannot infer that the ToolResult parent must be inserted first.
+                session.flush((tool_result,))
                 for item in normalized.provenance:
                     session.add(
                         ProvenanceRecordRow(
@@ -1027,27 +1029,29 @@ class SqlProjectAuditLedger:
                         f"duplicate ToolResult result_id: {normalized.result_id}"
                     )
                 assert run is not None and step is not None
-                session.add(
-                    ToolResultRecord(
-                        id=normalized.result_id,
-                        run_id=verified.agent_run_id,
-                        agent_step_id=verified.agent_step_row_id,
-                        tool_name=normalized.tool_name,
-                        tool_version=normalized.tool_version,
-                        model_version=normalized.model_version,
-                        data_version=normalized.data_version,
-                        feature_version=normalized.feature_version,
-                        input_hash=normalized.input_hash,
-                        values_json=dict(normalized.values),
-                        uncertainty_json=(
-                            dict(normalized.uncertainty)
-                            if normalized.uncertainty is not None
-                            else None
-                        ),
-                        warnings_json=list(normalized.warnings),
-                        created_at=normalized.created_at,
-                    )
+                tool_result = ToolResultRecord(
+                    id=normalized.result_id,
+                    run_id=verified.agent_run_id,
+                    agent_step_id=verified.agent_step_row_id,
+                    tool_name=normalized.tool_name,
+                    tool_version=normalized.tool_version,
+                    model_version=normalized.model_version,
+                    data_version=normalized.data_version,
+                    feature_version=normalized.feature_version,
+                    input_hash=normalized.input_hash,
+                    values_json=dict(normalized.values),
+                    uncertainty_json=(
+                        dict(normalized.uncertainty)
+                        if normalized.uncertainty is not None
+                        else None
+                    ),
+                    warnings_json=list(normalized.warnings),
+                    created_at=normalized.created_at,
                 )
+                session.add(tool_result)
+                # These tables use scalar foreign keys without ORM relationships, so
+                # SQLAlchemy cannot infer that the ToolResult parent must be inserted first.
+                session.flush((tool_result,))
                 for item in normalized.provenance:
                     session.add(
                         ProvenanceRecordRow(

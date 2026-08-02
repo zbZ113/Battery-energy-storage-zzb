@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from quanxin_life.application.invocation_context import (
     ProjectInvocationAccessError,
@@ -174,6 +174,43 @@ def test_result_and_project_binding_survive_ledger_restart(tmp_path: Path) -> No
             )
             == 1
         )
+
+
+def test_tool_result_is_inserted_before_fk_dependent_project_binding(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path)
+    engine = context.session_factory.kw["bind"]
+    insert_statements: list[str] = []
+
+    def record_insert_order(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: object,
+    ) -> None:
+        if statement.lstrip().upper().startswith("INSERT"):
+            insert_statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_insert_order)
+    try:
+        _ledger(context).register_result(context.invocation, _result())
+    finally:
+        event.remove(engine, "before_cursor_execute", record_insert_order)
+
+    tool_result_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO tool_results" in statement
+    )
+    project_binding_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO project_tool_result_bindings" in statement
+    )
+    assert tool_result_position < project_binding_position
 
 
 def test_result_is_hidden_from_another_live_project(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import Field
-from sqlalchemy import select, text
+from sqlalchemy import event, select, text
 
 from quanxin_life.agents.supervisor import (
     SupervisorPlanningRequest,
@@ -864,6 +864,54 @@ def test_agent_step_result_commit_is_exact_and_atomic(
         )
         assert result_row.agent_step_id == grant.agent_step_row_id
         assert [event.event_type for event in events].count("STEP_COMPLETED") == 1
+
+
+def test_agent_tool_result_is_inserted_before_fk_dependent_project_binding(
+    invocation_fixture: _Fixture,
+) -> None:
+    calls: list[StandardToolName] = []
+    resolver = _resolver(invocation_fixture)
+    grant = resolver.resolve(
+        invocation_fixture.run_id,
+        invocation_fixture.step_id,
+        invocation_fixture.claim_token,
+    )
+    result = _execute_granted_result(invocation_fixture, grant, calls)
+    engine = invocation_fixture.session_factory.kw["bind"]
+    insert_statements: list[str] = []
+
+    def record_insert_order(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _execution_context: object,
+        _executemany: object,
+    ) -> None:
+        if statement.lstrip().upper().startswith("INSERT"):
+            insert_statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_insert_order)
+    try:
+        _project_ledger(invocation_fixture).commit_agent_step_result(
+            grant=grant,
+            result=result,
+            grant_validator=resolver,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_insert_order)
+
+    tool_result_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO tool_results" in statement
+    )
+    project_binding_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO project_tool_result_bindings" in statement
+    )
+    assert tool_result_position < project_binding_position
 
 
 def test_stale_agent_step_claim_cannot_commit_or_clear_the_new_claim(

@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from quanxin_life.agents.supervisor import (
     SupervisorPlanningRequest,
@@ -45,6 +46,7 @@ from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
 from quanxin_life.persistence.models import (
     AgentStep,
     ProvenanceRecordRow,
+    RecordBatchBinding,
     ToolResultRecord,
     User,
 )
@@ -216,6 +218,145 @@ def _create_scope(client: TestClient) -> tuple[str, str]:
     )
     assert frozen.status_code == 200
     return project.json()["project_id"], frozen.json()["dataset_id"]
+
+
+def _seed_record_batch(
+    session_factory: SessionFactory,
+    *,
+    project_id: str,
+    dataset_id: str,
+) -> str:
+    record_batch_id = str(uuid4())
+    with session_factory.begin() as session:
+        user = session.query(User).filter_by(username=USERNAME).one()
+        session.add(
+            RecordBatchBinding(
+                id=record_batch_id,
+                binding_schema_version="record-batch-binding-v1",
+                content_batch_id="sha256:" + "1" * 64,
+                project_id=project_id,
+                dataset_id=dataset_id,
+                source_manifest_sha256="2" * 64,
+                registration_sha256="3" * 64,
+                content_dataset_id="MATR",
+                dataset_schema_version="canonical-v1",
+                cell_id="MATR_test_cell",
+                cutoff_cycle=100,
+                data_version="safe-v1",
+                split_version="cell-split-v1",
+                feature_version="cyclepatch-v1",
+                created_by_user_id=user.id,
+                created_at=NOW,
+            )
+        )
+    return record_batch_id
+
+
+def test_agent_run_accepts_a_frozen_project_record_batch_artifact(
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
+) -> None:
+    client, queue, _, session_factory = agent_client
+    project_id, dataset_id = _create_scope(client)
+    record_batch_id = _seed_record_batch(
+        session_factory,
+        project_id=project_id,
+        dataset_id=dataset_id,
+    )
+
+    created = client.post(
+        "/v1/agent/runs",
+        headers={
+            "Origin": ORIGIN,
+            "Idempotency-Key": "record-batch-agent-run-0001",
+        },
+        json={
+            "project_id": project_id,
+            "user_goal": "analyze this frozen record batch",
+            "dataset_ids": [record_batch_id],
+            "requested_outputs": ["advanced_single_cell_analysis"],
+        },
+    )
+
+    assert created.status_code == 202, created.text
+    assert created.json()["intent"]["dataset_ids"] == [record_batch_id]
+    assert created.json()["dispatch_status"] == "DISPATCHED"
+    assert len(queue.calls) == 1
+
+
+def test_advanced_agent_run_rejects_a_parent_dataset_instead_of_a_record_batch(
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
+) -> None:
+    client, queue, _, _ = agent_client
+    project_id, dataset_id = _create_scope(client)
+
+    created = client.post(
+        "/v1/agent/runs",
+        headers={
+            "Origin": ORIGIN,
+            "Idempotency-Key": "advanced-parent-dataset-rejected-0001",
+        },
+        json={
+            "project_id": project_id,
+            "user_goal": "analyze one frozen record batch",
+            "dataset_ids": [dataset_id],
+            "requested_outputs": ["advanced_single_cell_analysis"],
+        },
+    )
+
+    assert created.status_code == 409
+    assert created.json()["detail"] == "agent_run_state_conflict"
+    assert queue.calls == []
+
+
+def test_agent_run_is_inserted_before_fk_dependent_initial_event(
+    agent_client: tuple[TestClient, RecordingQueue, AgentRunService, SessionFactory],
+) -> None:
+    client, _, _, session_factory = agent_client
+    project_id, dataset_id = _create_scope(client)
+    engine = session_factory.kw["bind"]
+    insert_statements: list[str] = []
+
+    def record_insert_order(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _execution_context: object,
+        _executemany: object,
+    ) -> None:
+        if statement.lstrip().upper().startswith("INSERT"):
+            insert_statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_insert_order)
+    try:
+        created = client.post(
+            "/v1/agent/runs",
+            headers={
+                "Origin": ORIGIN,
+                "Idempotency-Key": "agent-run-parent-before-event-0001",
+            },
+            json={
+                "project_id": project_id,
+                "user_goal": "verify Agent audit persistence ordering",
+                "dataset_ids": [dataset_id],
+                "requested_outputs": ["cycle_life"],
+            },
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", record_insert_order)
+
+    assert created.status_code == 202, created.text
+    run_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO agent_runs" in statement
+    )
+    event_position = next(
+        index
+        for index, statement in enumerate(insert_statements)
+        if "INSERT INTO agent_events" in statement
+    )
+    assert run_position < event_position
 
 
 def test_agent_run_create_requires_idempotency_and_dispatches_only_once(
