@@ -23,7 +23,7 @@
 | exact `AgentStep` 与原子 ledger | 是 | claim/recovery 测试 | 否 | 多副本压力测试 |
 | calibration materialization | 是 | ADMIN API、Worker、UI、纵向 E2E | 否 | 真实 Worker 与证据部署 |
 | Next.js 项目门户 | 是 | 单元测试、类型检查、构建、E2E | 否 | 公网浏览器验收 |
-| 竞赛单机服务栈 | Compose、API、Worker、迁移、网关已实现 | 完整 CI、真实 PostgreSQL、不可变 ACR 构建 | 否（公网 edge 可达，ECS 内部未对账） | RepoDigest、Compose、备份与演练 |
+| 竞赛单机服务栈 | Compose、API、Worker、迁移、网关已实现 | 完整 CI、真实 PostgreSQL、不可变 ACR 构建、ECS 只读审计 | 否（ECS 仍运行旧 release） | 部署 `2026.08.02-1`、Redis 恢复核验、备份与演练 |
 | HUST 外部验证 | 接入与安全转换组件存在 | 尚无正式零样本结果 | 否 | 零样本、重校准、域适配 |
 | 工业 BMS/EMS | 协议沙箱存在 | 沙箱测试 | 否 | 企业凭证、网络、设备和安全联锁 |
 
@@ -92,11 +92,13 @@ cutoff：20 / 50 / 100 / 150
 `daca47a7d0a2f8e82a7c549b6b97d0f25b5596a7`，前端公开 Origin 为
 `https://47.99.69.138`。发布前同一提交的 Python、真实 PostgreSQL 和前端 CI 全部通过。
 
-这使竞赛镜像状态达到 `Published`，但尚未达到 `Deployed`：公网严格 TLS edge 可达，
-SSH 22 在认证前连接超时，目标 ECS 的 RepoDigest、Compose、migration、Worker、正式
-模型/calibration、九步 ToolResult 和浏览器 E2E 仍未对账。完整发布记录见
+这使竞赛镜像状态达到 `Published`，但尚未达到 `Deployed`。2026-08-02 的 ECS 只读审计
+确认 migration `0015`、Worker、旧九步 ToolResult 和严格 TLS 可用，但目标 ECS 仍运行
+`2026.07.29-1`，镜像没有当前 release 的 OCI 身份，API/Worker 仍依赖单文件热修复绑定，
+Gateway 仍依赖宿主机配置绑定。完整发布记录见
 [ACR release `2026.08.02-1`](deployment/releases/2026.08.02-1.md)。历史 release
-`2026.07.28-1` 保留原 source commit、旧 IP 和 digest，不再代表当前源码。
+`2026.07.28-1` 保留原 source commit、旧 IP 和 digest，不再代表当前源码。ECS 证据见
+[2026-08-02 ECS 只读审计](deployment/ecs-audit-2026-08-02.md)。
 
 ## 未完成事项
 
@@ -111,12 +113,12 @@ SSH 22 在认证前连接超时，目标 ECS 的 RepoDigest、Compose、migratio
 
 ### 部署
 
-1. 恢复受控 SSH/ECS 管理通道，并对账 release `2026.08.02-1` 的五个 RepoDigest；
-2. 在目标 ECS 拉取镜像、执行 Alembic `0001`–`0015` 并启动竞赛 Compose；
+1. 在保留旧部署与备份证据后，部署并对账 release `2026.08.02-1` 的五个 RepoDigest；
+2. 移除运行时代码/Gateway 配置 bind mount，并复验 Alembic `0015` 与全部服务健康；
 3. 初始化首个 ADMIN、项目、15 个正式候选和人工 active route；
 4. 部署真实 calibration evidence 并由 Worker 生成 `READY` 物化证据；
 5. 完成浏览器到 Worker、ToolResult、Agent、报告的公网纵向 E2E；
-6. 完成重启、route 回退、失败恢复、数据库/Redis 备份与恢复演练；
+6. 核验 Redis AOF ACL `NOPERM` 风险，完成重启、route 回退、数据库/Redis 备份与恢复演练；
 7. 补充监控、告警、审计留存和密钥轮换。企业级 HA 与灾难恢复不阻塞个人比赛演示。
 
 ### 外部输入

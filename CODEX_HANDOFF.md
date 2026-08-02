@@ -1,13 +1,13 @@
 # Codex 完整交接：泉芯智寿产品化
 
-> 更新时间：2026-08-02 16:25:57 +08:00（Asia/Shanghai）
+> 更新时间：2026-08-02 18:01:42 +08:00（Asia/Shanghai）
 > 当前实施目标：`docs/superpowers/plans/2026-08-02-quanxin-productization-master-plan.md`
 > 当前公网入口：`https://47.99.69.138`
 > 本文件只记录可由当前 Git、代码、测试和只读探测支持的事实，不包含密码、私钥、Cookie、连接串或业务数值。
 
 ## 0. 一句话状态
 
-Task 0、Task 1 和 Task 2 已完成：可信计算链、固定九步 Agent、B「双栏分析」前端、Runtime V7 修复、真实 PostgreSQL CI 与不可变镜像基线已经形成。提交 `daca47a` 的 Python、PostgreSQL 和前端 CI run `30738774242` 全绿；ACR release `2026.08.02-1` 已由 run `30739080847` 成功发布五张镜像并记录 digest，backend/frontend/gateway 的 OCI revision 均为 `daca47a...`。当前状态是 `Published`，不是 `Deployed/Demonstrated`：公网严格 TLS edge 可达，但 SSH 22 在认证前超时，ECS 内部 RepoDigest、migration、Worker 和九步 ToolResult 仍未对账。下一实施任务是 Task 3 的项目、数据和分析目录 API。
+Task 0、Task 1 和 Task 2 已完成：可信计算链、固定九步 Agent、B「双栏分析」前端、Runtime V7 修复、真实 PostgreSQL CI 与不可变镜像基线已经形成。提交 `daca47a` 的 Python、PostgreSQL 和前端 CI run `30738774242` 全绿；ACR release `2026.08.02-1` 已由 run `30739080847` 成功发布五张镜像并记录 digest。2026-08-02 ECS 只读审计已经补齐内部事实：migration `0015`、Worker、严格 TLS 和历史九步 ToolResult 可用，但 ECS 仍运行 `2026.07.29-1`、旧 digest、空 OCI 身份和 Runtime V7/Gateway bind mount，Redis AOF 还有 ACL `NOPERM` 风险。因此当前 release 仍是 `Published`，不是 `Deployed/Demonstrated`。下一实施任务是 Task 3 的项目、数据和分析目录 API。
 
 ## 1. 当前 Git 与工作区快照
 
@@ -15,9 +15,10 @@ Task 0、Task 1 和 Task 2 已完成：可信计算链、固定九步 Agent、B�
 | --- | --- |
 | 工作区 | `D:\guet_learning\26 AI acting\Battery-energy-storage-zzb` |
 | 分支 | `codex/quanxin-full` |
-| 当前发布源码 HEAD | `daca47a7d0a2f8e82a7c549b6b97d0f25b5596a7` |
-| HEAD 摘要 | `test: assemble complete postgres agent runtime` |
-| 远端关系 | 用户已 push，`HEAD` 与 `origin/codex/quanxin-full` 均为 `daca47a...`；本轮 release 文档提交完成后本地将领先 1 个提交 |
+| 当前 HEAD | `45a38887dda785a74a6cad7acc015a44c88c5b7c` |
+| HEAD 摘要 | `docs: record immutable ACR release evidence` |
+| 当前 release 源码 | `daca47a7d0a2f8e82a7c549b6b97d0f25b5596a7` |
+| 远端关系 | 用户已 push，当前工作区无受跟踪差异；仅保留明确保护的未跟踪内容 |
 | 当前 release | `2026.08.02-1`，基于 `daca47a...`，状态 `Published` |
 | 历史 release | `2026.07.28-1`，基于旧提交 `912f8ae...` 和旧 IP，仅保留为历史证据 |
 | 当前任务 | Task 0、Task 1、Task 2 已完成；准备进入 Task 3，ECS 部署与运营闭环归入 Task 8 |
@@ -37,7 +38,7 @@ daca47a test: assemble complete postgres agent runtime
 
 ### 1.1 当前 `git status --short`
 
-以下是本轮 release 文档提交完成后的预期状态：
+以下是本轮 ECS 审计文档提交完成后的预期状态：
 
 ```text
 ?? .playwright-mcp/
@@ -51,7 +52,7 @@ daca47a test: assemble complete postgres agent runtime
 ?? tmp/
 ```
 
-除本轮 release/status/handoff 文档外，所有受跟踪产品修改已经按审查边界提交；没有业务源码差异。`.gitignore` 的用户修改已按原样独立提交。`frontend/pnpm-workspace.yaml` 是工具运行期间意外生成的未跟踪占位文件，继续保留。
+除本轮 ECS audit/status/handoff 文档外，所有受跟踪产品修改已经按审查边界提交；没有业务源码差异。`.gitignore` 的用户修改已按原样独立提交。`frontend/pnpm-workspace.yaml` 是工具运行期间意外生成的未跟踪占位文件，继续保留。
 
 ### 1.2 本地提交边界
 
@@ -63,11 +64,12 @@ daca47a test: assemble complete postgres agent runtime
 - `2b6e786`：不可变发布、Gateway 镜像、PostgreSQL CI 和部署契约；
 - `aa5aa40`：用户已有 `/server-results/` 忽略规则；
 - `41fcd1d`：产品化总计划和 Task 0/Task 1 交接；
-- 本轮 release 文档提交：当前 release、公开状态、ECS 手册和本交接的实际证据更新。
+- `45a3888`：当前 release、公开状态、ECS 手册和不可变 ACR 证据；
+- 本轮 ECS 审计文档提交：VNC 只读对账、公开状态、ECS 手册和本交接的实际证据更新。
 
 ### 1.3 受跟踪工作区
 
-本轮 release 文档提交完成后，`git diff` 与 `git diff --cached` 应为空。发布源码、测试和配置已 push 到 `origin/codex/quanxin-full`；新增 release 证据文档由根 Agent 本地提交，仍需用户通过 GitHub Desktop push。
+本轮 ECS 审计文档提交完成后，`git diff` 与 `git diff --cached` 应为空。发布源码、测试、配置和 release 证据 `45a3888` 已 push 到 `origin/codex/quanxin-full`；新增 ECS 审计文档由根 Agent 本地提交后，仍需用户通过 GitHub Desktop push。
 
 ### 1.4 未跟踪内容
 
@@ -144,7 +146,7 @@ Next.js 产品工作台
 - 单电芯结果：RUL/SOH/Conformal/报告组件存在，但调用者必须提供 record batch 和多个 result ID，运行结果不可自动发现。
 - 报告导出：通用后端具备 JSON、Markdown、PDF、DOCX 能力；competition runtime 未确认注入 report exporter，前端没有下载中心。
 - 上传：后端只有单电芯、单 cutoff、JSON base64 canonical CSV 的底层接口和内容寻址对象存储；没有产品上传会话。
-- ECS：公网 edge 可验证，当前 release 已发布，但 SSH 22 在认证前超时，内部运行状态、RepoDigest 与发布来源仍无法验证。
+- ECS：公网 edge、Compose、migration `0015`、Worker、历史九步 ToolResult、备份和证书 timer 已只读验证；但 ECS 仍运行 `2026.07.29-1` 和可变热修复绑定，当前 release 尚未部署。
 
 ### 3.3 未完成
 
@@ -159,7 +161,8 @@ Next.js 产品工作台
 - CSV/Parquet/多文件/ZIP、`metadata.csv`、16 MiB 分块、暂停/重试/续传、质量确认、异步导入和四 cutoff 自动生成。
 - 由真实目录 API 驱动的完整工作台、整合结果页、证据抽屉、报告阅读页和下载中心；当前 B 方案实现的是可信布局与状态骨架。
 - 派生 CSV、完整 ToolResult 集合、带 manifest/SHA 的异步 ZIP；ZIP 必须排除原始上传数据。
-- ECS 内部 migration head、容器状态、镜像 digest、Worker 队列、ADMIN、route、calibration materialization 和真实九步 ToolResult 闭环。
+- 当前 release `2026.08.02-1` 的 ECS 部署、RepoDigest/OCI 对账、无 bind mount 验收、正式 route/calibration 和发布后真实九步 E2E。
+- Redis AOF ACL `NOPERM` 专项核验、报告表关联修复、备份恢复与回滚演练。
 - 严格浏览器纵向 E2E、备份恢复、回滚、证书自动续期和磁盘/队列运维演练。
 
 ### 3.4 已放弃或明确否决
@@ -249,28 +252,29 @@ Compose 包含 7 个服务：PostgreSQL、Redis、一次性 `migrate`、API、Wo
 → 五张镜像 digest 已记录
 → backend/frontend/gateway OCI revision/version 已确认
 → public origin https://47.99.69.138
-→ Published，但 ECS RepoDigest 未对账
+→ Published；ECS 已审计但仍运行旧 `2026.07.29-1`
 ```
 
 因此：
 
 - 旧 release 记录是历史证据，已标注由 `2026.08.02-1` supersede，原身份不得改写；
-- 当前源码已经形成可信不可变 release，但公网正在运行的镜像 tag/digest/source commit 尚未通过 SSH 或其他受信证据对账；
-- 不能根据公网 200/401 推断 migration head、Worker、数据库、route 或真实 Agent 已完成；
-- ECS 对账必须逐项比较本 release 文档中的五个 digest，并检查自建镜像 revision/version；
+- 当前源码已经形成可信不可变 release；ECS 受信只读审计已确认公网运行的是旧 `2026.07.29-1`、旧 digest 和空 OCI 身份，不是当前 release；
+- migration `0015`、Worker、旧数据库和历史九步 Agent 已对账，但这些事实不能证明 `2026.08.02-1`；
+- 部署当前 release 时仍必须逐项比较 release 文档中的五个 digest，并检查自建镜像 revision/version；
 - Compose 仍通过 `${RELEASE_TAG}` 引用镜像，不是直接 pin digest，不可变性依赖发布记录和 RepoDigest 验证。
 - workflow 已在本次发布前检查五个仓库并拒绝已存在 tag；检查异常 fail closed。自建 backend/frontend/gateway 镜像已记录 `org.opencontainers.image.revision` 与 `org.opencontainers.image.version`。
 
 本轮文档已同步：
 
 - `docs/status.md` 已更新到当前 IP、当前 release 和 `Published`/`Not deployed` 边界；
-- `docs/deployment/competition-ecs.md` 已更新当前发布基线和 SSH 阻塞；
+- `docs/deployment/competition-ecs.md` 已更新当前发布基线和 ECS 旧部署事实；
+- `docs/deployment/ecs-audit-2026-08-02.md` 记录系统、容器、migration、Worker、TLS、备份和 Agent 只读证据；
 - `docs/deployment/releases/2026.08.02-1.md` 记录本次 run、source、origin、五个 digest 和 OCI 身份；
 - `docs/deployment/releases/2026.07.28-1.md` 保留原身份并标注 superseded。
 
 ## 7. 本轮只读公网与 ECS 检查
 
-2026-08-02 实测：
+2026-08-02 公网与 ECS 实测：
 
 - `http://47.99.69.138/`：`308` 跳转 HTTPS；
 - `https://47.99.69.138/`：严格 TLS 校验成功，Nginx/Next.js 返回 `307` 到 `/projects`；
@@ -278,11 +282,21 @@ Compose 包含 7 个服务：PostgreSQL、Redis、一次性 `migrate`、API、Wo
 - `https://47.99.69.138/login`：`200`；
 - `https://47.99.69.138/v1/projects`：未认证请求返回 `401`，证明受认证 API 路由在公网暴露；
 - TCP 80/443 可达；
-- 本机已有 `47.99.69.138` 的 SSH 主机记录；
-- 使用现有密钥路径、`BatchMode`、严格 host key 的 SSH 22 连接超时。
+- 安全组临时放行审计电脑 `/32` 后 TCP 22 可达；
+- 现有项目公钥对 `root`、`ubuntu`、`ecs-user` 均不匹配，未修改 SSH 配置或注入密钥；
+- VNC 只读审计确认 Ubuntu 22.04.5、4 vCPU、约 7.1 GiB 内存、40 GiB 根盘、2 GiB swap；
+- 根盘约 72%，Docker 镜像 21.1 GB，其中约 9.921 GB 可回收，本轮未清理；
+- Compose 可解析，API/Frontend/Gateway/PostgreSQL/Redis healthy，Worker 返回 `pong`；
+- migrate `exit=0`，日志包含 `DATABASE_MIGRATIONS_OK`，Alembic 为 `0015`；
+- 所有运行服务仍使用 `2026.07.29-1`，OCI revision/version 为空；
+- API/Worker 仍绑定 `/srv/quanxin/hotfixes/calibration-runtime-v7/` 单文件，Gateway 仍绑定宿主机 `competition.conf`；
+- 历史唯一 Agent run 为 9 steps / 9 ToolResult，关联 23 条 provenance，但 `reports` 表关联为 0；
+- Redis 近 24 小时出现 AOF loading client ACL `NOPERM` CRITICAL 记录，持久化完整性未证明；
+- snap certbot timer active，2026-08-02 两次运行成功；当前证书截止 `2026-08-08 02:50:38 UTC`；
+- PostgreSQL dump 共 36 份、约 17 MB，最新可见时间 `2026-08-01 20:25`。
 
-能证明：新 IP 的 Gateway、严格 TLS、Frontend 和认证 API edge 可达。
-不能证明：ECS 内部 Compose、镜像 digest、migration、数据库、Redis、Worker、ADMIN、route、calibration、ToolResult、Agent、报告、备份、恢复或续期演练状态。
+能证明：新 IP 的 Gateway、严格 TLS、Frontend、认证 API edge、旧部署内部服务、migration、Worker 和历史九步 ToolResult 可用。
+不能证明：当前 release 已部署、Redis AOF 完整恢复、正式 route/calibration、报告表闭环、发布后真实九步 E2E、备份恢复或回滚演练。完整证据见 `docs/deployment/ecs-audit-2026-08-02.md`。
 
 ## 8. 本轮验证结果
 
@@ -368,13 +382,13 @@ GitHub Actions 的 Node.js 20 弃用注释来自 action 运行时被强制切到
 ### 8.6 仍缺少的验证
 
 - 本机没有 Docker/Podman/nerdctl，未运行本地 `docker compose config` 或容器 smoke；真实镜像 build 已由 GitHub Actions 完成；
-- SSH 超时，未完成 ECS 内部检查；
+- 当前 release 尚未部署；ECS 仍运行旧 tag、旧 digest 和热修复 bind mount；
 - 已完成 mock 边界内的布局与可信状态浏览器 QA，但未进行真实登录、真实 PostgreSQL/Worker/ToolResult 的纵向 E2E；
-- 未校验当前公网运行镜像与 HEAD 的来源一致性。
+- Redis AOF ACL 错误、报告表关联和备份恢复尚未完成专项验收。
 
 ## 9. 当前最大风险
 
-最大风险不是算法或 registry，而是“公网正在运行的东西与新 release 仍无法对账”：当前源码已经从全绿 CI 构建为 `2026.08.02-1`，但 SSH 不通，无法确认 ECS 是否拉取该 release、revision、镜像 digest、Gateway 配置和真实业务闭环。任何继续开发或演示若忽略这个断层，都可能把 `Published` 误写成 `Deployed/Demonstrated`。
+最大风险不是算法或 registry，而是“公网正在运行的仍是旧 release 和可变热修复覆盖”：当前源码已经从全绿 CI 构建为 `2026.08.02-1`，但 ECS 实测仍是 `2026.07.29-1`，没有新 OCI 身份，且 API/Worker/Gateway 依赖宿主机 bind mount。任何继续演示若忽略这个断层，都可能把 `Published` 误写成 `Deployed/Demonstrated`。第二个高风险是 Redis AOF 回放 ACL `NOPERM`，当前健康状态不能替代持久化完整性证明。
 
 Task 2 已降低未来发布继续产生该断层的概率：release tag 不可覆盖，自建镜像带 source revision/version，gateway 配置不再依赖宿主机文件，并且真实 PostgreSQL CI 与五个 ACR digest 已形成证据。当前剩余断层属于 Task 8 的 ECS 部署与运营验收。
 
@@ -405,7 +419,7 @@ Task 2 已降低未来发布继续产生该断层的概率：release tag 不可�
 
 Task 0、Task 1、Task 2 已完成。Runtime V7 差异已审计并合入正常源码；外键父记录顺序、Agent scope、canonical input、固定九步和共享 `AuditLedger` 已有回归；Python、真实 PostgreSQL 和前端 CI 全绿；backend、frontend、gateway 已作为不可变镜像构建，Gateway 不再依赖配置 bind mount；release `2026.08.02-1` 已发布并记录五个 digest 和三张自建镜像的 OCI revision/version。
 
-下一步进入 Task 3：先实现项目、数据和分析目录 API，消除普通用户手填 UUID。ECS 内部 RepoDigest、migration、Worker、route/calibration 和九步 ToolResult 对账仍未完成，但它属于 Task 8 的部署与运营闭环，不再阻塞 Task 3 源码开发；任何公网演示结论仍必须标记 `unverified`，直到 SSH/ECS 管理通道恢复并完成对账。
+下一步进入 Task 3：先实现项目、数据和分析目录 API，消除普通用户手填 UUID。ECS 只读审计已完成，确认旧部署可用但当前 release 未部署；新 release 部署、Redis 恢复专项、route/calibration、报告链和发布后九步 E2E 归入 Task 8，不阻塞 Task 3 源码开发。任何公网演示仍必须标明运行的是旧 release，直到 `2026.08.02-1` 完成 RepoDigest/OCI/无 bind mount 对账。
 
 ## 12. 后续实施顺序
 
@@ -438,5 +452,5 @@ Task 0、Task 1、Task 2 已完成。Runtime V7 差异已审计并合入正常�
 3. 保护 `.playwright-mcp/`、`tmp/`、`frontend/pnpm-workspace.yaml` 和 6 张未提交的中间截图；不要在 GitHub Desktop 中全选未跟踪文件。
 4. 不把旧 IP、旧 release 或旧 migration 阻塞当成当前事实；公网 IP 是 `47.99.69.138`。
 5. Task 1 已完成且用户已确认 B「双栏分析」；不得回退到重新选方案，也不得把未来目录、上传或导出能力写成当前已接通。
-6. Task 2 已完成并发布为 `2026.08.02-1`；本轮 release 文档提交由用户在 GitHub Desktop push。下一任务是 Task 3。
+6. Task 2 已完成并发布为 `2026.08.02-1`；release 证据 `45a3888` 已 push，本轮 ECS 审计文档提交后仍由用户在 GitHub Desktop push。下一任务是 Task 3。
 7. 任何生产结论必须有当前命令、ToolResult、API、数据库、镜像 digest 或浏览器证据；无法核验就明确写 `unverified`。

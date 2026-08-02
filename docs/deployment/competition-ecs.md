@@ -12,17 +12,18 @@
 - **Validated**：部署契约、运行设置、装配、迁移和 ADMIN 初始化测试通过；当前提交
   `daca47a7d0a2f8e82a7c549b6b97d0f25b5596a7` 的 Python、真实 PostgreSQL 和前端
   GitHub Actions 门禁全部通过；
-- **Infrastructure partial**：私有 ACR 和正式 Let's Encrypt IP 证书可用，公网
-  80/443 edge 可达；SSH 22 当前在认证前超时，ECS 内部 Docker/Compose 状态未验证；
+- **Infrastructure audited**：私有 ACR 和正式 Let's Encrypt IP 证书可用，公网
+  80/443 edge 可达；ECS 内部 Docker/Compose、migration、Worker、备份和证书 timer
+  已完成只读审计；
 - **Published**：release `2026.08.02-1` 已从该提交发布五个私有 ACR 镜像，记录
   digest，并为 backend/frontend/gateway 写入 OCI revision/version；
-- **Not deployed**：公网严格 TLS edge 可达，但 SSH 22 在认证前超时，镜像尚未在
-  目标 ECS 完成 RepoDigest、Compose、migration、Worker、正式路由/校准证据和九步
-  ToolResult 对账。
+- **Not deployed**：目标 ECS 仍运行 `2026.07.29-1` 和 Runtime V7 单文件热修复绑定，
+  Gateway 仍绑定宿主机配置；当前 `2026.08.02-1` 尚未部署或完成 RepoDigest 对账。
 
 部署状态的权威定义见 [项目状态](../status.md)。
 当前已发布镜像见 [ACR release `2026.08.02-1`](releases/2026.08.02-1.md)。历史
-release `2026.07.28-1` 仅保留为旧源码证据。
+release `2026.07.28-1` 仅保留为旧源码证据。当前 ECS 事实见
+[2026-08-02 ECS 只读审计](ecs-audit-2026-08-02.md)。
 
 ## 部署拓扑
 
