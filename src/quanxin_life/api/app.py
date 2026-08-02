@@ -64,6 +64,7 @@ def create_fastapi_app(
     dataset_adapter: Any | None = None,
     record_batch_adapter: Any | None = None,
     agent_run_adapter: Any | None = None,
+    analysis_catalog_adapter: Any | None = None,
     knowledge_adapter: Any | None = None,
     feishu_adapter: Any | None = None,
     industrial_adapter: Any | None = None,
@@ -126,6 +127,10 @@ def create_fastapi_app(
         if auth_adapter is None:
             raise ValueError("agent_run_adapter requires auth_adapter")
         app.include_router(agent_run_adapter.router)
+    if analysis_catalog_adapter is not None:
+        if auth_adapter is None:
+            raise ValueError("analysis_catalog_adapter requires auth_adapter")
+        app.include_router(analysis_catalog_adapter.router)
     if knowledge_adapter is not None:
         if auth_adapter is None:
             raise ValueError("knowledge_adapter requires auth_adapter")

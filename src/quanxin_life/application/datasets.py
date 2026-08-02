@@ -151,6 +151,27 @@ class DatasetService:
                 raise DatasetNotFoundError("dataset was not found")
             return _dataset_record(dataset)
 
+    def list_project_datasets(
+        self,
+        principal: AuthPrincipal,
+        project_id: str,
+    ) -> tuple[DatasetRecord, ...]:
+        normalized_project_id = self._normalized_identifier(project_id)
+        with session_scope(self._session_factory) as session:
+            visible_project = ProjectService.visible_projects_statement(principal).where(
+                Project.id == normalized_project_id
+            )
+            if session.scalar(visible_project) is None:
+                raise DatasetNotFoundError("project was not found")
+            datasets = tuple(
+                session.scalars(
+                    select(Dataset)
+                    .where(Dataset.project_id == normalized_project_id)
+                    .order_by(Dataset.created_at.desc(), Dataset.id.desc())
+                ).all()
+            )
+            return tuple(_dataset_record(dataset) for dataset in datasets)
+
     def freeze_dataset(
         self,
         principal: AuthPrincipal,

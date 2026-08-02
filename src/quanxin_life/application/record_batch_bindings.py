@@ -235,6 +235,38 @@ class RecordBatchBindingService:
             ).model_dump(mode="json")
         )
 
+    def list_dataset_batches(
+        self,
+        principal: AuthPrincipal,
+        dataset_id: str,
+    ) -> tuple[RecordBatchBindingRecord, ...]:
+        normalized_dataset_id = self._identifier(dataset_id)
+        with session_scope(self._session_factory) as session:
+            visible_project_ids = ProjectService.visible_projects_statement(
+                principal
+            ).with_only_columns(Project.id)
+            dataset = session.scalar(
+                select(Dataset).where(
+                    Dataset.id == normalized_dataset_id,
+                    Dataset.project_id.in_(visible_project_ids),
+                )
+            )
+            if dataset is None:
+                raise RecordBatchBindingNotFoundError("dataset was not found")
+            bindings = tuple(
+                session.scalars(
+                    select(RecordBatchBinding)
+                    .where(RecordBatchBinding.dataset_id == normalized_dataset_id)
+                    .order_by(
+                        RecordBatchBinding.cell_id,
+                        RecordBatchBinding.cutoff_cycle,
+                        RecordBatchBinding.created_at,
+                        RecordBatchBinding.id,
+                    )
+                ).all()
+            )
+            return tuple(self._record(binding) for binding in bindings)
+
     def _resolve_upload_dataset(
         self,
         principal: AuthPrincipal,

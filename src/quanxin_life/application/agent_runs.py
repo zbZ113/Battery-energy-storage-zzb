@@ -14,6 +14,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from quanxin_life.agents.supervisor import (
+    ADVANCED_SINGLE_CELL_OUTPUT,
+    FixedAdvancedSupervisorPlanner,
     SupervisorPlanningRequest,
     SupervisorPlanningResult,
 )
@@ -77,9 +79,6 @@ class AgentRunStateError(RuntimeError):
     """Raised when a requested transition is unsafe for current state."""
 
 
-_ADVANCED_SINGLE_CELL_OUTPUT = "advanced_single_cell_analysis"
-
-
 class AgentPlanner(Protocol):
     def plan(
         self,
@@ -127,6 +126,12 @@ class AgentRunRecord(ContractModel):
     @classmethod
     def timestamps_are_utc(cls, value: datetime | None) -> datetime | None:
         return _utc(value) if value is not None else None
+
+
+class AgentRunResultRecord(ContractModel):
+    step_id: str = Field(min_length=1)
+    ordinal: int = Field(ge=1)
+    result: ToolResult
 
 
 def _utc(value: datetime) -> datetime:
@@ -184,6 +189,51 @@ class AgentRunService:
         available_tools: Collection[StandardToolName],
         now: datetime,
     ) -> AgentRunRecord:
+        return self._create_run(
+            principal,
+            request=request,
+            idempotency_key=idempotency_key,
+            available_tools=available_tools,
+            now=now,
+            planner=self._planner,
+        )
+
+    def create_fixed_advanced_run(
+        self,
+        principal: AuthPrincipal,
+        *,
+        project_id: str,
+        record_batch_id: str,
+        idempotency_key: str,
+        available_tools: Collection[StandardToolName],
+        now: datetime,
+    ) -> AgentRunRecord:
+        timestamp = _utc(now)
+        request = SupervisorPlanningRequest(
+            project_id=project_id,
+            user_goal="Run the fixed advanced single-cell analysis workflow",
+            dataset_ids=(record_batch_id,),
+            requested_outputs=(ADVANCED_SINGLE_CELL_OUTPUT,),
+        )
+        return self._create_run(
+            principal,
+            request=request,
+            idempotency_key=idempotency_key,
+            available_tools=available_tools,
+            now=timestamp,
+            planner=FixedAdvancedSupervisorPlanner(clock=lambda: timestamp),
+        )
+
+    def _create_run(
+        self,
+        principal: AuthPrincipal,
+        *,
+        request: SupervisorPlanningRequest,
+        idempotency_key: str,
+        available_tools: Collection[StandardToolName],
+        now: datetime,
+        planner: AgentPlanner,
+    ) -> AgentRunRecord:
         self._require_operator(principal)
         timestamp = _utc(now)
         validated = SupervisorPlanningRequest.model_validate(
@@ -196,7 +246,7 @@ class AgentRunService:
             return self._resolve_idempotent(existing, request_hash=request_hash)
 
         self._validate_run_scope(principal, validated)
-        planning = self._planner.plan(validated, available_tools=available_tools)
+        planning = planner.plan(validated, available_tools=available_tools)
         if planning.intent.project_id != validated.project_id:
             raise AgentRunStateError("planner changed the authorized project")
         if tuple(planning.intent.dataset_ids) != tuple(validated.dataset_ids):
@@ -289,6 +339,32 @@ class AgentRunService:
             dispatch = self._dispatch_for_run(session, run.id)
             return self._record(run, dispatch)
 
+    def list_project_runs(
+        self,
+        principal: AuthPrincipal,
+        project_id: str,
+    ) -> tuple[AgentRunRecord, ...]:
+        normalized_project_id = project_id.strip() if isinstance(project_id, str) else ""
+        if not normalized_project_id:
+            raise AgentRunNotFoundError("project was not found")
+        with session_scope(self._session_factory) as session:
+            visible_project = ProjectService.visible_projects_statement(principal).where(
+                Project.id == normalized_project_id
+            )
+            if session.scalar(visible_project) is None:
+                raise AgentRunNotFoundError("project was not found")
+            runs = tuple(
+                session.scalars(
+                    select(AgentRun)
+                    .where(AgentRun.project_id == normalized_project_id)
+                    .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+                ).all()
+            )
+            return tuple(
+                self._record(run, self._dispatch_for_run(session, run.id))
+                for run in runs
+            )
+
     def list_events(
         self,
         principal: AuthPrincipal,
@@ -335,40 +411,143 @@ class AgentRunService:
             )
             if row is None:
                 raise AgentRunNotFoundError("Agent result was not found")
-            provenance_rows = tuple(
-                session.scalars(
-                    select(ProvenanceRecordRow)
-                    .where(ProvenanceRecordRow.tool_result_id == row.id)
-                    .order_by(ProvenanceRecordRow.source_id, ProvenanceRecordRow.id)
-                ).all()
-            )
             try:
-                return ToolResult(
-                    result_id=row.id,
-                    tool_name=row.tool_name,
-                    tool_version=row.tool_version,
-                    model_version=row.model_version,
-                    data_version=row.data_version,
-                    feature_version=row.feature_version,
-                    input_hash=row.input_hash,
-                    values=row.values_json,
-                    uncertainty=row.uncertainty_json,
-                    warnings=row.warnings_json,
-                    provenance=[
-                        ProvenanceRecord(
-                            source_id=item.source_id,
-                            source_kind=SourceKind(item.source_kind),
-                            uri=item.uri,
-                            sha256=item.sha256,
-                            description=item.description,
-                            created_at=_database_utc(item.created_at),
-                        )
-                        for item in provenance_rows
-                    ],
-                    created_at=_database_utc(row.created_at),
-                )
+                return self._tool_result(session, row)
             except ValueError as exc:
                 raise AgentRunStateError("Agent result has invalid persisted state") from exc
+
+    def list_results(
+        self,
+        principal: AuthPrincipal,
+        run_id: str,
+    ) -> tuple[AgentRunResultRecord, ...]:
+        with session_scope(self._session_factory) as session:
+            run = self._visible_run(session, principal, run_id)
+            try:
+                plan = AgentPlan.model_validate(run.plan_json)
+            except ValueError as exc:
+                raise AgentRunStateError("Agent run has invalid persisted state") from exc
+            if run.plan_hash != plan.plan_hash:
+                raise AgentRunStateError(
+                    "Agent run plan hash does not match the stored plan"
+                )
+            steps = tuple(
+                session.scalars(
+                    select(AgentStep)
+                    .where(AgentStep.run_id == run.id)
+                    .order_by(AgentStep.ordinal)
+                ).all()
+            )
+            self._validate_result_step_rows(plan, steps)
+            results = tuple(
+                session.scalars(
+                    select(ToolResultRecord)
+                    .where(ToolResultRecord.run_id == run.id)
+                    .order_by(ToolResultRecord.created_at, ToolResultRecord.id)
+                ).all()
+            )
+            results_by_step = {
+                result.agent_step_id: result
+                for result in results
+                if result.agent_step_id is not None
+            }
+            if len(results_by_step) != len(results):
+                raise AgentRunStateError("Agent run contains an unbound result")
+            catalog: list[AgentRunResultRecord] = []
+            try:
+                for step in steps:
+                    status = AgentStepStatus(step.status)
+                    result = results_by_step.pop(step.id, None)
+                    if status is AgentStepStatus.COMPLETED:
+                        if result is None or result.tool_name != step.tool_name:
+                            raise AgentRunStateError(
+                                "completed Agent step has no matching result"
+                            )
+                        catalog.append(
+                            AgentRunResultRecord(
+                                step_id=step.step_id,
+                                ordinal=step.ordinal,
+                                result=self._tool_result(session, result),
+                            )
+                        )
+                    elif result is not None:
+                        raise AgentRunStateError(
+                            "non-completed Agent step has a persisted result"
+                        )
+                if results_by_step:
+                    raise AgentRunStateError("Agent run contains an orphaned result")
+                return tuple(catalog)
+            except AgentRunStateError:
+                raise
+            except ValueError as exc:
+                raise AgentRunStateError("Agent result has invalid persisted state") from exc
+
+    @staticmethod
+    def _validate_result_step_rows(
+        plan: AgentPlan,
+        rows: tuple[AgentStep, ...],
+    ) -> None:
+        if len(rows) != len(plan.steps):
+            raise AgentRunStateError("persisted Agent steps do not match the plan")
+        for ordinal, (planned, row) in enumerate(
+            zip(plan.steps, rows, strict=True), start=1
+        ):
+            expected = (
+                ordinal,
+                planned.step_id,
+                planned.role.value,
+                planned.tool_name,
+                planned.input_references,
+                list(planned.depends_on),
+                planned.failure_policy.value,
+                planned.requires_approval,
+            )
+            actual = (
+                row.ordinal,
+                row.step_id,
+                row.role,
+                row.tool_name,
+                row.input_refs_json,
+                row.depends_on_json,
+                row.failure_policy,
+                row.requires_human_approval,
+            )
+            if actual != expected:
+                raise AgentRunStateError("persisted Agent step differs from the plan")
+
+    @staticmethod
+    def _tool_result(session: Session, row: ToolResultRecord) -> ToolResult:
+        provenance_rows = tuple(
+            session.scalars(
+                select(ProvenanceRecordRow)
+                .where(ProvenanceRecordRow.tool_result_id == row.id)
+                .order_by(ProvenanceRecordRow.source_id, ProvenanceRecordRow.id)
+            ).all()
+        )
+        return ToolResult(
+            result_id=row.id,
+            tool_name=row.tool_name,
+            tool_version=row.tool_version,
+            model_version=row.model_version,
+            data_version=row.data_version,
+            feature_version=row.feature_version,
+            input_hash=row.input_hash,
+            values=row.values_json,
+            uncertainty=row.uncertainty_json,
+            warnings=row.warnings_json,
+            provenance=[
+                ProvenanceRecord(
+                    source_id=item.source_id,
+                    source_kind=SourceKind(item.source_kind),
+                    uri=item.uri,
+                    sha256=item.sha256,
+                    description=item.description,
+                    created_at=_database_utc(item.created_at),
+                )
+                for item in provenance_rows
+            ],
+            created_at=_database_utc(row.created_at),
+        )
 
     def dispatch_pending(
         self,
@@ -780,7 +959,7 @@ class AgentRunService:
             ).all()
         )
         requires_record_batch = (
-            _ADVANCED_SINGLE_CELL_OUTPUT in request.requested_outputs
+            ADVANCED_SINGLE_CELL_OUTPUT in request.requested_outputs
             or (
                 plan is not None
                 and any(step.step_id == "advanced-input" for step in plan.steps)
@@ -1011,6 +1190,7 @@ __all__ = [
     "AgentRunDispatchError",
     "AgentRunNotFoundError",
     "AgentRunRecord",
+    "AgentRunResultRecord",
     "AgentRunService",
     "AgentRunStateError",
 ]

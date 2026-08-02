@@ -64,30 +64,35 @@ def _principal(name: str) -> AuthPrincipal:
     )
 
 
-def _payload() -> bytes:
+def _payload(*, cell_id: str = "cell-1", cutoff_cycle: int = 20) -> bytes:
     header = ",".join(CANONICAL_CYCLE_CSV_FIELDS)
     rows = (
-        "UPLOAD,cell-1,1,0,0,3.1,-1,25,1.1,1.0,0.01,true,true",
-        "UPLOAD,cell-1,1,1,1,3.2,-1,25,1.1,1.0,0.01,true,true",
-        "UPLOAD,cell-1,20,0,0,3.1,-1,25,1.0,0.9,0.02,true,true",
-        "UPLOAD,cell-1,20,1,1,3.2,-1,25,1.0,0.9,0.02,true,true",
+        f"UPLOAD,{cell_id},1,0,0,3.1,-1,25,1.1,1.0,0.01,true,true",
+        f"UPLOAD,{cell_id},1,1,1,3.2,-1,25,1.1,1.0,0.01,true,true",
+        f"UPLOAD,{cell_id},{cutoff_cycle},0,0,3.1,-1,25,1.0,0.9,0.02,true,true",
+        f"UPLOAD,{cell_id},{cutoff_cycle},1,1,3.2,-1,25,1.0,0.9,0.02,true,true",
     )
     return (header + "\n" + "\n".join(rows) + "\n").encode()
 
 
-def _registration(payload: bytes) -> CanonicalCsvBatchRegistration:
+def _registration(
+    payload: bytes,
+    *,
+    cell_id: str = "cell-1",
+    cutoff_cycle: int = 20,
+) -> CanonicalCsvBatchRegistration:
     digest = hashlib.sha256(payload).hexdigest()
     return CanonicalCsvBatchRegistration(
         metadata=CellMetadata(
             dataset_id="UPLOAD",
-            cell_id="cell-1",
+            cell_id=cell_id,
             chemistry="LFP/graphite",
             nominal_capacity_ah=1.1,
             source_uri="upload://canonical/cell-1.csv",
             source_sha256=digest,
             schema_version="cycle-record-v1",
         ),
-        feature_config=EarlyCycleFeatureConfig(cutoff_cycle=20),
+        feature_config=EarlyCycleFeatureConfig(cutoff_cycle=cutoff_cycle),
         data_version="upload-data-v1",
         split_version="upload-split-v1",
         provenance=(
@@ -258,6 +263,28 @@ def test_same_content_is_project_bound_and_registration_retry_is_idempotent(
     assert first.record_batch_id != other_project.record_batch_id
     assert first.dataset_id != other_project.dataset_id
     assert "content_batch_id" not in first.model_dump(mode="json")
+
+
+def test_dataset_batch_catalog_is_project_scoped_and_stably_sorted(
+    context: _Context,
+) -> None:
+    first = _register(context)
+    second_payload = _payload(cell_id="cell-2", cutoff_cycle=50)
+    second = context.service.register_canonical_csv(
+        context.principals["owner_a"],
+        context.dataset_ids["owner_a"],
+        second_payload,
+        _registration(second_payload, cell_id="cell-2", cutoff_cycle=50),
+        now=NOW,
+    )
+
+    assert context.service.list_dataset_batches(
+        context.principals["owner_a"], context.dataset_ids["owner_a"]
+    ) == (first, second)
+    with pytest.raises(RecordBatchBindingNotFoundError):
+        context.service.list_dataset_batches(
+            context.principals["outsider"], context.dataset_ids["owner_a"]
+        )
 
 
 def test_upload_hides_invisible_or_archived_project_and_rejects_frozen_dataset(

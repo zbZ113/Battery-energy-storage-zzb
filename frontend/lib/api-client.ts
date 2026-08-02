@@ -1,8 +1,13 @@
 import type {
+  AgentRunResultRecord,
   AgentRunCreateRequest,
   AgentRunRecord,
+  AnalysisInputsRecord,
   AuthPrincipal,
+  CreateAdvancedAnalysisRequest,
+  DatasetRecord,
   ProjectRecord,
+  RecordBatchBindingRecord,
   ToolResult,
 } from "./types";
 import {
@@ -120,6 +125,55 @@ export function listProjects(): Promise<ProjectRecord[]> {
 
 export function getProject(projectId: string): Promise<ProjectRecord> {
   return apiRequest<ProjectRecord>(`/v1/projects/${encodeURIComponent(projectId)}`);
+}
+
+export function listProjectDatasets(projectId: string): Promise<DatasetRecord[]> {
+  return apiRequest<DatasetRecord[]>(
+    `/v1/projects/${encodeURIComponent(projectId)}/datasets`,
+  );
+}
+
+export function listDatasetBatches(
+  datasetId: string,
+): Promise<RecordBatchBindingRecord[]> {
+  return apiRequest<RecordBatchBindingRecord[]>(
+    `/v1/datasets/${encodeURIComponent(datasetId)}/batches`,
+  );
+}
+
+export function getAnalysisInputs(projectId: string): Promise<AnalysisInputsRecord> {
+  return apiRequest<AnalysisInputsRecord>(
+    `/v1/projects/${encodeURIComponent(projectId)}/analysis-inputs`,
+  );
+}
+
+export function listProjectAgentRuns(projectId: string): Promise<AgentRunRecord[]> {
+  return apiRequest<AgentRunRecord[]>(
+    `/v1/projects/${encodeURIComponent(projectId)}/agent/runs`,
+  );
+}
+
+export function listAgentRunResults(
+  runId: string,
+): Promise<AgentRunResultRecord[]> {
+  return apiRequest<AgentRunResultRecord[]>(
+    `/v1/agent/runs/${encodeURIComponent(runId)}/results`,
+  );
+}
+
+export function createAdvancedAnalysis(
+  projectId: string,
+  payload: CreateAdvancedAnalysisRequest,
+  idempotencyKey: string,
+): Promise<AgentRunRecord> {
+  return apiRequest<AgentRunRecord>(
+    `/v1/projects/${encodeURIComponent(projectId)}/advanced-analyses`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export function getAgentRun(runId: string): Promise<AgentRunRecord> {

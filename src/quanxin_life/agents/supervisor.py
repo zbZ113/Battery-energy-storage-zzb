@@ -31,6 +31,27 @@ from quanxin_life.tools import StandardToolName
 SUPERVISOR_PLANNER_VERSION = "supervisor-planner-v1"
 INTENT_PROMPT_VERSION = "intent-prompt-v1"
 PLAN_PROMPT_VERSION = "plan-prompt-v1"
+ADVANCED_SINGLE_CELL_OUTPUT = "advanced_single_cell_analysis"
+FIXED_ADVANCED_STEP_IDS = (
+    "advanced-input",
+    "rul-point",
+    "rul-coverage",
+    "soh",
+    "rul-calibration",
+    "rul-interval",
+    "soh-calibration",
+    "soh-band",
+    "report",
+)
+FIXED_ADVANCED_TOOLS = frozenset(
+    {
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+        StandardToolName.PREDICT_CYCLE_LIFE,
+        StandardToolName.PREDICT_SOH_TRAJECTORY,
+        StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
+        StandardToolName.GENERATE_AUDITED_REPORT,
+    }
+)
 FORMAL_APPROVAL_TOOLS = frozenset({StandardToolName.MAKE_BATCH_DECISION})
 PLANNABLE_INPUT_MODES: dict[StandardToolName, tuple[frozenset[str], ...]] = {
     StandardToolName.VALIDATE_BATTERY_DATA: (
@@ -722,6 +743,74 @@ class SupervisorPlanner:
             raise AgentPlanPolicyError(
                 "user goal contains content prohibited from external LLM transmission"
             )
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Supervisor clock must return a timezone-aware datetime")
+        return value.astimezone(UTC)
+
+
+class FixedAdvancedSupervisorPlanner:
+    """Create the product-owned fixed nine-step workflow without an LLM."""
+
+    def __init__(
+        self,
+        *,
+        clock: Clock = _utc_now,
+        uuid_factory: UuidFactory = uuid4,
+    ) -> None:
+        self._clock = clock
+        self._uuid_factory = uuid_factory
+
+    def plan(
+        self,
+        request: SupervisorPlanningRequest,
+        *,
+        available_tools: Collection[StandardToolName],
+    ) -> SupervisorPlanningResult:
+        validated = SupervisorPlanningRequest.model_validate(
+            request.model_dump(mode="json")
+        )
+        if len(validated.dataset_ids) != 1:
+            raise AgentPlanPolicyError(
+                "fixed advanced planning requires exactly one record batch"
+            )
+        if validated.requested_outputs != (ADVANCED_SINGLE_CELL_OUTPUT,):
+            raise AgentPlanPolicyError(
+                "fixed advanced planning requires the advanced single-cell output"
+            )
+        available = frozenset(available_tools)
+        if not available >= FIXED_ADVANCED_TOOLS:
+            raise AgentPlanPolicyError(
+                "fixed advanced planning requires the complete advanced tool set"
+            )
+        created_at = self._now()
+        intent = AgentIntent(
+            intent_id=str(self._uuid_factory()),
+            project_id=validated.project_id,
+            goal=validated.user_goal,
+            dataset_ids=validated.dataset_ids,
+            requested_outputs=validated.requested_outputs,
+            created_at=created_at,
+        )
+        steps = SupervisorPlanner._enforce_plan_policy(
+            SupervisorPlanner._project_advanced_fixed_steps(),
+            intent=intent,
+            available_tools=available,
+        )
+        if tuple(step.step_id for step in steps) != FIXED_ADVANCED_STEP_IDS:
+            raise AgentPlanPolicyError("fixed advanced workflow identity changed")
+        return SupervisorPlanningResult(
+            intent=intent,
+            plan=AgentPlan.build(
+                plan_version=SUPERVISOR_PLANNER_VERSION,
+                intent_id=intent.intent_id,
+                steps=steps,
+                planning_mode=AgentPlanningMode.FIXED_FALLBACK,
+                created_at=created_at,
+            ),
+        )
 
     def _now(self) -> datetime:
         value = self._clock()

@@ -14,6 +14,7 @@ from deploy.competition_inputs import (
 from deploy.runtime_settings import CompetitionRuntimeSettings
 from quanxin_life.agents.supervisor import SupervisorPlanner
 from quanxin_life.api.agent_runs import create_agent_run_http_adapter
+from quanxin_life.api.analysis_catalog import create_analysis_catalog_http_adapter
 from quanxin_life.api.app import create_fastapi_app
 from quanxin_life.api.auth import AuthCookieConfig, create_auth_http_adapter
 from quanxin_life.api.datasets import create_dataset_http_adapter
@@ -227,6 +228,7 @@ def create_competition_runtime(
         session_factory,
         planner=SupervisorPlanner(gateway=None),
     )
+    dataset_service = DatasetService(session_factory)
     agent_worker = AgentRunExecutionWorker(
         session_factory,
         run_service=run_service,
@@ -250,7 +252,7 @@ def create_competition_runtime(
             auth_adapter=auth_adapter,
         ),
         dataset_adapter=create_dataset_http_adapter(
-            DatasetService(session_factory),
+            dataset_service,
             auth_adapter=auth_adapter,
         ),
         record_batch_adapter=create_record_batch_http_adapter(
@@ -260,6 +262,15 @@ def create_competition_runtime(
         agent_run_adapter=create_agent_run_http_adapter(
             run_service,
             auth_adapter=auth_adapter,
+            available_tools=available_tools,
+            queue=agent_queue,
+        ),
+        analysis_catalog_adapter=create_analysis_catalog_http_adapter(
+            auth_adapter=auth_adapter,
+            dataset_service=dataset_service,
+            record_batch_service=record_batch_service,
+            context_service=context_service,
+            run_service=run_service,
             available_tools=available_tools,
             queue=agent_queue,
         ),

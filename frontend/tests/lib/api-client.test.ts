@@ -5,13 +5,19 @@ import {
   approveAgentRun,
   changePassword,
   createAdvancedCalibrationMaterialization,
+  createAdvancedAnalysis,
   createAgentRun,
+  getAnalysisInputs,
   getCurrentPrincipal,
   getAgentRunResult,
   getProjectResult,
   invokeProjectTool,
   listActiveModelRoutes,
   listAdvancedCalibrationMaterializations,
+  listAgentRunResults,
+  listDatasetBatches,
+  listProjectAgentRuns,
+  listProjectDatasets,
   logout,
   rejectAgentRun,
   resolveApiBaseUrl,
@@ -168,6 +174,64 @@ describe("apiRequest", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(new Headers(init.headers).get("Idempotency-Key")).toBe("agent-run-unique-key-1");
     expect(init.method).toBe("POST");
+  });
+
+  it("uses the Task 3 catalogs and fixed advanced-analysis endpoint", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(
+        jsonResponse({ project_id: "project/1", datasets: [], batches: [] }),
+      )
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          run_id: "run-1",
+          project_id: "project/1",
+          status: "RUNNING",
+          created_at: "2026-08-02T10:00:00Z",
+          updated_at: "2026-08-02T10:00:00Z",
+        }, 202),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listProjectDatasets("project/1");
+    await listDatasetBatches("dataset/1");
+    await getAnalysisInputs("project/1");
+    await listProjectAgentRuns("project/1");
+    await listAgentRunResults("run/1");
+    await createAdvancedAnalysis(
+      "project/1",
+      {
+        record_batch_id: "batch/1",
+        cell_id: "cell-1",
+        cutoff_cycle: 20,
+      },
+      "advanced-analysis-key-0001",
+    );
+
+    expect(fetchMock.mock.calls.slice(0, 5).map(([url]) => url)).toEqual([
+      "http://localhost:8000/v1/projects/project%2F1/datasets",
+      "http://localhost:8000/v1/datasets/dataset%2F1/batches",
+      "http://localhost:8000/v1/projects/project%2F1/analysis-inputs",
+      "http://localhost:8000/v1/projects/project%2F1/agent/runs",
+      "http://localhost:8000/v1/agent/runs/run%2F1/results",
+    ]);
+    const [createUrl, createInit] = fetchMock.mock.calls[5] as [string, RequestInit];
+    expect(createUrl).toBe(
+      "http://localhost:8000/v1/projects/project%2F1/advanced-analyses",
+    );
+    expect(createInit.method).toBe("POST");
+    expect(new Headers(createInit.headers).get("Idempotency-Key")).toBe(
+      "advanced-analysis-key-0001",
+    );
+    expect(JSON.parse(String(createInit.body))).toEqual({
+      record_batch_id: "batch/1",
+      cell_id: "cell-1",
+      cutoff_cycle: 20,
+    });
   });
 
   it("posts approval actions and logout to their protected endpoints", async () => {
@@ -353,4 +417,11 @@ function readyMaterialization() {
     completed_at: "2026-07-27T08:02:00Z",
     failure_code: null,
   };
+}
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }

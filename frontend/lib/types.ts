@@ -32,6 +32,55 @@ export interface AgentRunCreateRequest {
   requested_outputs: string[];
 }
 
+export type DatasetStatus = "DRAFT" | "FROZEN";
+
+export interface DatasetRecord {
+  dataset_id: string;
+  project_id: string;
+  name: string;
+  data_version: string;
+  schema_version: string;
+  status: DatasetStatus;
+  manifest_uri: string | null;
+  manifest_sha256: string | null;
+  created_at: string;
+  frozen_at: string | null;
+}
+
+export interface RecordBatchBindingRecord {
+  record_batch_id: string;
+  binding_schema_version: string;
+  project_id: string;
+  dataset_id: string;
+  source_manifest_sha256: string;
+  content_dataset_id: string;
+  dataset_schema_version: string;
+  cell_id: string;
+  cutoff_cycle: number;
+  data_version: string;
+  split_version: string;
+  feature_version: string;
+  created_at: string;
+}
+
+export interface AnalysisInputsRecord {
+  project_id: string;
+  datasets: DatasetRecord[];
+  batches: RecordBatchBindingRecord[];
+}
+
+export interface CreateAdvancedAnalysisRequest {
+  record_batch_id: string;
+  cell_id: string;
+  cutoff_cycle: number;
+}
+
+export interface AgentRunResultRecord {
+  step_id: string;
+  ordinal: number;
+  result: ToolResult;
+}
+
 export interface AgentEvent {
   event_id: string;
   run_id: string;

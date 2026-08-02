@@ -37,7 +37,13 @@ from quanxin_life.core import (
 from quanxin_life.core.product import AgentIntent
 from quanxin_life.persistence import Base, create_engine_from_config, create_session_factory
 from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
-from quanxin_life.persistence.models import AgentStep, SessionRecord, User
+from quanxin_life.persistence.models import (
+    AgentStep,
+    ProvenanceRecordRow,
+    SessionRecord,
+    ToolResultRecord,
+    User,
+)
 from quanxin_life.tools import StandardToolName
 
 NOW = datetime(2026, 7, 16, 10, 0, tzinfo=UTC)
@@ -268,6 +274,163 @@ def test_idempotent_create_persists_plan_steps_event_and_pending_dispatch(
     assert [event.sequence for event in events] == [1]
     assert events[0].event_type == "RUN_CREATED"
     assert request.user_goal not in str(events[0].payload)
+
+
+def test_project_run_catalog_is_visible_and_newest_first(
+    run_context: tuple[
+        AgentRunService,
+        FixedPlanner,
+        ProjectService,
+        DatasetService,
+        dict[UserRole | str, AuthPrincipal],
+        SessionFactory,
+    ],
+) -> None:
+    service, _, projects, datasets, principals, _ = run_context
+    member = principals[UserRole.MEMBER]
+    project_id, dataset_id = _project_and_frozen_dataset(projects, datasets, member)
+    older = service.create_run(
+        member,
+        request=_request(project_id, dataset_id, goal="older run"),
+        idempotency_key="catalog-older-run-0001",
+        available_tools=(StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,),
+        now=NOW,
+    )
+    newer = service.create_run(
+        member,
+        request=_request(project_id, dataset_id, goal="newer run"),
+        idempotency_key="catalog-newer-run-0001",
+        available_tools=(StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,),
+        now=NOW + timedelta(minutes=1),
+    )
+
+    assert service.list_project_runs(member, project_id) == (newer, older)
+    assert service.list_project_runs(principals[UserRole.ADMIN], project_id) == (
+        newer,
+        older,
+    )
+    with pytest.raises(AgentRunNotFoundError):
+        service.list_project_runs(principals["outsider"], project_id)
+
+
+def test_run_result_catalog_exposes_completed_results_with_step_identity(
+    run_context: tuple[
+        AgentRunService,
+        FixedPlanner,
+        ProjectService,
+        DatasetService,
+        dict[UserRole | str, AuthPrincipal],
+        SessionFactory,
+    ],
+) -> None:
+    service, _, projects, datasets, principals, session_factory = run_context
+    member = principals[UserRole.MEMBER]
+    project_id, dataset_id = _project_and_frozen_dataset(projects, datasets, member)
+    created = service.create_run(
+        member,
+        request=_request(project_id, dataset_id),
+        idempotency_key="result-catalog-run-0001",
+        available_tools=(StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,),
+        now=NOW,
+    )
+
+    with session_factory.begin() as session:
+        steps = session.query(AgentStep).filter_by(run_id=created.run_id).order_by(
+            AgentStep.ordinal
+        ).all()
+        assert len(steps) == 2
+        steps[0].status = "COMPLETED"
+        for index, step in enumerate(steps, start=1):
+            result_id = str(uuid4())
+            session.add(
+                ToolResultRecord(
+                    id=result_id,
+                    run_id=created.run_id,
+                    agent_step_id=step.id,
+                    tool_name=step.tool_name,
+                    tool_version="test-tool-v1",
+                    model_version=None,
+                    data_version="safe-v1",
+                    feature_version="feature-v1",
+                    input_hash=str(index) * 64,
+                    values_json={"artifact_id": f"artifact-{index}"},
+                    uncertainty_json=None,
+                    warnings_json=[],
+                    created_at=NOW + timedelta(seconds=index),
+                )
+            )
+            session.add(
+                ProvenanceRecordRow(
+                    id=str(uuid4()),
+                    tool_result_id=result_id,
+                    source_id=f"source-{index}",
+                    source_kind="OBSERVED",
+                    uri=f"fixture://source-{index}",
+                    sha256=str(index) * 64,
+                    description="Trusted structural fixture",
+                    created_at=NOW,
+                )
+            )
+
+    with pytest.raises(AgentRunStateError, match="result"):
+        service.list_results(member, created.run_id)
+
+    with session_factory.begin() as session:
+        second = session.query(AgentStep).filter_by(
+            run_id=created.run_id, step_id="features-retry"
+        ).one()
+        second.status = "COMPLETED"
+
+    completed_catalog = service.list_results(member, created.run_id)
+    assert [(item.step_id, item.ordinal) for item in completed_catalog] == [
+        ("features", 1),
+        ("features-retry", 2),
+    ]
+    assert [item.result.tool_name for item in completed_catalog] == [
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+    ]
+    with pytest.raises(AgentRunNotFoundError):
+        service.list_results(principals["outsider"], created.run_id)
+
+
+def test_run_result_catalog_rejects_missing_results_and_step_plan_drift(
+    run_context: tuple[
+        AgentRunService,
+        FixedPlanner,
+        ProjectService,
+        DatasetService,
+        dict[UserRole | str, AuthPrincipal],
+        SessionFactory,
+    ],
+) -> None:
+    service, _, projects, datasets, principals, session_factory = run_context
+    member = principals[UserRole.MEMBER]
+    project_id, dataset_id = _project_and_frozen_dataset(projects, datasets, member)
+    created = service.create_run(
+        member,
+        request=_request(project_id, dataset_id),
+        idempotency_key="result-catalog-integrity-0001",
+        available_tools=(StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,),
+        now=NOW,
+    )
+
+    with session_factory.begin() as session:
+        first = session.query(AgentStep).filter_by(
+            run_id=created.run_id, step_id="features"
+        ).one()
+        first.status = "COMPLETED"
+    with pytest.raises(AgentRunStateError, match="result"):
+        service.list_results(member, created.run_id)
+
+    with session_factory.begin() as session:
+        first = session.query(AgentStep).filter_by(
+            run_id=created.run_id, step_id="features"
+        ).one()
+        first.status = "PENDING"
+        first.ordinal = 3
+    with pytest.raises(AgentRunStateError, match="step"):
+        service.list_results(member, created.run_id)
 
 
 def test_reusing_an_idempotency_key_for_a_different_request_conflicts(

@@ -154,6 +154,58 @@ def test_dataset_object_visibility_matches_the_project_role_membership(
     assert service.get_dataset(judge, created.dataset_id) == created
 
 
+def test_project_dataset_catalog_is_visible_and_newest_first(
+    dataset_context: tuple[
+        DatasetService,
+        ProjectService,
+        dict[UserRole | str, AuthPrincipal],
+        SessionFactory,
+    ],
+) -> None:
+    service, projects, principals, session_factory = dataset_context
+    member = principals[UserRole.MEMBER]
+    project = projects.create_project(member, name="catalog project", now=NOW)
+    older = service.create_dataset(
+        member,
+        project_id=project.project_id,
+        name="older dataset",
+        data_version="v1",
+        schema_version="schema-v1",
+        now=NOW,
+    )
+    newer = service.create_dataset(
+        member,
+        project_id=project.project_id,
+        name="newer dataset",
+        data_version="v2",
+        schema_version="schema-v1",
+        now=datetime(2026, 7, 16, 10, 0, tzinfo=UTC),
+    )
+
+    assert service.list_project_datasets(member, project.project_id) == (
+        newer,
+        older,
+    )
+    assert service.list_project_datasets(
+        principals[UserRole.ADMIN], project.project_id
+    ) == (newer, older)
+    with pytest.raises(DatasetNotFoundError):
+        service.list_project_datasets(principals["outsider"], project.project_id)
+
+    judge = principals[UserRole.JUDGE]
+    with session_factory.begin() as session:
+        session.add(
+            UserProjectRole(
+                id=str(uuid4()),
+                user_id=judge.user_id,
+                project_id=project.project_id,
+                role=UserRole.JUDGE.value,
+                created_at=NOW,
+            )
+        )
+    assert service.list_project_datasets(judge, project.project_id) == (newer, older)
+
+
 def test_judge_is_read_only_and_invisible_projects_do_not_leak_identifiers(
     dataset_context: tuple[
         DatasetService,
