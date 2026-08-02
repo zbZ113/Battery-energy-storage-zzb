@@ -1,6 +1,6 @@
 # 项目状态
 
-更新时间：2026-07-28。
+更新时间：2026-08-02。
 
 本页是仓库公开成熟度的单一事实源。`Implemented` 表示代码和契约存在，
 `Validated` 表示已有自动化测试、正式实验、哈希验收或受控 E2E 证据，
@@ -23,7 +23,7 @@
 | exact `AgentStep` 与原子 ledger | 是 | claim/recovery 测试 | 否 | 多副本压力测试 |
 | calibration materialization | 是 | ADMIN API、Worker、UI、纵向 E2E | 否 | 真实 Worker 与证据部署 |
 | Next.js 项目门户 | 是 | 单元测试、类型检查、构建、E2E | 否 | 公网浏览器验收 |
-| 竞赛单机服务栈 | Compose、API、Worker、迁移、网关已实现 | 部署契约与装配测试 | 否（仅 ECS/TLS 前置设施 ready） | ACR 发布、Compose 启动、备份与演练 |
+| 竞赛单机服务栈 | Compose、API、Worker、迁移、网关已实现 | 完整 CI、真实 PostgreSQL、不可变 ACR 构建 | 否（公网 edge 可达，ECS 内部未对账） | RepoDigest、Compose、备份与演练 |
 | HUST 外部验证 | 接入与安全转换组件存在 | 尚无正式零样本结果 | 否 | 零样本、重校准、域适配 |
 | 工业 BMS/EMS | 协议沙箱存在 | 沙箱测试 | 否 | 企业凭证、网络、设备和安全联锁 |
 
@@ -87,14 +87,16 @@ cutoff：20 / 50 / 100 / 150
 
 ## 当前竞赛发布状态
 
-私有 ACR release `2026.07.28-1` 已于 GitHub Actions 成功发布并记录五个不可变镜像
-digest，来源提交为 `912f8ae05a0c3a08120bf7dcf4634273986a3a53`，前端公开
-Origin 为 `https://47.98.37.232`。
+私有 ACR release `2026.08.02-1` 已由 GitHub Actions run `30739080847` 成功发布并
+记录五个不可变镜像 digest，来源提交为
+`daca47a7d0a2f8e82a7c549b6b97d0f25b5596a7`，前端公开 Origin 为
+`https://47.99.69.138`。发布前同一提交的 Python、真实 PostgreSQL 和前端 CI 全部通过。
 
-这使竞赛镜像状态达到 `Published`，但尚未达到 `Deployed`：目标 ECS 仍需完成 ACR
-登录、精确 digest 对账、Compose、migration、正式模型/calibration 激活和公网
-浏览器 E2E。完整发布记录见
-[ACR release `2026.07.28-1`](deployment/releases/2026.07.28-1.md)。
+这使竞赛镜像状态达到 `Published`，但尚未达到 `Deployed`：公网严格 TLS edge 可达，
+SSH 22 在认证前连接超时，目标 ECS 的 RepoDigest、Compose、migration、Worker、正式
+模型/calibration、九步 ToolResult 和浏览器 E2E 仍未对账。完整发布记录见
+[ACR release `2026.08.02-1`](deployment/releases/2026.08.02-1.md)。历史 release
+`2026.07.28-1` 保留原 source commit、旧 IP 和 digest，不再代表当前源码。
 
 ## 未完成事项
 
@@ -109,7 +111,7 @@ Origin 为 `https://47.98.37.232`。
 
 ### 部署
 
-1. 运行手动 ACR workflow，发布并记录五个不可变镜像 digest；
+1. 恢复受控 SSH/ECS 管理通道，并对账 release `2026.08.02-1` 的五个 RepoDigest；
 2. 在目标 ECS 拉取镜像、执行 Alembic `0001`–`0015` 并启动竞赛 Compose；
 3. 初始化首个 ADMIN、项目、15 个正式候选和人工 active route；
 4. 部署真实 calibration evidence 并由 Worker 生成 `READY` 物化证据；

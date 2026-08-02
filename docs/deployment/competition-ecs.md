@@ -5,21 +5,24 @@
 本页描述泉芯智寿个人比赛演示的目标部署路径。目标是用一台 4 vCPU、8 GiB
 内存的 Ubuntu ECS 提供公网 HTTPS 纵向闭环，而不是声明企业级高可用生产系统。
 
-截至 2026-07-28：
+截至 2026-08-02：
 
 - **Implemented**：私有 ACR 发布工作流、竞赛 Compose、数据库迁移、完整 API、
   Celery Worker、Next.js、Nginx TLS 和 ADMIN 初始化；
-- **Validated**：部署契约、运行设置、装配、迁移和 ADMIN 初始化测试；
-- **Infrastructure ready**：目标 ECS、Docker、UFW 22/80/443、私有 ACR 和正式
-  Let's Encrypt IP 证书；
-- **Published**：release `2026.07.28-1` 已从提交
-  `912f8ae05a0c3a08120bf7dcf4634273986a3a53` 发布五个私有 ACR 镜像并记录
-  digest；
-- **Not deployed**：镜像尚未在目标 ECS 完成精确对账，Compose、正式路由/校准
-  证据激活及公网浏览器 E2E 尚未验收。
+- **Validated**：部署契约、运行设置、装配、迁移和 ADMIN 初始化测试通过；当前提交
+  `daca47a7d0a2f8e82a7c549b6b97d0f25b5596a7` 的 Python、真实 PostgreSQL 和前端
+  GitHub Actions 门禁全部通过；
+- **Infrastructure partial**：私有 ACR 和正式 Let's Encrypt IP 证书可用，公网
+  80/443 edge 可达；SSH 22 当前在认证前超时，ECS 内部 Docker/Compose 状态未验证；
+- **Published**：release `2026.08.02-1` 已从该提交发布五个私有 ACR 镜像，记录
+  digest，并为 backend/frontend/gateway 写入 OCI revision/version；
+- **Not deployed**：公网严格 TLS edge 可达，但 SSH 22 在认证前超时，镜像尚未在
+  目标 ECS 完成 RepoDigest、Compose、migration、Worker、正式路由/校准证据和九步
+  ToolResult 对账。
 
 部署状态的权威定义见 [项目状态](../status.md)。
-已发布镜像见 [ACR release `2026.07.28-1`](releases/2026.07.28-1.md)。
+当前已发布镜像见 [ACR release `2026.08.02-1`](releases/2026.08.02-1.md)。历史
+release `2026.07.28-1` 仅保留为旧源码证据。
 
 ## 部署拓扑
 
@@ -77,7 +80,7 @@ Publish competition images to ACR
 [`publish-acr.yml`](../../.github/workflows/publish-acr.yml)，只接受手动
 `workflow_dispatch`：
 
-- `release_tag`：不可变版本，例如 `2026.07.28-1`；
+- `release_tag`：不可变版本，例如当前 `2026.08.02-1`；
 - `public_origin`：完整 HTTPS Origin，例如 `https://203.0.113.10`。
 
 工作流发布：
