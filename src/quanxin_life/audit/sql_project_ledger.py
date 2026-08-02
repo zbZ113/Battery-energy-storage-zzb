@@ -84,6 +84,10 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+class _ConcurrentMaterializationCommit(RuntimeError):
+    """Exit a stale SQLite snapshot before re-reading an exact committed retry."""
+
+
 class SqlProjectAuditLedger:
     """Persist ToolResult bytes and project ownership in one SQL transaction."""
 
@@ -291,9 +295,7 @@ class SqlProjectAuditLedger:
                     )
                 )
                 if existing_bindings:
-                    raise AuditLedgerError(
-                        "Advanced calibration materialization contains partial samples"
-                    )
+                    raise _ConcurrentMaterializationCommit
 
                 sample_entries: list[dict[str, object]] = []
                 for sample in normalized_samples:
@@ -343,6 +345,16 @@ class SqlProjectAuditLedger:
                         for sample in normalized_samples
                     ),
                 )
+        except _ConcurrentMaterializationCommit as exc:
+            recovered = self._recover_ready_materialization(
+                commit,
+                normalized_samples,
+            )
+            if recovered is not None:
+                return recovered
+            raise AuditLedgerError(
+                "Advanced calibration materialization contains partial samples"
+            ) from exc
         except AuditLedgerError:
             raise
         except IntegrityError as exc:
