@@ -1,13 +1,13 @@
 # Codex 完整交接：泉芯智寿产品化
 
-> 更新时间：2026-08-02 19:25:58 +08:00（Asia/Shanghai）
+> 更新时间：2026-08-02 20:35:06 +08:00（Asia/Shanghai）
 > 当前实施目标：`docs/superpowers/plans/2026-08-02-quanxin-productization-master-plan.md`
 > 当前公网入口：`https://47.99.69.138`
 > 本文件只记录可由当前 Git、代码、测试和只读探测支持的事实，不包含密码、私钥、Cookie、连接串或业务数值。
 
 ## 0. 一句话状态
 
-Task 0 至 Task 3 已完成：可信计算链、固定九步 Agent、B「双栏分析」前端、Runtime V7、不变镜像基线以及项目/数据/运行/结果目录 API 已形成。Task 3 由 `bd78259` 和 `c7d8a76` 提交，当前工作区只保留受保护的未跟踪内容；最新完整门禁为 Python `1786 passed, 9 skipped`、前端 `82 passed`，Ruff、mypy、compileall、ESLint、TypeScript 和 Next.js build 通过。ACR release `2026.08.02-1` 仍仅包含 Task 2 基线，ECS 仍运行旧 `2026.07.29-1` 与 bind mount，Redis AOF 还有 ACL `NOPERM` 风险，因此公网状态仍是旧部署可用、新源码未部署。下一实施任务是 Task 4：把真实目录 API 接入 B 工作台，形成不需要 UUID 的可点击主流程。
+Task 0 至 Task 4 已在源码完成：可信计算链、固定九步 Agent、B「双栏分析」前端、Runtime V7、不变镜像基线、产品目录 API 以及不需要用户填写 UUID 的项目工作台已形成。Task 4 提交为 `a75dcab`；最新完整门禁为 Python `1786 passed, 9 skipped`、前端 `104 passed`，Ruff、mypy、compileall、ESLint、TypeScript 和 Next.js build 通过。Task 4 尚未在真实本地后端或公网新 release 上完成纵向演示；ACR release `2026.08.02-1` 仍仅包含 Task 2 基线，ECS 仍运行旧 `2026.07.29-1` 与 bind mount，Redis AOF 还有 ACL `NOPERM` 风险。下一实施任务是 Task 5：把平台从内置冻结样例升级为可上传 CSV/Parquet/ZIP、多电芯、可续传和可确认质量的数据产品。
 
 ## 1. 当前 Git 与工作区快照
 
@@ -15,13 +15,13 @@ Task 0 至 Task 3 已完成：可信计算链、固定九步 Agent、B「双栏�
 | --- | --- |
 | 工作区 | `D:\guet_learning\26 AI acting\Battery-energy-storage-zzb` |
 | 分支 | `codex/quanxin-full` |
-| 当前 HEAD | `c7d8a76` |
-| HEAD 摘要 | `feat(api): add analysis catalogs and fixed advanced runs` |
+| 当前业务代码 HEAD | `a75dcab` |
+| 业务 HEAD 摘要 | `feat(frontend): connect advanced analysis workspace` |
 | 当前 release 源码 | `daca47a7d0a2f8e82a7c549b6b97d0f25b5596a7` |
-| 远端关系 | `origin/codex/quanxin-full` 当前停在 `8bc2402`；`bd78259` 与 `c7d8a76` 待用户 push |
+| 远端关系 | `git ls-remote` 实测远端仍停在 `8bc2402`；本地 `bd78259`、`c7d8a76`、`6ef91e8`、`a75dcab` 均待用户 push |
 | 当前 release | `2026.08.02-1`，基于 `daca47a...`，状态 `Published` |
 | 历史 release | `2026.07.28-1`，基于旧提交 `912f8ae...` 和旧 IP，仅保留为历史证据 |
-| 当前任务 | Task 0 至 Task 3 已完成；进入 Task 4 工作台真实接线，ECS 部署与运营闭环归入 Task 8 |
+| 当前任务 | Task 0 至 Task 4 已完成源码实现；下一步进入 Task 5 上传中心，ECS 部署与运营闭环归入 Task 8 |
 
 Task 2 实现与 CI 修复提交：
 
@@ -41,11 +41,18 @@ Task 3 提交：
 ```text
 bd78259 fix: recover concurrent calibration commits
 c7d8a76 feat(api): add analysis catalogs and fixed advanced runs
+6ef91e8 docs: hand off completed analysis catalogs
+```
+
+Task 4 提交：
+
+```text
+a75dcab feat(frontend): connect advanced analysis workspace
 ```
 
 ### 1.1 当前 `git status --short`
 
-以下是 Task 3 提交完成后的实际状态：
+以下是 Task 4 提交完成后的实际状态：
 
 ```text
 ?? .playwright-mcp/
@@ -59,7 +66,7 @@ c7d8a76 feat(api): add analysis catalogs and fixed advanced runs
 ?? tmp/
 ```
 
-所有 Task 3 受跟踪产品修改已经按审查边界提交；`git diff` 与 `git diff --cached` 为空。`.gitignore` 的用户修改已按原样独立提交。`frontend/pnpm-workspace.yaml` 是工具运行期间意外生成的未跟踪占位文件，继续保留。
+所有 Task 4 业务代码与测试已按审查边界提交；更新本交接文件前，`git diff` 与 `git diff --cached` 为空。`.gitignore` 的用户修改保持不变。`frontend/pnpm-workspace.yaml` 是工具运行期间意外生成的未跟踪占位文件，继续保留。
 
 ### 1.2 本地提交边界
 
@@ -75,10 +82,12 @@ c7d8a76 feat(api): add analysis catalogs and fixed advanced runs
 - `8bc2402`：VNC 只读对账、公开状态、ECS 手册和本交接的 ECS 证据更新；
 - `bd78259`：SQLite 并发 exact calibration commit 在退出旧快照后恢复已提交 READY 物化；
 - `c7d8a76`：六个目录/编排 API、固定九步高级分析、结果目录 fail-closed 校验与前端 client 契约。
+- `6ef91e8`：Task 3 完成状态与分析目录交接。
+- `a75dcab`：B 工作台目录接线、电芯/cutoff 选择、固定九步启动、最近运行、步骤耗时、自动结果发现和九步证据目录。
 
 ### 1.3 受跟踪工作区
 
-当前 `git diff` 与 `git diff --cached` 为空。`8bc2402` 已在远端；Task 3 的 `bd78259` 与 `c7d8a76` 仍需用户通过 GitHub Desktop push。当前生产 release `2026.08.02-1` 不包含这两个提交。
+更新本文件前，受跟踪业务工作区与 index 均为空。`git ls-remote origin refs/heads/codex/quanxin-full` 在 20:27 实测仍为 `8bc2402`；本地后续四个提交仍需用户通过 GitHub Desktop push。当前生产 release `2026.08.02-1` 不包含 Task 3 或 Task 4。
 
 ### 1.4 未跟踪内容
 
@@ -134,7 +143,7 @@ Next.js 产品工作台
 - 登录、改密、项目列表/详情、通用 Agent 创建、SSE 时间线、单结果页、单电芯结果页和 calibration 管理页。
 - 单电芯结果页只显示服务端 ToolResult，并核验 result/run/project scope、身份、版本、SHA 和警告；错误时停止展示业务数值。
 - B「双栏分析」主工作台、顶部导航、六阶段流程条、固定九步 Tracker、运行审计双栏、可信结果等待态和响应式登录/改密页面。
-- 前端唯一主操作为“启动全新九步 Agent”；内置样例、上传、目录和导出未接入时均显示禁用或等待服务端状态，不伪装为可用能力。
+- 前端唯一主操作为“启动全新九步 Agent”；内置冻结样例、分析目录和最近运行已接入，上传和导出仍明确禁用或显示待服务端提供，不伪装为可用能力。
 - 九步 Tracker 仅在后端 `plan.steps` 精确匹配 Runtime V7 九个 step ID 时显示；SSE 对 `run_id`、sequence、事件名、带时区时间和 payload 结构做运行时校验，切换 run 时卸载旧会话。
 - 可重试失败显示“等待重试”，终态失败显示服务端 `failure_code`；浏览器不拼装报告，不制造结果数值。
 - Runtime V7 的外键父行顺序已覆盖 Agent run/event、普通项目 ToolResult、项目 Agent ToolResult、非项目 Agent ToolResult 和 calibration materialization；非项目路径发现的遗漏已修复。
@@ -142,7 +151,7 @@ Next.js 产品工作台
 - 发布 workflow 在任何构建前检查五个仓库的 release tag，已存在或检查结果不明确时 fail closed；backend/frontend/gateway 镜像携带 OCI source revision 和 release version 标签。
 - Gateway Nginx 配置由 `deploy/Dockerfile.gateway` 固化进镜像，Competition Compose 不再 bind mount 宿主机 `competition.conf`。
 - CI 已增加 `pgvector/pg16` 的 passwordless loopback PostgreSQL job，并在 run `30738774242` 实际通过 Alembic `0015`、schema check、固定九步 Agent、9 个 ToolResult/provenance 和重复投递回归。
-- 同一 run 的 `python-quality`、`postgres-quality`、`frontend-quality` 全部成功；mypy 对 207 个源文件零问题。
+- 同一 run 的 `python-quality`、`postgres-quality`、`frontend-quality` 全部成功；当前本地 mypy 对 208 个源文件零问题。
 - ACR release `2026.08.02-1` 已由 workflow run `30739080847` 从 `daca47a...` 发布成功，五张镜像 digest 已写入 `docs/deployment/releases/2026.08.02-1.md`。
 - backend/frontend/gateway build summary 均确认 `org.opencontainers.image.revision=daca47a...` 与 `org.opencontainers.image.version=2026.08.02-1`；frontend 还确认内置 public origin 为 `https://47.99.69.138`。
 - 基线提交 `e91ce7c` 已修复旧 0013 PostgreSQL Boolean 可移植性、0013/0015 PostgreSQL native alter 路径，并补齐 backend `llm` extra；Task 2 的 Runtime、Agent、前端和发布提交位于其后。旧交接中的 migration blocker 对当前源码已经过时。
@@ -150,21 +159,25 @@ Next.js 产品工作台
 - 项目目录 API：项目 datasets、dataset batches、冻结 analysis inputs、项目 Agent runs 和按 step ordinal 返回的结果目录。
 - 产品级 `advanced-analyses` 只接收 record batch、电芯、cutoff 与幂等键；服务端复核项目权限、冻结状态、内容哈希、电芯/cutoff，并使用显式固定九步 planner，绕过通用/LLM planner。
 - 结果目录对 plan hash、持久 step 身份、状态与 ToolResult 绑定 fail closed；重复 Conformal 工具通过 `step_id + ordinal + result` 区分。
+- 项目工作台读取严格解码后的 `analysis-inputs` 与最近运行，按可读数据集、电芯和 cutoff 选择服务端签发的 record batch；没有冻结数据时内置样例与启动入口不可用。
+- 主流程不再要求用户填写 UUID；启动器只调用产品级 `advanced-analyses`，失败重试复用幂等键，请求进行中锁定选择范围，切换项目时卸载旧项目、输入和运行状态。
+- 固定九步完成、失败或取消后都可进入结果目录；完成态要求九个 ToolResult，失败/取消允许合法部分目录，并明确提示终态未签发项不会继续等待。
+- 结果页只接收 `run_id`，自动核验 run/project/record batch 和九步 ToolResult 目录，组装五个主要结果 ID，并展示全部九步 ToolResult 的版本、哈希、来源、警告、不确定性和上游引用。
+- 九步耗时仅由服务端事件时间计算，重试耗时按已发生尝试累计；浏览器不使用本地时钟猜测执行耗时。
 
 ### 3.2 部分完成
 
-- Agent 产品入口：目录 API 和前端 client 已完成，但页面尚未调用它们；底层表单仍依赖现有 UUID/参数契约，尚不能完成普通用户的一键闭环。
-- 实时进度：固定九步名称、序号、可信失败/重试状态、SSE 校验、重连和审计事件已具备；步骤耗时、自动结果发现和真实纵向运行仍待 Task 4 页面接线与后续 E2E。
-- 单电芯结果：RUL/SOH/Conformal/报告组件存在，但调用者必须提供 record batch 和多个 result ID，运行结果不可自动发现。
+- Agent 产品入口：目录、选择、启动、最近运行和结果自动发现已接入；真实 PostgreSQL/Worker/ToolResult 纵向运行仍待 Task 7，公网部署仍待 Task 8。
+- 实时进度：固定九步名称、序号、服务端耗时、可信失败/重试状态、SSE 校验、重连和审计事件已具备；本地后端未启动，因此本轮只完成组件/契约测试和旧部署之外的 UI smoke，未证明真实新 run。
+- 单电芯结果：RUL/SOH/Conformal/报告由 `run_id` 自动发现，不再要求五个手填 result ID；Task 6 仍需把报告和文件导出变成产品下载中心。
 - 报告导出：通用后端具备 JSON、Markdown、PDF、DOCX 能力；competition runtime 未确认注入 report exporter，前端没有下载中心。
 - 上传：后端只有单电芯、单 cutoff、JSON base64 canonical CSV 的底层接口和内容寻址对象存储；没有产品上传会话。
 - ECS：公网 edge、Compose、migration `0015`、Worker、历史九步 ToolResult、备份和证书 timer 已只读验证；但 ECS 仍运行 `2026.07.29-1` 和可变热修复绑定，当前 release 尚未部署。
 
 ### 3.3 未完成
 
-- 项目首页中的内置样例、电芯/cutoff、最近运行、数据状态和结果目录。
 - CSV/Parquet/多文件/ZIP、`metadata.csv`、16 MiB 分块、暂停/重试/续传、质量确认、异步导入和四 cutoff 自动生成。
-- 由真实目录 API 驱动的完整工作台、整合结果页、证据抽屉、报告阅读页和下载中心；当前 B 方案实现的是可信布局与状态骨架。
+- 报告阅读与下载中心；当前工作台已由真实目录契约驱动，但 Task 6 的 PDF/Word/Markdown/JSON/CSV/ZIP 产品入口尚未实现。
 - 派生 CSV、完整 ToolResult 集合、带 manifest/SHA 的异步 ZIP；ZIP 必须排除原始上传数据。
 - 当前 release `2026.08.02-1` 的 ECS 部署、RepoDigest/OCI 对账、无 bind mount 验收、正式 route/calibration 和发布后真实九步 E2E。
 - Redis AOF ACL `NOPERM` 专项核验、报告表关联修复、备份恢复与回滚演练。
@@ -202,11 +215,11 @@ Next.js 产品工作台
 /results/[resultId]
 ```
 
-当前主要组件：`app-shell`、`workflow-rail`、`analysis-workspace`、`nine-step-tracker`、`project-overview`、`create-agent-run-form`、`agent-timeline`、`approval-panel`、`single-cell-analysis`、`soh-trajectory-chart`、`evidence-panel`、`calibration-materialization-panel`。
+当前主要组件：`app-shell`、`workflow-rail`、`analysis-workspace`、`advanced-analysis-launcher`、`nine-step-tracker`、`agent-timeline`、`approval-panel`、`run-analysis-loader`、`run-evidence-catalog`、`single-cell-analysis`、`soh-trajectory-chart`、`evidence-panel`、`calibration-materialization-panel`。
 
 用户已选择 B「双栏分析」。当前视觉采用人民币 50 元启发的暖白、墨绿、玉绿、灰豆绿与小面积暗金/橄榄；桌面为操作/状态与结果/审计双栏，平板和手机将操作区排在结果区之前。顶部导航在窄屏使用可访问菜单，流程条局部横向滚动，登录/改密在手机端表单优先，并支持 `prefers-reduced-motion`。
 
-可信边界：项目结果区无 ToolResult 时只显示等待态；内置样例、上传和导出入口保持禁用；流程条不根据 URL 或阶段位置推断此前步骤已完成。
+可信边界：项目结果区无 ToolResult 时只显示等待态；失败/取消的终态明确显示未签发结果，不会假装仍在计算；上传和导出入口保持禁用；流程条不根据 URL 或阶段位置推断此前步骤已完成。内置样例只有在服务端返回至少一个冻结 dataset/batch 时才可选择。
 
 ### 4.2 上传边界
 
@@ -346,29 +359,36 @@ frontend\node_modules\.bin\next.cmd build
 
 结果：
 
-- Vitest：21 files、`82 passed`；
+- Vitest：25 files、`104 passed`；
 - ESLint：exit 0；
 - TypeScript：exit 0；
 - Next.js 16 production build：exit 0，`/icon.svg` 与全部当前路由编译/预渲染成功；
 - build 仅提示 `baseline-browser-mapping` 数据较旧，不是构建失败。
 
-### 8.3 Task 3 定向验证
+### 8.3 Task 4 定向验证
+
+- Task 4 复核收尾：5 files / `31 passed`；
+- 项目切换立即卸载旧状态；无冻结数据时禁用内置样例；启动请求期间锁定数据集/电芯/cutoff；FAILED/CANCELLED 使用终态缺失语义；JSON 对象字段顺序不影响固定计划身份；
+- `git diff --check` 与 `git diff --cached --check`：exit 0，仅有既有 Windows LF/CRLF 提示；
+- 子 Agent 只读复核确认 FastAPI 响应字段、九步模板、结果目录和 ToolResult 可信边界一致，未发现阻塞问题；复核发现的 pending 选择器、终态等待文案和重复五项证据均已修正。
+
+### 8.4 Task 3 定向验证
 
 - Task 3 API/application/runtime 五文件集合：`31 passed, 1 warning`；
 - 前端 API client：`12 passed`；
 - SQLite 并发 exact calibration commit：`1 passed`，并在实现完成后连续运行 10 次通过；
 - `git diff --check` 与每次 `git diff --cached --check`：exit 0，仅有既有 Windows LF/CRLF 提示。
 
-### 8.4 Task 2 定向验证
+### 8.5 Task 2 定向验证
 
 - Runtime V7/Agent 聚焦回归：`120 passed`；补充外键与 scope 后两文件回归：`26 passed`。
 - 发布、Compose、CI、运行文档和 PostgreSQL 测试收集：`37 passed, 2 skipped`。
 - `.github/workflows/ci.yml`、`.github/workflows/publish-acr.yml` 与 `deploy/competition.compose.yaml` 可由现有 YAML 解析器读取。
 - `git diff --check`、`git diff --cached --check`：exit 0；仅报告既有 Windows LF/CRLF 转换提示。
 
-生产预览使用 `NEXT_PUBLIC_API_BASE_URL=https://qa.quanxin.invalid` 构建，当前本地入口为 `http://127.0.0.1:3011`。
+Task 4 本地预览位于 `http://127.0.0.1:3000`。浏览器在 `1440×900` 与 `390×844` 对项目目录错误态进行了 smoke：整页无横向溢出，控制台无 error/warn；本地 API 未启动，项目列表返回可见错误态，因此不得把本轮浏览器检查写成真实目录/九步纵向成功。
 
-### 8.5 GitHub Actions 与不可变发布
+### 8.6 GitHub Actions 与不可变发布
 
 - CI run `30738774242`，source `daca47a...`：`python-quality`、`postgres-quality`、`frontend-quality` 全部成功；
 - `python-quality`：6 分 2 秒，pytest、Ruff、mypy 和 compileall 全部成功；
@@ -379,7 +399,7 @@ frontend\node_modules\.bin\next.cmd build
 
 GitHub Actions 的 Node.js 20 弃用注释来自 action 运行时被强制切到 Node.js 24，不是本次 CI 或发布失败，也不改变镜像 source identity。
 
-### 8.6 浏览器 Design QA
+### 8.7 浏览器 Design QA
 
 - 登录页已在 `1440×1024`、`1024×768`、`390×844` 核验；手机端表单先于品牌说明，且无整页横向溢出。
 - 项目工作台已在三种视口核验；桌面保持约 62/38 双栏，平板/手机操作与进度区先于结果与审计区，流程条只在自身区域滚动。
@@ -391,7 +411,7 @@ GitHub Actions 的 Node.js 20 弃用注释来自 action 运行时被强制切到
 
 一次直接 `pnpm` 调用因 Codex 运行时包装器尝试执行 install，并被 ignored build scripts 策略拒绝；未执行 `pnpm approve-builds`，未安装依赖。随后使用现存本地二进制完成上述门禁。该过程留下 `frontend/pnpm-workspace.yaml` 占位文件，当前保留。
 
-### 8.7 仍缺少的验证
+### 8.8 仍缺少的验证
 
 - 本机没有 Docker/Podman/nerdctl，未运行本地 `docker compose config` 或容器 smoke；真实镜像 build 已由 GitHub Actions 完成；
 - 当前 release 尚未部署；ECS 仍运行旧 tag、旧 digest 和热修复 bind mount；
@@ -406,12 +426,12 @@ Task 2 已降低未来发布继续产生该断层的概率：release tag 不可�
 
 第二层风险：
 
-- 本轮 release 文档提交仍需用户 push；如果 GitHub Desktop 误选全部未跟踪文件，会混入浏览器日志、临时数据库、论文过程文件和意外 pnpm 占位配置；
+- 本地 `bd78259`、`c7d8a76`、`6ef91e8`、`a75dcab` 仍需用户 push；如果 GitHub Desktop 误选全部未跟踪文件，会混入浏览器日志、临时数据库、论文过程文件和意外 pnpm 占位配置；
 - Task 3 列表端点暂未分页，`analysis-inputs` 与运行目录存在 N+1/大响应风险；Task 4 先服务比赛级规模，Task 5 引入多电芯后必须增加上限或分页与批量查询；
 - v1/v2 artifact 目录若同时存在会 fail closed，发布前必须核验 catalog 和 ECS artifact 目录；
 - migration 对不兼容历史审计行应 fail closed，上线前需要真实 DB 预检和备份；
 - 上传是外部不可信输入，未来必须覆盖大小、哈希、ZIP 路径穿越、单位、重复电芯、周期不足、部分失败和幂等。
-- SSE 已有运行时 decoder，但 HTTP `AgentRunRecord` 仍由通用 `apiRequest<T>` 类型断言接收，前端接口也比后端 Pydantic 契约宽松；这是后续目录 API/契约加固时需要收紧的风险。
+- SSE 与 Task 4 高级分析目录已有严格运行时 decoder，但其他通用 HTTP `AgentRunRecord` 仍由 `apiRequest<T>` 类型断言接收，前端公共类型也比后端 Pydantic 契约宽松；后续新增接口必须复用严格契约模式。
 
 ## 10. 已确认的工程与产品决策
 
@@ -427,22 +447,33 @@ Task 2 已降低未来发布继续产生该断层的概率：release tag 不可�
 - 用户选定三套视觉方案之一后才允许前端视觉编码；选定图是实现的视觉真相。
 - 密码只由用户在交互提示中输入，不读、不输出、不保存。
 
-## 11. Task 3 当前状态与下一步
+## 11. Task 4 当前状态与下一步
 
-Task 0 至 Task 3 已完成。Runtime V7、固定九步、项目/数据/运行目录、产品级高级分析启动和结果集合契约均已进入正常源码。并发恢复修复提交为 `bd78259`，Task 3 主提交为 `c7d8a76`。最新当前工作区完整门禁为 Python `1786 passed, 9 skipped, 50 warnings`、前端 21 files / `82 passed`；Ruff、mypy 208 个源文件、compileall、ESLint、TypeScript 与 Next.js production build 均通过。
+Task 0 至 Task 4 已完成源码实现。Runtime V7、固定九步、项目/数据/运行目录、产品级高级分析启动、项目工作台、运行历史、服务端事件耗时、自动结果发现和九步 ToolResult 证据目录均已进入正常源码。Task 4 提交为 `a75dcab`。最新完整门禁为 Python `1786 passed, 9 skipped, 50 warnings`、前端 25 files / `104 passed`；Ruff、mypy 208 个源文件、compileall、ESLint、TypeScript 与 Next.js production build 均通过。
 
-下一步进入 Task 4：让项目页读取 `analysis-inputs` 和最近运行，按可读名称选择 record batch、电芯与 cutoff，调用 `advanced-analyses`，跳转到 Agent SSE 页面，并在完成后通过结果目录自动组装 RUL/SOH/Conformal/报告。任何公网演示仍必须标明运行的是旧 release，直到包含 Task 3/4 的新 release 完成 RepoDigest/OCI/无 bind mount 对账。
+下一步进入 Task 5：先冻结上传产品契约，再实现 upload session、16 MiB 分块、续传/重试、MinIO 隔离区、CSV/Parquet/ZIP 解析、多电芯识别、质量确认、异步导入、自动冻结和 20/50/100/150 cutoff 生成。上传通过后不得自动启动 Agent。任何公网演示仍必须标明运行的是旧 release，直到包含 Task 3/4/5 的新 release 完成 RepoDigest/OCI/无 bind mount 对账。
+
+Task 5 开始前需要用户提供的关键信息：
+
+- 一份有权用于本项目的真实单电芯样例；
+- 一份有权用于本项目的真实多电芯样例，可为多个文件或 ZIP；
+- `cell_id` 来自文件名还是数据列；
+- chemistry、标称容量与参考容量规则；
+- 时间、电压、电流、温度、容量、内阻字段名与真实单位；
+- 充放电协议/工况说明；
+- 哪些数据异常必须阻断，哪些可由用户确认后继续。
+
+提供方式：直接作为附件发送，或放入受保护的 `tmp/` 后只告知文件名。不得在样例、说明或聊天中放密码、Token、账户凭据。Codex 不能替数据所有者确认授权，也不能替电池专家猜测化学体系、容量、单位或异常含义。
 
 ## 12. 后续实施顺序
 
 按总计划依赖顺序继续：
 
-1. Task 0 至 Task 3：已完成；Task 3 提交待用户 push。
-2. Task 4：当前任务，在 B 方案骨架上接入目录、固定启动、运行历史和结果自动发现。
-3. Task 5：实现分块上传、隔离校验、异步导入和多电芯管理。
-4. Task 6：实现完整报告与 ToolResult 导出。
-5. Task 7：真实浏览器纵向验收，并逐项对账 ToolResult。
-6. Task 8：新 release、严格 TLS、备份恢复、回滚和运维闭环。
+1. Task 0 至 Task 4：已完成源码实现；本地四个提交待用户 push。
+2. Task 5：实现分块上传、隔离校验、异步导入和多电芯管理。
+3. Task 6：实现完整报告与 ToolResult 导出。
+4. Task 7：真实浏览器纵向验收，并逐项对账 ToolResult。
+5. Task 8：新 release、严格 TLS、备份恢复、回滚和运维闭环。
 
 ## 13. 用户协作偏好
 
@@ -463,5 +494,6 @@ Task 0 至 Task 3 已完成。Runtime V7、固定九步、项目/数据/运行�
 3. 保护 `.playwright-mcp/`、`tmp/`、`frontend/pnpm-workspace.yaml` 和 6 张未提交的中间截图；不要在 GitHub Desktop 中全选未跟踪文件。
 4. 不把旧 IP、旧 release 或旧 migration 阻塞当成当前事实；公网 IP 是 `47.99.69.138`。
 5. Task 1 已完成且用户已确认 B「双栏分析」；不得回退到重新选方案，也不得把未来目录、上传或导出能力写成当前已接通。
-6. Task 3 已由 `bd78259` 与 `c7d8a76` 完成，仍由用户在 GitHub Desktop push。下一任务是 Task 4 工作台真实接线；不要重新实现目录 API或回退到通用 UUID 表单。
-7. 任何生产结论必须有当前命令、ToolResult、API、数据库、镜像 digest 或浏览器证据；无法核验就明确写 `unverified`。
+6. Task 4 已由 `a75dcab` 完成；不要回退到通用 UUID 表单，也不要让结果页重新依赖五个手填 result ID。下一任务是 Task 5 上传中心。
+7. 远端在 2026-08-02 20:27 实测仍停在 `8bc2402`；用户需要通过 GitHub Desktop push 本地四个提交。
+8. 任何生产结论必须有当前命令、ToolResult、API、数据库、镜像 digest 或浏览器证据；无法核验就明确写 `unverified`。
