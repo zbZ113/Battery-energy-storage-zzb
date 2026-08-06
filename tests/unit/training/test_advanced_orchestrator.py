@@ -81,7 +81,11 @@ def test_smoke_loads_selection_data_once_and_runs_models_sequentially(
         loaded.append(int(kwargs["cutoff_cycle"]))
         return synthetic_data
 
-    monkeypatch.setattr(advanced_orchestrator, "load_advanced_matr_selection_data", load_data)
+    monkeypatch.setattr(
+        advanced_orchestrator,
+        "load_native_advanced_matr_selection_data",
+        load_data,
+    )
     tasks: list[str] = []
 
     def build_task(**kwargs: object) -> object:
@@ -126,6 +130,12 @@ def test_smoke_loads_selection_data_once_and_runs_models_sequentially(
     assert runs == tasks == [item.family for item in plan_advanced_run(ROOT, "smoke")]
     assert result["mode"] == "smoke"
     assert len(result["runs"]) == 4
+    manifests = tuple((tmp_path / "runs" / "test-advanced-smoke").rglob("run_manifest.json"))
+    assert len(manifests) == 4
+    batlinet_manifest = next(path for path in manifests if "cyclepatch_batlinet" in path.parts)
+    payload = json.loads(batlinet_manifest.read_text(encoding="utf-8"))
+    assert payload["reference_library_sha256"] == "e" * 64
+    assert payload["model_view_sha256"] == "f" * 64
 
 
 def test_executor_filters_a_requested_final_seed_before_running(
@@ -152,7 +162,7 @@ def test_executor_filters_a_requested_final_seed_before_running(
     )
     monkeypatch.setattr(
         advanced_orchestrator,
-        "load_advanced_matr_selection_data",
+        "load_native_advanced_matr_selection_data",
         lambda **_kwargs: object(),
     )
     seen: list[int] = []
@@ -290,6 +300,27 @@ def test_current_hybrid_uses_one_shared_real_prediction_axis() -> None:
     assert task.validation_batch.prediction_cycles == (30, 60, 500)
 
 
+def test_native_training_plan_uses_real_micro_batch_and_accumulation() -> None:
+    plan = advanced_orchestrator._native_batch_plan(81)
+
+    assert plan.micro_batch_size == 16
+    assert plan.gradient_accumulation_steps == 4
+    assert plan.effective_batch_size == 64
+    assert plan.optimizer_steps_per_epoch == 2
+
+
+def test_final_models_share_the_trajectory_eligible_test_cohort() -> None:
+    data = SimpleNamespace(
+        scalar_test=SimpleNamespace(cell_ids=("test-a", "test-b", "test-c")),
+        hybrid_test=SimpleNamespace(cell_ids=("test-a", "test-c")),
+    )
+
+    cell_ids, cohort_sha = advanced_orchestrator._common_final_test_cohort(data)
+
+    assert cell_ids == ("test-a", "test-c")
+    assert cohort_sha == advanced_orchestrator.sha256_canonical(cell_ids)
+
+
 def test_current_hybrid_final_evaluation_reuses_training_axis(tmp_path: Path) -> None:
     data = SimpleNamespace(
         hybrid_train=_masked_current_hybrid_batch(
@@ -305,6 +336,7 @@ def test_current_hybrid_final_evaluation_reuses_training_axis(tmp_path: Path) ->
         seed=38,
     )
     final_data = SimpleNamespace(
+        scalar_test=SimpleNamespace(cell_ids=("test-a",)),
         hybrid_test=_masked_current_hybrid_batch(("test-a",))
     )
 
@@ -347,13 +379,13 @@ def test_select_executes_stage1_stage2_and_full_recheck_without_final_loader(
     )
     monkeypatch.setattr(
         advanced_orchestrator,
-        "load_advanced_matr_selection_data",
+        "load_native_advanced_matr_selection_data",
         lambda **kwargs: loaded.append(int(kwargs["cutoff_cycle"]))
         or synthetic_selection_data,
     )
     monkeypatch.setattr(
         advanced_orchestrator,
-        "load_advanced_matr_final_data",
+        "load_native_advanced_matr_final_data",
         lambda **_kwargs: pytest.fail("Select must not load held-out partitions"),
     )
     runs: list[str] = []

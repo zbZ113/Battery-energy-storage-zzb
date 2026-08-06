@@ -40,6 +40,8 @@ class NaumannCycleMatrixLayout(ContractModel):
     """Immutable declaration of exactly which MATLAB matrices may be read."""
 
     layout_version: str = Field(min_length=1)
+    identity_level: Literal["condition"] = "condition"
+    cell_level_split_supported: Literal[False] = False
     x_axis_variable: str = Field(min_length=1)
     y_axis_variable: str = Field(min_length=1)
     legend_variable: str = Field(min_length=1)

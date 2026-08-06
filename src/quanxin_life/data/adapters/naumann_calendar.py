@@ -37,6 +37,8 @@ class NaumannCalendarLayout(ContractModel):
     """Explicit workbook mapping; column semantics are never inferred from text."""
 
     layout_version: str = Field(min_length=1)
+    identity_level: Literal["condition"] = "condition"
+    cell_level_split_supported: Literal[False] = False
     sheet_name: str = Field(min_length=1)
     capacity_header_row: int = Field(ge=1)
     capacity_header_column: int = Field(ge=1)

@@ -7,9 +7,14 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from quanxin_life.core import PredictionTarget
+from quanxin_life.core import PredictionTarget, TrainingMode
 from quanxin_life.core.schemas import ContractModel
 from quanxin_life.training.config import TrainingSuiteConfig
+from quanxin_life.training.matrix import (
+    TrainingMatrixEntry,
+    load_training_matrix,
+    plan_training_matrix,
+)
 
 _MATR_MODELS = {"dummy", "variance", "xgboost", "cpmlp", "hybrid"}
 
@@ -135,4 +140,18 @@ def build_run_matrix(suite: TrainingSuiteConfig) -> tuple[TrainingRunKey, ...]:
         for cutoff in suite.cutoffs
         for model in suite.models
         for seed in suite.seeds
+    )
+
+
+def build_registered_run_matrix(
+    *,
+    mode: TrainingMode | None = None,
+    include_blocked: bool = True,
+) -> tuple[TrainingMatrixEntry, ...]:
+    """Expand the frozen multi-model registry without opening data artifacts."""
+
+    return plan_training_matrix(
+        load_training_matrix(),
+        mode=mode,
+        include_blocked=include_blocked,
     )

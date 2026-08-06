@@ -1,0 +1,9 @@
+# BLAST-Lite must run outside the NumPy 2.x main environment.
+blast-lite==1.1.0
+numpy<2.0.0,>=1.26
+pandas>=2.0,<3
+matplotlib>=3.7,<4
+scipy>=1.10,<2
+h5pyd
+nrel-rex
+geopy

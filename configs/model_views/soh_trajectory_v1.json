@@ -1,0 +1,12 @@
+{
+  "schema_version": "model-view-config-v1",
+  "view_id": "soh_trajectory",
+  "view_version": "soh-trajectory-v2",
+  "task_type": "soh_trajectory",
+  "target_semantics": "matr_observed_soh_to_cycle_500",
+  "entity_key": "cell_id",
+  "feature_names": ["voltage_v", "current_a", "capacity_ah", "initial_soh", "prediction_cycle"],
+  "mask_semantics": ["explicit_sample_mask", "explicit_history_mask", "explicit_target_mask"],
+  "source_dataset_ids": ["MATR"],
+  "cutoff_cycle": 50
+}

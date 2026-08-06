@@ -10,12 +10,18 @@ import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import functional
+from torch.utils.data import DataLoader
 
-from quanxin_life.core import PredictionTarget
+from quanxin_life.core import LastBatchPolicy, PredictionTarget
 from quanxin_life.models.cpmlp import _CPMLPNetwork
 from quanxin_life.models.hybrid_degradation import (
     _HybridNetwork,
     normalise_prediction_cycle_positions,
+)
+from quanxin_life.training.batching import (
+    BatchPlan,
+    normalize_accumulated_gradients,
+    scale_mean_loss_by_sample_count,
 )
 from quanxin_life.training.engine import EpochMetrics
 
@@ -179,11 +185,23 @@ class HybridTrajectoryTrainingTask:
         hidden_dim: int,
         learning_rate: float,
         seed: int = 20260712,
+        batch_plan: BatchPlan | None = None,
     ) -> None:
         _validate_trajectory_cohorts(train_batch, validation_batch)
         _seed_everything(seed)
         self.train_batch = train_batch
         self.validation_batch = validation_batch
+        self.batch_plan = batch_plan or BatchPlan(
+            micro_batch_size=len(train_batch.cell_ids),
+            visible_gpu_count=1,
+            gradient_accumulation_steps=1,
+            effective_batch_size=len(train_batch.cell_ids),
+            sample_count=len(train_batch.cell_ids),
+            last_batch_policy=LastBatchPolicy.ERROR,
+            optimizer_steps_per_epoch=1,
+        )
+        if self.batch_plan.sample_count != len(train_batch.cell_ids):
+            raise ValueError("Current Hybrid batch plan sample_count must match train cells")
         self.model = _HybridNetwork(
             input_dim=train_batch.features.shape[1],
             horizon=len(train_batch.prediction_cycles),
@@ -208,19 +226,52 @@ class HybridTrajectoryTrainingTask:
     def train_epoch(self, epoch: int, *, device: torch.device) -> EpochMetrics:
         del epoch
         self.model.train()
+        loader: DataLoader[Tensor] = DataLoader(
+            range(len(self.train_batch.cell_ids)),  # type: ignore[arg-type]
+            batch_size=(
+                self.batch_plan.micro_batch_size * self.batch_plan.visible_gpu_count
+            ),
+            shuffle=False,
+            drop_last=self.batch_plan.last_batch_policy is LastBatchPolicy.DROP,
+        )
         self.optimizer.zero_grad(set_to_none=True)
-        predicted = self._predict(self.train_batch, device=device)
-        target = self.train_batch.target_soh.to(device)
-        fit_loss = functional.mse_loss(predicted, target)
-        smooth_loss = (
-            predicted[:, 2:] - 2 * predicted[:, 1:-1] + predicted[:, :-2]
-        ).square().mean()
-        loss = fit_loss + 0.01 * smooth_loss
-        if not torch.isfinite(loss):
-            raise RuntimeError("Hybrid training produced a non-finite loss")
-        loss.backward()  # type: ignore[no-untyped-call]
-        self.optimizer.step()
-        return EpochMetrics(loss=float(loss.detach().cpu()), metrics={})
+        weighted_loss = 0.0
+        observed_cells = 0
+        optimizer_steps = 0
+        window_cells = 0
+        micro_batches = tuple(loader)
+        for micro_index, indices in enumerate(micro_batches, start=1):
+            indexed = indices.to(dtype=torch.int64)
+            micro_batch = _index_hybrid_batch(self.train_batch, indexed)
+            predicted = self._predict(micro_batch, device=device)
+            target = micro_batch.target_soh.to(device)
+            fit_loss = functional.mse_loss(predicted, target)
+            smooth_loss = (
+                predicted[:, 2:] - 2 * predicted[:, 1:-1] + predicted[:, :-2]
+            ).square().mean()
+            loss = fit_loss + 0.01 * smooth_loss
+            if not torch.isfinite(loss):
+                raise RuntimeError("Hybrid training produced a non-finite loss")
+            batch_cells = int(indexed.numel())
+            scaled = scale_mean_loss_by_sample_count(loss, sample_count=batch_cells)
+            scaled.backward()  # type: ignore[no-untyped-call]
+            window_cells += batch_cells
+            weighted_loss += float(loss.detach().cpu()) * batch_cells
+            observed_cells += batch_cells
+            if (
+                micro_index % self.batch_plan.gradient_accumulation_steps == 0
+                or micro_index == len(micro_batches)
+            ):
+                normalize_accumulated_gradients(
+                    self.model.parameters(), sample_count=window_cells
+                )
+                self.optimizer.step()
+                self.optimizer.zero_grad(set_to_none=True)
+                window_cells = 0
+                optimizer_steps += 1
+        if optimizer_steps != self.batch_plan.optimizer_steps_per_epoch:
+            raise RuntimeError("Current Hybrid optimizer steps differ from BatchPlan")
+        return EpochMetrics(loss=weighted_loss / observed_cells, metrics={})
 
     def validate(self, epoch: int, *, device: torch.device) -> EpochMetrics:
         del epoch
@@ -267,6 +318,22 @@ class HybridTrajectoryTrainingTask:
                 self._cycle_positions.to(device),
             ),
         )
+
+
+def _index_hybrid_batch(
+    batch: HybridTrajectoryBatch,
+    indices: Tensor,
+) -> HybridTrajectoryBatch:
+    positions = tuple(int(value) for value in indices.tolist())
+    return HybridTrajectoryBatch(
+        dataset_id=batch.dataset_id,
+        cell_ids=tuple(batch.cell_ids[index] for index in positions),
+        features=batch.features.index_select(0, indices),
+        initial_soh=batch.initial_soh.index_select(0, indices),
+        target_soh=batch.target_soh.index_select(0, indices),
+        prediction_cycles=batch.prediction_cycles,
+        cutoff_cycle=batch.cutoff_cycle,
+    )
 
 
 def _validate_curve_cohorts(

@@ -42,6 +42,22 @@ reports/generated/
 .DS_Store
 Thumbs.db
 
+# Local browser automation state and scratch outputs are not source artifacts.
+/.playwright-mcp/
+/tmp/
+/frontend/pnpm-workspace.yaml
+
+# Frozen model views are managed data artifacts and remain outside Git history.
+/data/model_views/
+
+# Intermediate screenshots retained locally but not referenced by design QA.
+/output/playwright/option-b-login-1024.png
+/output/playwright/option-b-login-1440.png
+/output/playwright/option-b-login-390.png
+/output/playwright/option-b-workspace-1440.png
+/output/playwright/option-b-workspace-390-menu.png
+/output/playwright/option-b-workspace-390.png
+
 # Local research mirror. Upstream repositories, papers, and archives are
 # intentionally kept outside this repository's Git history. The reproducible
 # catalog, downloader, and study notes remain tracked.

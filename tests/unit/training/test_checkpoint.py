@@ -166,6 +166,54 @@ def test_safe_checkpoint_rejects_context_mismatch(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    [
+        ("adapter_version", "adapter-v2"),
+        ("model_view_sha256", "9" * 64),
+        ("effective_batch_size", 128),
+        ("selection_metric_name", "rmse"),
+        ("selection_metric_direction", "maximize"),
+        ("upstream_commit", "e" * 40),
+    ],
+)
+def test_checkpoint_resume_binds_adapter_batch_view_selection_and_upstream(
+    tmp_path: Path,
+    field: str,
+    changed: object,
+) -> None:
+    model, optimizer, scheduler = _trained_components()
+    context = CheckpointContext.model_validate(
+        {
+            **_context().model_dump(mode="python"),
+            "adapter_version": "adapter-v1",
+            "model_view_sha256": "8" * 64,
+            "effective_batch_size": 64,
+            "selection_metric_name": "mae",
+            "selection_metric_direction": "minimize",
+            "upstream_commit": "d" * 40,
+        }
+    )
+    manifest = save_training_checkpoint(
+        tmp_path,
+        context=context,
+        progress=TrainingProgress(epoch=1, global_step=1),
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
+
+    with pytest.raises(ValueError, match="context"):
+        load_training_checkpoint(
+            tmp_path,
+            manifest,
+            expected_context=context.model_copy(update={field: changed}),
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+        )
+
+
 def test_v1_manifest_serialization_and_hash_contract_remain_unchanged(
     tmp_path: Path,
 ) -> None:

@@ -31,6 +31,108 @@ class PredictionTarget(StrEnum):
     MATR_OFFICIAL_CYCLE_LIFE = "matr_official_cycle_life"
 
 
+class TrainingMode(StrEnum):
+    """Frozen lifecycle stages for governed offline model training."""
+
+    PLAN = "plan"
+    SMOKE = "smoke"
+    SELECT = "select"
+    FINAL = "final"
+
+
+class TrainingTaskType(StrEnum):
+    """Physical task families accepted by the offline training matrix."""
+
+    CYCLE_LIFE = "cycle_life"
+    SOH_TRAJECTORY = "soh_trajectory"
+    CONDITION_DEGRADATION = "condition_degradation"
+    FIELD_MONITORING = "field_monitoring"
+    PARTIAL_CHARGE_FEATURE = "partial_charge_feature"
+
+
+class TrainingReadableSplit(StrEnum):
+    """Dataset partitions a training-matrix row may open."""
+
+    TRAIN = "train"
+    VALIDATION = "validation"
+    CALIBRATION = "calibration"
+    TEST = "test"
+
+
+class TrainingBlockedReason(StrEnum):
+    """Closed set of pre-execution matrix blockers."""
+
+    BLOCKED_DATA_VIEW = "BLOCKED_DATA_VIEW"
+    BLOCKED_LICENSE = "BLOCKED_LICENSE"
+    BLOCKED_DEPENDENCY = "BLOCKED_DEPENDENCY"
+    BLOCKED_SELECTION = "BLOCKED_SELECTION"
+
+
+class SelectionMetricDirection(StrEnum):
+    """Direction used by validation-only model selection."""
+
+    MINIMIZE = "minimize"
+    MAXIMIZE = "maximize"
+
+
+class LastBatchPolicy(StrEnum):
+    """Explicit handling for incomplete micro batches and accumulation windows."""
+
+    ERROR = "error"
+    DROP = "drop"
+    KEEP = "keep"
+
+
+class CanonicalTableType(StrEnum):
+    """Closed set of physical tables in a canonical dataset bundle."""
+
+    CELL_CYCLE_TELEMETRY = "cell_cycle_telemetry"
+    TRAJECTORY_OBSERVATIONS = "trajectory_observations"
+    CONDITION_OBSERVATIONS = "condition_observations"
+    FIELD_SYSTEM_TELEMETRY = "field_system_telemetry"
+    METADATA = "metadata"
+    TARGETS = "targets"
+    QUALITY_REPORT = "quality_report"
+    ARTIFACT_MANIFEST = "artifact_manifest"
+
+
+class CanonicalUnit(StrEnum):
+    """Reviewed units accepted by canonical numeric observations."""
+
+    AMPERE = "A"
+    VOLT = "V"
+    AMPERE_HOUR = "Ah"
+    WATT_HOUR = "Wh"
+    OHM = "ohm"
+    CELSIUS = "degC"
+    KELVIN = "K"
+    SECOND = "s"
+    HOUR = "h"
+    DAY = "day"
+    CYCLE = "cycle"
+    FEC = "FEC"
+    RATIO = "ratio"
+    DIMENSIONLESS = "dimensionless"
+    C_RATE = "C_rate"
+
+
+class DataQualityStatus(StrEnum):
+    """Machine-readable quality state for one canonical value."""
+
+    VALID = "VALID"
+    MISSING = "MISSING"
+    OUT_OF_RANGE = "OUT_OF_RANGE"
+    RIGHT_CENSORED = "RIGHT_CENSORED"
+    UNRESOLVED = "UNRESOLVED"
+
+
+class DatasetBuildStatus(StrEnum):
+    """Result states for immutable canonical bundle publication."""
+
+    BUILT = "BUILT"
+    SKIPPED_VALID = "SKIPPED_VALID"
+
+
 class AdvancedModelTask(StrEnum):
     """Governed Advanced deployment task families."""
 
@@ -198,3 +300,34 @@ class DatasetStatus(StrEnum):
 
     DRAFT = "DRAFT"
     FROZEN = "FROZEN"
+
+
+class ReportStatus(StrEnum):
+    """Persisted lifecycle for one immutable completed-run report."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    READY = "READY"
+    FAILED = "FAILED"
+
+
+class ReportExportStatus(StrEnum):
+    """Persisted lifecycle for one downloadable report artifact."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    READY = "READY"
+    FAILED = "FAILED"
+    EXPIRED = "EXPIRED"
+
+
+class ReportExportFormat(StrEnum):
+    """Allowlisted report formats; raw uploaded data is deliberately absent."""
+
+    MARKDOWN = "markdown"
+    JSON = "json"
+    PDF = "pdf"
+    DOCX = "docx"
+    SOH_CSV = "soh_csv"
+    TOOL_RESULTS_JSON = "tool_results_json"
+    ZIP = "zip"

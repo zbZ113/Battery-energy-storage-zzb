@@ -1,5 +1,7 @@
 {
   "layout_version": "naumann-calendar-capacity-2021-v1",
+  "identity_level": "condition",
+  "cell_level_split_supported": false,
   "sheet_name": "C_disch",
   "capacity_header_row": 1,
   "capacity_header_column": 2,

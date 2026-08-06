@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 import torch
 
-from quanxin_life.core import PredictionTarget
+from quanxin_life.core import LastBatchPolicy, PredictionTarget
 from quanxin_life.core.hashing import sha256_canonical
 from quanxin_life.data.schemas import SplitManifest
 from quanxin_life.models.batlinet import (
@@ -26,6 +26,7 @@ from quanxin_life.training.advanced_tasks import (
     CyclePatchDirectTrainingTask,
     HybridPatchV2TrainingTask,
 )
+from quanxin_life.training.batching import BatchPlan
 
 
 def _split() -> SplitManifest:
@@ -215,6 +216,40 @@ def test_direct_task_trains_validates_raw_units_and_caches_device_batches() -> N
     assert test_metrics.metrics.keys() == {"mae", "rmse", "mape", "r2"}
 
 
+def test_direct_task_uses_governed_micro_batches(monkeypatch) -> None:
+    train, validation = _cycle_life_batches()
+    task = CyclePatchDirectTrainingTask(
+        train_batch=train,
+        validation_batch=validation,
+        split_manifest=_split(),
+        config=_cyclepatch_config(),
+        learning_rate=1e-3,
+        seed=38,
+        batch_plan=BatchPlan(
+            micro_batch_size=1,
+            visible_gpu_count=1,
+            gradient_accumulation_steps=1,
+            effective_batch_size=1,
+            sample_count=2,
+            last_batch_policy=LastBatchPolicy.ERROR,
+            optimizer_steps_per_epoch=2,
+        ),
+    )
+    optimizer_steps = 0
+    original_step = task.optimizer.step
+
+    def counted_step(*args, **kwargs):
+        nonlocal optimizer_steps
+        optimizer_steps += 1
+        return original_step(*args, **kwargs)
+
+    monkeypatch.setattr(task.optimizer, "step", counted_step)
+
+    task.train_epoch(1, device=torch.device("cpu"))
+
+    assert optimizer_steps == 2
+
+
 def test_direct_task_seed_controls_initial_model_state() -> None:
     train, validation = _cycle_life_batches()
     common = dict(
@@ -340,6 +375,42 @@ def test_batlinet_task_uses_only_frozen_training_references_and_trains() -> None
     )
     test_metrics = task.evaluate(test_batch, device=torch.device("cpu"))
     assert test_metrics.metrics.keys() == {"mae", "rmse", "mape", "r2"}
+
+
+def test_batlinet_task_uses_governed_micro_batches(monkeypatch) -> None:
+    train, validation, scaler, library = _batlinet_context()
+    task = CyclePatchBatLiNetTrainingTask(
+        train_batch=train,
+        validation_batch=validation,
+        split_manifest=_split(),
+        target_scaler=scaler,
+        reference_library=library,
+        config=BatLiNetConfig(encoder=_cyclepatch_config(), reference_count=2),
+        learning_rate=1e-3,
+        seed=38,
+        batch_plan=BatchPlan(
+            micro_batch_size=1,
+            visible_gpu_count=1,
+            gradient_accumulation_steps=1,
+            effective_batch_size=1,
+            sample_count=2,
+            last_batch_policy=LastBatchPolicy.ERROR,
+            optimizer_steps_per_epoch=2,
+        ),
+    )
+    optimizer_steps = 0
+    original_step = task.optimizer.step
+
+    def counted_step(*args, **kwargs):
+        nonlocal optimizer_steps
+        optimizer_steps += 1
+        return original_step(*args, **kwargs)
+
+    monkeypatch.setattr(task.optimizer, "step", counted_step)
+
+    task.train_epoch(1, device=torch.device("cpu"))
+
+    assert optimizer_steps == 2
 
 
 def test_batlinet_task_rejects_a_heldout_reference_library() -> None:
@@ -471,6 +542,46 @@ def test_hybrid_task_trains_and_validates_monotone_trajectory() -> None:
         _trajectory_batch(("test-a",)), device=torch.device("cpu")
     )
     assert test_metrics.metrics["monotonic_violation_rate"] == 0.0
+
+
+def test_hybridpatch_task_uses_governed_micro_batches(monkeypatch) -> None:
+    task = HybridPatchV2TrainingTask(
+        train_batch=_trajectory_batch(("train-a", "train-b")),
+        validation_batch=_trajectory_batch(("validation-a", "validation-b")),
+        split_manifest=_split(),
+        config=HybridPatchV2Config(
+            cyclepatch=_cyclepatch_config(),
+            query_token_count=0,
+            decoder_hidden_dim=8,
+        ),
+        learning_rate=1e-3,
+        seed=38,
+        batch_plan=BatchPlan(
+            micro_batch_size=1,
+            visible_gpu_count=1,
+            gradient_accumulation_steps=1,
+            effective_batch_size=1,
+            sample_count=2,
+            last_batch_policy=LastBatchPolicy.ERROR,
+            optimizer_steps_per_epoch=2,
+        ),
+    )
+    optimizer_steps = 0
+    original_step = task.optimizer.step
+
+    def counted_step(*args, **kwargs):
+        nonlocal optimizer_steps
+        optimizer_steps += 1
+        return original_step(*args, **kwargs)
+
+    monkeypatch.setattr(task.optimizer, "step", counted_step)
+
+    metrics = task.train_epoch(1, device=torch.device("cpu"))
+
+    assert optimizer_steps == 2
+    assert {"trajectory", "history", "smooth", "order", "residual"} <= set(
+        metrics.metrics
+    )
 
 
 @pytest.mark.parametrize(

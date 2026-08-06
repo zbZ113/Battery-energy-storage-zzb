@@ -3,7 +3,9 @@ from __future__ import annotations
 import pytest
 import torch
 
-from quanxin_life.core import PredictionTarget
+from quanxin_life.core import LastBatchPolicy, PredictionTarget
+from quanxin_life.training.batching import BatchPlan
+from quanxin_life.training.orchestrator import _legacy_native_batch_plan
 from quanxin_life.training.tasks import (
     CPMLPTrainingTask,
     CycleLifeCurveBatch,
@@ -128,3 +130,43 @@ def test_hybrid_task_uses_real_trajectory_validation_metrics() -> None:
     assert validated.metrics["monotonic_violation_rate"] == 0.0
     assert tested.metrics["mae"] >= 0
     assert predicted.shape == test_batch.target_soh.shape
+
+
+def test_current_hybrid_uses_governed_micro_batches(monkeypatch) -> None:
+    task = HybridTrajectoryTrainingTask(
+        train_batch=_trajectory_batch(("train-a", "train-b")),
+        validation_batch=_trajectory_batch(("validation-a",)),
+        hidden_dim=4,
+        learning_rate=0.001,
+        batch_plan=BatchPlan(
+            micro_batch_size=1,
+            visible_gpu_count=1,
+            gradient_accumulation_steps=1,
+            effective_batch_size=1,
+            sample_count=2,
+            last_batch_policy=LastBatchPolicy.ERROR,
+            optimizer_steps_per_epoch=2,
+        ),
+    )
+    optimizer_steps = 0
+    original_step = task.optimizer.step
+
+    def counted_step(*args, **kwargs):
+        nonlocal optimizer_steps
+        optimizer_steps += 1
+        return original_step(*args, **kwargs)
+
+    monkeypatch.setattr(task.optimizer, "step", counted_step)
+
+    task.train_epoch(1, device=torch.device("cpu"))
+
+    assert optimizer_steps == 2
+
+
+def test_legacy_current_hybrid_plan_uses_real_micro_batches() -> None:
+    plan = _legacy_native_batch_plan(81)
+
+    assert plan.micro_batch_size == 16
+    assert plan.gradient_accumulation_steps == 4
+    assert plan.effective_batch_size == 64
+    assert plan.optimizer_steps_per_epoch == 2

@@ -1,0 +1,262 @@
+name: quanxin-life-local
+
+x-backend-build: &backend-build
+  image: quanxin-backend-local:${LOCAL_IMAGE_TAG:-working}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.backend
+
+x-backend-environment: &backend-environment
+  - QUANXIN_DATABASE_URL_FILE=/run/secrets/database_url
+  - QUANXIN_REDIS_URL_FILE=/run/secrets/redis_url
+  - QUANXIN_TRUSTED_ORIGIN=${PUBLIC_ORIGIN}
+  - QUANXIN_DATA_ROOT=/srv/quanxin/data
+  - QUANXIN_ARTIFACT_ROOT=/srv/quanxin/artifacts
+  - QUANXIN_POLICY_ROOT=/srv/quanxin/policies
+  - QUANXIN_DEPLOYMENT_REGISTRY_ROOT=/srv/quanxin/deployment-registry
+  - QUANXIN_DEPLOYMENT_REGISTRY_ID=${DEPLOYMENT_REGISTRY_ID}
+  - QUANXIN_CALIBRATION_REGISTRATIONS_FILE=/srv/quanxin/config/calibration-sources.json
+  - QUANXIN_CALIBRATION_EVIDENCE_ROOT=/srv/quanxin/calibration-evidence
+  - QUANXIN_AGENT_POLICY_FILE=/srv/quanxin/policies/advanced-agent.json
+
+x-backend-secrets: &backend-secrets
+  - database_url
+  - redis_url
+
+x-backend-volumes: &backend-volumes
+  - type: bind
+    source: ${LOCAL_RUNTIME_ROOT}/runtime/data
+    target: /srv/quanxin/data
+  - type: bind
+    source: ${LOCAL_RUNTIME_ROOT}/runtime/artifacts
+    target: /srv/quanxin/artifacts
+  - type: bind
+    source: ${LOCAL_RUNTIME_ROOT}/runtime/policies
+    target: /srv/quanxin/policies
+    read_only: true
+  - type: bind
+    source: ${LOCAL_RUNTIME_ROOT}/runtime/registry
+    target: /srv/quanxin/deployment-registry
+    read_only: true
+  - type: bind
+    source: ${LOCAL_RUNTIME_ROOT}/runtime/calibration
+    target: /srv/quanxin/calibration-evidence
+    read_only: true
+  - type: bind
+    source: ${LOCAL_RUNTIME_ROOT}/runtime/config
+    target: /srv/quanxin/config
+    read_only: true
+
+x-runtime-security: &runtime-security
+  security_opt:
+    - no-new-privileges:true
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=128m,mode=1777
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg16@${POSTGRES_IMAGE_DIGEST}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: quanxin
+      POSTGRES_USER: quanxin
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql:size=16m,mode=0775
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  redis:
+    image: redis:7.4.2-alpine@${REDIS_IMAGE_DIGEST}
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --aclfile
+      - /run/secrets/redis_acl
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    secrets:
+      - redis_acl
+      - redis_password
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli --user quanxin ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  migrate:
+    <<: [*backend-build, *runtime-security]
+    command: [python, -m, deploy.local_migrate]
+    environment: *backend-environment
+    secrets: *backend-secrets
+    volumes: *backend-volumes
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: [*backend-build, *runtime-security]
+    command:
+      - python
+      - -m
+      - uvicorn
+      - deploy.local_api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    environment: *backend-environment
+    secrets: *backend-secrets
+    volumes: *backend-volumes
+    networks:
+      - backend
+      - edge
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  worker:
+    <<: [*backend-build, *runtime-security]
+    command:
+      - celery
+      - -A
+      - deploy.local_worker:app
+      - worker
+      - --queues
+      - agent-runs,advanced-calibration,report-exports
+      - --concurrency
+      - "1"
+      - --loglevel
+      - INFO
+    environment: *backend-environment
+    secrets: *backend-secrets
+    volumes: *backend-volumes
+    networks:
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: quanxin-frontend-local:${LOCAL_IMAGE_TAG:-working}
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile.local
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${PUBLIC_ORIGIN}
+    restart: unless-stopped
+    networks:
+      - edge
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  gateway:
+    image: quanxin-gateway-local:${LOCAL_IMAGE_TAG:-working}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway.local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=32m,mode=0755
+      - /var/run:size=8m,mode=0755
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1/health']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+networks:
+  edge:
+  backend:
+    internal: true
+
+volumes:
+  postgres-data:
+  redis-data:
+
+secrets:
+  postgres_password:
+    file: ${QUANXIN_SECRETS_ROOT}/postgres_password
+  database_url:
+    file: ${QUANXIN_SECRETS_ROOT}/database_url
+  redis_acl:
+    file: ${QUANXIN_SECRETS_ROOT}/redis_acl
+  redis_password:
+    file: ${QUANXIN_SECRETS_ROOT}/redis_password
+  redis_url:
+    file: ${QUANXIN_SECRETS_ROOT}/redis_url

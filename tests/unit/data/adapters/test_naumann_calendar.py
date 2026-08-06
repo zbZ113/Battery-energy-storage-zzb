@@ -127,6 +127,8 @@ def test_loads_versioned_calendar_layout_from_json_without_column_inference(
     loaded = load_naumann_calendar_layout(layout_path)
 
     assert loaded == _layout()
+    assert loaded.identity_level == "condition"
+    assert loaded.cell_level_split_supported is False
 
 
 def test_rejects_calendar_header_mismatch_before_treating_columns_as_conditions(

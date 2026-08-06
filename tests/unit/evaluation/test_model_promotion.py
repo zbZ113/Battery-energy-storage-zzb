@@ -1,5 +1,57 @@
 from __future__ import annotations
 
+import pytest
+
+
+def test_promotion_gate_requires_complete_evidence_but_never_activates() -> None:
+    from quanxin_life.evaluation.model_promotion import (
+        PromotionGateEvidence,
+        verify_promotion_gate,
+    )
+
+    evidence = PromotionGateEvidence(
+        complete=True,
+        leakage_free=True,
+        validation_only_selection=True,
+        five_seed_complete=True,
+        test_evaluated_once=True,
+        per_cell_metrics=True,
+        trajectory_metrics=True,
+        calibration_coverage=True,
+        ood_boundaries=True,
+        safety_artifacts=True,
+        license_verified=True,
+        manual_approval=True,
+    )
+    result = verify_promotion_gate(evidence)
+    assert result.activation_status == "VERIFIED_NOT_ACTIVATED"
+    assert result.manual_approval_recorded is True
+    assert result.steps[-1] == "MANUAL_APPROVAL_RECORDED"
+
+
+def test_promotion_gate_fails_closed_on_missing_test_or_license_evidence() -> None:
+    from quanxin_life.evaluation.model_promotion import (
+        PromotionGateEvidence,
+        verify_promotion_gate,
+    )
+
+    with pytest.raises(ValueError, match="test_evaluated_once"):
+        verify_promotion_gate(
+            PromotionGateEvidence(
+                complete=True,
+                leakage_free=True,
+                validation_only_selection=True,
+                five_seed_complete=True,
+                test_evaluated_once=False,
+                per_cell_metrics=True,
+                trajectory_metrics=True,
+                calibration_coverage=True,
+                ood_boundaries=True,
+                safety_artifacts=True,
+                license_verified=True,
+            )
+        )
+
 
 def test_rul_route_merges_roles_when_one_candidate_wins_both_objectives() -> None:
     from quanxin_life.evaluation.model_promotion import (

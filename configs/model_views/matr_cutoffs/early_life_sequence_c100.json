@@ -1,0 +1,12 @@
+{
+  "schema_version": "model-view-config-v1",
+  "view_id": "early_life_sequence_c100",
+  "view_version": "early-life-sequence-c100-v1",
+  "task_type": "cycle_life",
+  "target_semantics": "matr_official_cycle_life",
+  "entity_key": "cell_id",
+  "feature_names": ["voltage_v", "current_a", "capacity_ah"],
+  "mask_semantics": ["explicit_cycle_mask", "explicit_sample_mask", "no_interpolation"],
+  "source_dataset_ids": ["MATR"],
+  "cutoff_cycle": 100
+}

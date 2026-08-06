@@ -14,13 +14,18 @@ RUN pnpm install --frozen-lockfile
 FROM dependencies AS builder
 
 ARG NEXT_PUBLIC_API_BASE_URL
+ARG NEXT_PUBLIC_RUNTIME_PROFILE
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NEXT_OUTPUT=standalone
 
 COPY . .
 
-RUN case "${NEXT_PUBLIC_API_BASE_URL}" in \
+RUN case "${NEXT_PUBLIC_RUNTIME_PROFILE}" in \
+      local) echo "local profile is forbidden in the production frontend image" >&2; exit 1 ;; \
+      *) ;; \
+    esac \
+    && case "${NEXT_PUBLIC_API_BASE_URL}" in \
       https://*) ;; \
       *) echo "NEXT_PUBLIC_API_BASE_URL must use https://" >&2; exit 1 ;; \
     esac \

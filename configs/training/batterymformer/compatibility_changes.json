@@ -1,0 +1,9 @@
+{
+  "schema_version": "batterymformer-compatibility-changes-v1",
+  "source_commit": "febe174032ad4861fa057b9af23f5bcee8a8fb77",
+  "changes": [
+    {"component": "input", "change": "Replaced upstream pickle and joblib loading with frozen Model View and structured artifact contracts."},
+    {"component": "condition_embedding", "change": "Requires reviewed safetensors embeddings and never calls Qwen during training or inference."},
+    {"component": "objective", "change": "Preserves upstream masked trajectory recovery and retrieved-memory cosine alignment; parameter and diversity losses remain recorded with zero default weight."}
+  ]
+}

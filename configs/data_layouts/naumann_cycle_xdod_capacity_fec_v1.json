@@ -1,5 +1,7 @@
 {
   "layout_version": "naumann-cycle-xdod-capacity-fec-2021-v1",
+  "identity_level": "condition",
+  "cell_level_split_supported": false,
   "x_axis_variable": "X_Axis_Data_Mat",
   "y_axis_variable": "Y_Axis_Data_Mat",
   "legend_variable": "Legend_Vec",

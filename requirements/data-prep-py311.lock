@@ -1,0 +1,5 @@
+# BLOCKED_DEPENDENCY: this seed is not a reproducible offline lock.
+# Regenerate on a trusted connected Python 3.11 host with pip-compile --generate-hashes.
+-e .[training]
+pyarrow
+safetensors

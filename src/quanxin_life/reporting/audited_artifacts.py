@@ -57,6 +57,26 @@ class ReviewedPdfFont(ContractModel):
         return self.path
 
 
+REPORTLAB_VERA_FONT_SHA256 = (
+    "c4c45690b345435b2cba52ecabe275f05e49b389b39fe68ad03afbb551288d3d"
+)
+
+
+def reviewed_reportlab_vera_font() -> ReviewedPdfFont:
+    """Locate ReportLab's pinned, SHA-reviewed portable TrueType font."""
+
+    try:
+        import reportlab
+    except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
+        raise ReportExportDependencyUnavailable(
+            "PDF export requires installing the reporting dependency group"
+        ) from exc
+    path = Path(reportlab.__file__).resolve().parent / "fonts" / "Vera.ttf"
+    font = ReviewedPdfFont(path=path, sha256=REPORTLAB_VERA_FONT_SHA256)
+    font.verified_path()
+    return font
+
+
 @dataclass(frozen=True, slots=True)
 class AuditedReportArtifact:
     """One detached artifact with transport metadata and a byte hash."""
@@ -412,9 +432,11 @@ def _render_pdf(
 
 
 __all__ = [
+    "REPORTLAB_VERA_FONT_SHA256",
     "AuditedReportArtifact",
     "AuditedReportArtifactExporter",
     "ReportArtifactFormat",
     "ReportExportDependencyUnavailable",
     "ReviewedPdfFont",
+    "reviewed_reportlab_vera_font",
 ]

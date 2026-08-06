@@ -9,6 +9,15 @@ from pydantic import ConfigDict, Field, model_validator
 
 from quanxin_life.core import PredictionTarget, sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
+from quanxin_life.training.matrix import TrainingTaskMatrix
+
+__all__ = [
+    "CheckpointPolicy",
+    "LoggingPolicy",
+    "ModelTrainingConfig",
+    "TrainingSuiteConfig",
+    "TrainingTaskMatrix",
+]
 
 
 class ModelTrainingConfig(ContractModel):

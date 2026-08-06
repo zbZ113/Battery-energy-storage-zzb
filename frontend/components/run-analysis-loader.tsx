@@ -18,6 +18,7 @@ type ResultCatalogLoader = (runId: string) => Promise<AgentRunResultRecord[]>;
 interface LoadedRunAnalysis {
   resultIds: SingleCellResultIds;
   results: AgentRunResultRecord[];
+  runCompleted: boolean;
   runTerminal: boolean;
 }
 
@@ -55,8 +56,9 @@ function RunAnalysisSession({
         const run = decodeAgentRun(rawRun, projectId, recordBatchId);
         const results = decodeAgentRunResults(rawResults, run);
         const resultIds = resultIdsFromRunResults(results);
+        const runCompleted = run.status === "COMPLETED";
         const runTerminal = ["COMPLETED", "FAILED", "CANCELLED"].includes(run.status);
-        if (active) setLoaded({ resultIds, results, runTerminal });
+        if (active) setLoaded({ resultIds, results, runCompleted, runTerminal });
       })
       .catch(() => { if (active) setError(true); });
     return () => { active = false; };
@@ -78,6 +80,9 @@ function RunAnalysisSession({
         projectId={projectId}
         recordBatchId={recordBatchId}
         resultIds={loaded.resultIds}
+        toolResultIds={loaded.results.map((item) => item.result.result_id)}
+        runCompleted={loaded.runCompleted}
+        runId={runId}
         runTerminal={loaded.runTerminal}
         showEvidence={false}
       />

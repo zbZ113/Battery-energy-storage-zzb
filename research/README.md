@@ -12,16 +12,13 @@
 
 ## 学习顺序
 
-1. DITING：早期微弱退化信号与健康原型。
-2. CyclePatch：循环级Token化，优先改造现有CPMLP。
-3. BatLiNet：电芯内/电芯间联合寿命学习。
-4. BatteryGPT：未来充电特征生成、SOH轨迹、拐点和EOL。
-5. BatteryMFormer：时序/SOC双视角和退化模式记忆。
-6. IC2ML：SOH、轨迹和RUL统一多任务学习。
-7. iMOE：面向梯次利用的可解释专家混合。
-8. PINN4SOH：物理约束与跨数据集稳定预测。
-9. DiffBatt：概率退化轨迹和数据增强。
-10. SambaMixer：Mamba长序列SOH编码。
+1. PBT、CyclePatch-BatLiNet、DITING：早期循环寿命主模型候选与挑战模型。
+2. BatteryMFormer、HybridPatch、BatteryGPT：SOH退化轨迹、拐点和EOL研究。
+3. BLAST-Lite、Naumann：循环—日历工况情景推演及大型方形LFP参考。
+4. Smart Feature Identification：40Ah/280Ah短充电片段SOH特征。
+5. BattGP：160Ah现场LFP系统在线健康监测与异常分析。
+6. MAGNet：跨工况、跨域退化轨迹泛化。
+7. IC2ML、iMOE、PINN4SOH、DiffBatt、SambaMixer：多任务、梯次利用、物理约束及概率轨迹研究储备。
 
 ## 安全规则
 
@@ -32,6 +29,6 @@
 
 ## 当前特殊入口
 
-- DITING尚未公开官方代码，目录只登记论文。
+- DITING已公开官方GitHub仓库，但代码仓库较新；复现前仍需独立核验许可证、数据划分和运行依赖。
 - BatLiNet官方代码位于CodeOcean。匿名访问受限时，需要登录后手动执行Capsule完整导出，保存到 `research/archives/`。
 - Hugging Face目前主要用于BatteryLife处理数据和论文索引，不采用缺少论文证据的个人模型权重。

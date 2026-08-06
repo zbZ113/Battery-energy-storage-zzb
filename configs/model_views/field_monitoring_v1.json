@@ -1,0 +1,12 @@
+{
+  "schema_version": "model-view-config-v1",
+  "view_id": "field_monitoring",
+  "view_version": "field-monitoring-v1",
+  "task_type": "field_monitoring",
+  "target_semantics": "no_health_target",
+  "entity_key": "system_id",
+  "feature_names": ["battery_voltage", "battery_current", "soc", "temperature"],
+  "mask_semantics": ["false_means_missing", "timezone_unresolved_explicit"],
+  "source_dataset_ids": ["LFP_FIELD_160AH"],
+  "cutoff_cycle": null
+}

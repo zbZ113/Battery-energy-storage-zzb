@@ -5,12 +5,14 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 import os
 import platform
 import subprocess
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -20,14 +22,19 @@ from safetensors.torch import save_file
 
 from quanxin_life.core import (
     CycleLifePrediction,
+    LastBatchPolicy,
     PredictionTarget,
+    TrainingMode,
     sha256_canonical,
 )
-from quanxin_life.data.manifest import RawFileManifest, verify_raw_file
 from quanxin_life.data.matr_multibatch import MatrThreeBatchManifest
-from quanxin_life.data.matr_pipeline import MatrSupervisionArtifact
 from quanxin_life.data.schemas import SplitManifest
 from quanxin_life.models.metrics import evaluate_cycle_life_predictions
+from quanxin_life.training.adapters.native import (
+    load_native_matr_legacy_cohorts,
+    resolve_native_matr_view_roots,
+)
+from quanxin_life.training.batching import BatchPlan
 from quanxin_life.training.checkpoint import CheckpointContext
 from quanxin_life.training.classic import (
     fit_dummy_cycle_life,
@@ -39,12 +46,8 @@ from quanxin_life.training.engine import TrainingEngine
 from quanxin_life.training.matr_data import (
     MatrCurveCohorts,
     MatrHybridCohorts,
-    load_matr_cycle_life_curve_cohorts,
-    load_matr_hybrid_trajectory_cohorts,
 )
-from quanxin_life.training.matr_three_batch_data import (
-    load_matr_three_batch_training_cohorts,
-)
+from quanxin_life.training.matrix import TrainingTaskMatrix
 from quanxin_life.training.plots import (
     write_cycle_life_evaluation_plot,
     write_hybrid_trajectory_plot,
@@ -68,62 +71,151 @@ from quanxin_life.uncertainty import (
 )
 
 
+class MatrixResumeAction(StrEnum):
+    """Matrix-level disposition before constructing a training task."""
+
+    START = "START"
+    RESUME = "RESUME"
+    SKIP_COMPLETED = "SKIP_COMPLETED"
+
+
+def build_matrix_plan_summary(
+    matrix: TrainingTaskMatrix,
+    *,
+    mode: TrainingMode,
+) -> dict[str, Any]:
+    """Return a deterministic readiness summary without opening data or CUDA.
+
+    The current registry stores immutable plan identities.  Until lifecycle-
+    specific rows are materialized, smoke/select/final deliberately project
+    those identities into the requested mode so blocked work remains visible.
+    """
+
+    mode = TrainingMode(mode)
+    selected = tuple(entry for entry in matrix.entries if entry.mode is mode)
+    if not selected and mode is not TrainingMode.PLAN:
+        selected = tuple(entry for entry in matrix.entries if entry.mode is TrainingMode.PLAN)
+    tasks: list[dict[str, Any]] = []
+    for entry in selected:
+        row = entry.model_dump(mode="json")
+        row["requested_mode"] = mode.value
+        if entry.enabled:
+            row["status"] = "READY"
+        else:
+            row["status"] = "BLOCKED"
+            row["blocked_reason"] = (
+                entry.blocked_reason.value
+                if entry.blocked_reason is not None
+                else "BLOCKED_UNKNOWN"
+            )
+        tasks.append(row)
+    ready_count = sum(row["status"] == "READY" for row in tasks)
+    blocked_count = sum(row["status"] == "BLOCKED" for row in tasks)
+    return {
+        "schema_version": "training-matrix-plan-v1",
+        "mode": mode.value,
+        "status": "PLAN_READY",
+        "task_count": len(tasks),
+        "ready_count": ready_count,
+        "blocked_count": blocked_count,
+        "completed_count": 0,
+        "failed_count": 0,
+        "tasks": tasks,
+    }
+
+
+def resolve_matrix_resume_action(
+    run_directory: Path,
+    *,
+    expected_context_sha256: str,
+) -> MatrixResumeAction:
+    """Classify a run as new, resumable, or safely skippable.
+
+    This is intentionally independent of model construction.  The lower-level
+    ``TrainingEngine`` performs full tensor/optimizer/RNG restoration after the
+    decision.  A status or checkpoint with a different context is rejected.
+    """
+
+    if len(expected_context_sha256) != 64:
+        raise ValueError("expected context SHA-256 must be 64 hexadecimal characters")
+    status_path = run_directory / "run_status.json"
+    checkpoints = run_directory / "checkpoints"
+    last_pointer = checkpoints / "last.json"
+    if not status_path.exists():
+        if not last_pointer.exists():
+            return MatrixResumeAction.START
+        _validate_matrix_checkpoint_pointer(
+            checkpoints,
+            last_pointer,
+            expected_context_sha256=expected_context_sha256,
+        )
+        return MatrixResumeAction.RESUME
+    if status_path.is_symlink() or not status_path.is_file():
+        raise ValueError("run status must be a regular file")
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("run status is invalid") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("run status must contain an object")
+    observed_context = payload.get("context_sha256")
+    if observed_context != expected_context_sha256:
+        raise ValueError("run status context does not match the requested run")
+    status = payload.get("status")
+    if status in {"COMPLETED", "EARLY_STOPPED", "SKIPPED_COMPLETED"}:
+        return MatrixResumeAction.SKIP_COMPLETED
+    if status in {"RUNNING", "PAUSED", "PAUSED_STAGE", "INTERRUPTED"}:
+        if not last_pointer.exists():
+            raise ValueError("resumable run is missing its last checkpoint")
+        _validate_matrix_checkpoint_pointer(
+            checkpoints,
+            last_pointer,
+            expected_context_sha256=expected_context_sha256,
+        )
+        return MatrixResumeAction.RESUME
+    raise ValueError(f"unsupported run status for resume: {status!r}")
+
+
+def _validate_matrix_checkpoint_pointer(
+    checkpoints: Path,
+    pointer_path: Path,
+    *,
+    expected_context_sha256: str,
+) -> None:
+    if pointer_path.is_symlink() or not pointer_path.is_file():
+        raise ValueError("checkpoint pointer is invalid")
+    try:
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("checkpoint pointer is invalid") from exc
+    name = pointer.get("checkpoint") if isinstance(pointer, dict) else None
+    if not isinstance(name, str) or not name.startswith("epoch-"):
+        raise ValueError("checkpoint pointer is invalid")
+    checkpoint = checkpoints / name
+    if checkpoint.is_symlink() or not checkpoint.is_dir():
+        raise ValueError("checkpoint directory is invalid")
+    manifest_path = checkpoint / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError("checkpoint manifest is invalid")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("checkpoint manifest is invalid") from exc
+    context = manifest.get("context") if isinstance(manifest, dict) else None
+    if not isinstance(context, dict) or sha256_canonical(context) != expected_context_sha256:
+        raise ValueError("checkpoint context does not match the requested run")
+
+
 def execute_matr_suite(
     *,
     project_root: Path,
     config: MatrRunConfig,
     device: torch.device,
 ) -> dict[str, Any]:
-    root = project_root.resolve(strict=True)
-    paths = config.paths
-    raw_path = _inside(root, paths.raw_mat)
-    raw_manifest = RawFileManifest.model_validate_json(
-        _inside(root, paths.raw_manifest).read_bytes()
-    )
-    verify_raw_file(raw_path, raw_manifest)
-    supervision = MatrSupervisionArtifact.model_validate_json(
-        _inside(root, paths.supervision_report).read_bytes()
-    )
-    split = SplitManifest.model_validate_json(_inside(root, paths.split_manifest).read_bytes())
-    run_root = _inside(root, paths.run_root, must_exist=False)
-    run_root.mkdir(parents=True, exist_ok=True)
-    source_commit = _source_commit(root)
-    input_bundle_sha256 = sha256_canonical(
-        {
-            "raw_sha256": raw_manifest.sha256,
-            "supervision_sha256": supervision.parquet_sha256,
-            "split": split.model_dump(mode="json"),
-            "suite_config_sha256": config.suite.config_sha256,
-        }
-    )
-    def load_cohorts(cutoff: int) -> tuple[MatrCurveCohorts, MatrHybridCohorts]:
-        curves = load_matr_cycle_life_curve_cohorts(
-            processed_root=_inside(root, paths.processed_root),
-            supervision_root=_inside(root, paths.supervision_root),
-            supervision=supervision,
-            split_manifest=split,
-            cutoff_cycle=cutoff,
-            voltage_min_v=2.0,
-            voltage_max_v=3.6,
-            voltage_grid_step_v=0.01,
-        )
-        hybrid = load_matr_hybrid_trajectory_cohorts(
-            processed_root=_inside(root, paths.processed_root),
-            supervision_root=_inside(root, paths.supervision_root),
-            supervision=supervision,
-            split_manifest=split,
-            cutoff_cycle=cutoff,
-        )
-        return curves, hybrid
-
-    return _execute_matr_matrix(
-        config=config,
-        run_root=run_root,
-        split=split,
-        source_commit=source_commit,
-        input_bundle_sha256=input_bundle_sha256,
-        load_cohorts=load_cohorts,
-        device=device,
+    del project_root, config, device
+    raise ValueError(
+        "BLOCKED_DATA_VIEW: the historical single-batch MATR suite has no matching "
+        "frozen train-normalized View; use the governed three-batch suite"
     )
 
 
@@ -147,34 +239,30 @@ def execute_matr_three_batch_suite(
         or manifest.combined_split_manifest != config.paths.split_manifest
     ):
         raise ValueError("three-batch MATR manifest and training config disagree")
-    raw_hashes: list[str] = []
-    for component in manifest.batches:
-        raw_manifest = RawFileManifest.model_validate_json(
-            _inside(root, component.raw_manifest).read_bytes()
-        )
-        if (
-            raw_manifest.relative_path != Path(component.raw_relative_path).name
-            or raw_manifest.sha256 != component.raw_sha256
-        ):
-            raise ValueError("three-batch raw manifest differs from component evidence")
-        verify_raw_file(_inside(root, component.raw_relative_path), raw_manifest)
-        raw_hashes.append(raw_manifest.sha256)
+    view_roots_by_cutoff = {
+        cutoff: resolve_native_matr_view_roots(root, cutoff_cycle=cutoff)
+        for cutoff in config.suite.cutoffs
+    }
     run_root = _inside(root, config.paths.run_root, must_exist=False)
     run_root.mkdir(parents=True, exist_ok=True)
     source_commit = _source_commit(root)
     input_bundle_sha256 = sha256_canonical(
         {
-            "raw_sha256": raw_hashes,
             "three_batch_manifest_sha256": _sha256_file(manifest_path),
             "split": split.model_dump(mode="json"),
             "suite_config_sha256": config.suite.config_sha256,
+            "model_view_sha256": {
+                str(cutoff): roots.model_view_sha256
+                for cutoff, roots in sorted(view_roots_by_cutoff.items())
+            },
         }
     )
 
     def load_cohorts(cutoff: int) -> tuple[MatrCurveCohorts, MatrHybridCohorts]:
-        return load_matr_three_batch_training_cohorts(
-            project_root=root,
-            manifest=manifest,
+        roots = view_roots_by_cutoff[cutoff]
+        return load_native_matr_legacy_cohorts(
+            scalar_view_root=roots.scalar_root,
+            trajectory_view_root=roots.trajectory_root,
             combined_split=split,
             cutoff_cycle=cutoff,
         )
@@ -186,6 +274,10 @@ def execute_matr_three_batch_suite(
         source_commit=source_commit,
         input_bundle_sha256=input_bundle_sha256,
         load_cohorts=load_cohorts,
+        model_view_sha_by_cutoff={
+            cutoff: roots.model_view_sha256
+            for cutoff, roots in view_roots_by_cutoff.items()
+        },
         device=device,
     )
 
@@ -198,6 +290,7 @@ def _execute_matr_matrix(
     source_commit: str,
     input_bundle_sha256: str,
     load_cohorts: Callable[[int], tuple[MatrCurveCohorts, MatrHybridCohorts]],
+    model_view_sha_by_cutoff: dict[int, str] | None = None,
     device: torch.device,
 ) -> dict[str, Any]:
     all_metrics: list[dict[str, Any]] = []
@@ -225,6 +318,16 @@ def _execute_matr_matrix(
                 split_version=config.suite.split_version,
                 feature_version=config.suite.feature_version,
                 source_commit=source_commit,
+                adapter_version=(
+                    "native-tensor-view-v1"
+                    if model_view_sha_by_cutoff is not None
+                    else "legacy-native-v1"
+                ),
+                model_view_sha256=(
+                    model_view_sha_by_cutoff[cutoff]
+                    if model_view_sha_by_cutoff is not None
+                    else None
+                ),
             )
             metrics = _run_one(
                 key=key,
@@ -425,6 +528,7 @@ def _run_one(
             hidden_dim=32,
             learning_rate=model_config.learning_rate,
             seed=key.seed,
+            batch_plan=_legacy_native_batch_plan(len(hybrid_cohorts.train.cell_ids)),
         )
         result = TrainingEngine(
             task=hybrid_task,
@@ -472,6 +576,25 @@ def _run_one(
     )
     _write_completed_run_manifest(run_directory, context)
     return metrics
+
+
+def _legacy_native_batch_plan(sample_count: int) -> BatchPlan:
+    if sample_count <= 0:
+        raise ValueError("native training requires at least one cell")
+    micro_batch_size = min(16, sample_count)
+    gradient_accumulation_steps = 4 if sample_count > micro_batch_size else 1
+    micro_batches = math.ceil(sample_count / micro_batch_size)
+    return BatchPlan(
+        micro_batch_size=micro_batch_size,
+        visible_gpu_count=1,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        effective_batch_size=micro_batch_size * gradient_accumulation_steps,
+        sample_count=sample_count,
+        last_batch_policy=LastBatchPolicy.KEEP,
+        optimizer_steps_per_epoch=math.ceil(
+            micro_batches / gradient_accumulation_steps
+        ),
+    )
 
 
 def _cycle_metrics(

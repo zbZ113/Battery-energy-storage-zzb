@@ -170,7 +170,7 @@ services:
       - deploy.competition_worker:app
       - worker
       - --queues
-      - agent-runs,advanced-calibration
+      - agent-runs,advanced-calibration,report-exports
       - --concurrency
       - "1"
       - --loglevel

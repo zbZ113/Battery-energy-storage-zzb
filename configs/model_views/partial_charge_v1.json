@@ -1,0 +1,12 @@
+{
+  "schema_version": "model-view-config-v1",
+  "view_id": "partial_charge",
+  "view_version": "partial-charge-v1",
+  "task_type": "partial_charge_feature",
+  "target_semantics": "source_backed_partial_charge_feature",
+  "entity_key": "cell_id",
+  "feature_names": ["slope", "curvature", "duration_s"],
+  "mask_semantics": ["false_means_missing", "no_synthetic_segment"],
+  "source_dataset_ids": ["MATR", "LFP_280AH_DOD"],
+  "cutoff_cycle": null
+}

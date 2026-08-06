@@ -1,43 +1,221 @@
 [
-  {
-    "dataset_id": "MATR",
-    "version": "Severson-2019-and-Attia-2020-raw-batches",
-    "source_uri": "https://data.matr.io/1/projects/5c48dd2bc625d700019f3204",
-    "paper_uri": "https://doi.org/10.1038/s41560-019-0356-8",
-    "license_status": "must_verify_before_download",
-    "ingestion_mode": "hdf5",
-    "expected_suffixes": [".mat"],
-    "notes": "四批原始MAT/HDF5文件；2019批次需从对应MATR项目单独获取。"
-  },
-  {
-    "dataset_id": "HUST",
-    "version": "Mendeley-v2",
-    "source_uri": "https://data.mendeley.com/datasets/nsc7hnsg4s/2",
-    "paper_uri": "https://doi.org/10.1039/D2EE01676A",
-    "license_status": "CC BY 4.0",
-    "ingestion_mode": "quarantine_conversion",
-    "expected_suffixes": [".zip"],
-    "prohibited_direct_suffixes": [".pkl", ".pickle"],
-    "notes": "官方压缩包包含Python pickle；主进程禁止反序列化，必须经无网络、只读输入的隔离转换与静态审计。"
-  },
-  {
-    "dataset_id": "NAUMANN_CYCLE",
-    "version": "Mendeley-v1",
-    "source_uri": "https://data.mendeley.com/datasets/6hgyr25h8d/1",
-    "paper_uri": "https://doi.org/10.1016/j.jpowsour.2019.227666",
-    "license_status": "CC BY 4.0",
-    "ingestion_mode": "matlab",
-    "expected_suffixes": [".mat"],
-    "notes": "29个月LFP/graphite循环老化研究，19种工况。"
-  },
-  {
-    "dataset_id": "NAUMANN_CALENDAR",
-    "version": "Mendeley-v1",
-    "source_uri": "https://data.mendeley.com/datasets/kxh42bfgtj/1",
-    "paper_uri": "https://doi.org/10.1016/j.est.2018.01.019",
-    "license_status": "CC BY 4.0",
-    "ingestion_mode": "tabular",
-    "expected_suffixes": [".xlsx"],
-    "notes": "29个月LFP/graphite日历老化研究，17种温度与SOC工况。"
-  }
+    {
+        "dataset_id":  "MATR",
+        "version":  "Severson-2019-and-Attia-2020-raw-batches",
+        "source_uri":  "https://data.matr.io/1/projects/5c48dd2bc625d700019f3204",
+        "paper_uri":  "https://doi.org/10.1038/s41560-019-0356-8",
+        "license_status":  "must_verify_before_download",
+        "ingestion_mode":  "hdf5",
+        "expected_suffixes":  [
+                                  ".mat"
+                              ],
+        "notes":  "四批原始MAT/HDF5文件；2019批次需从对应MATR项目单独获取。",
+        "downloaded_at":  "2026-07-17T08:50:16.6685795Z",
+        "artifact_paths":  [
+                               "data/raw/MATR/v1/2017-05-12_batchdata_updated_struct_errorcorrect.mat",
+                               "data/raw/MATR/v1/2017-06-30_batchdata_updated_struct_errorcorrect.mat",
+                               "data/raw/MATR/v1/2018-04-12_batchdata_updated_struct_errorcorrect.mat"
+                           ],
+        "artifact_sha256":  [
+                                "9d928ab978f0e3c70b31cb833a749fedd35094d01af76475d69b40aa3497f5ba",
+                                "63ab200d09ecb237fee5ef3a5c5db76e3212e3206a0bd92f769e1427fed338b8",
+                                "62c30e413b63e6144720e016deed3661fac8468641794a5807b123fe84717998"
+                            ]
+    },
+    {
+        "dataset_id":  "HUST",
+        "version":  "Mendeley-v2",
+        "source_uri":  "https://data.mendeley.com/datasets/nsc7hnsg4s/2",
+        "paper_uri":  "https://doi.org/10.1039/D2EE01676A",
+        "license_status":  "CC BY 4.0",
+        "ingestion_mode":  "quarantine_conversion",
+        "expected_suffixes":  [
+                                  ".zip"
+                              ],
+        "prohibited_direct_suffixes":  [
+                                           ".pkl",
+                                           ".pickle"
+                                       ],
+        "notes":  "官方压缩包包含Python pickle；主进程禁止反序列化，必须经无网络、只读输入的隔离转换与静态审计。",
+        "downloaded_at":  "2026-08-04T02:37:06.6236135Z",
+        "artifact_paths":  [
+                               "data/raw/HUST/v2/our_data.zip"
+                           ],
+        "artifact_sha256":  [
+                                "071d24617153693b0d29059568525e620f6af6512acc9d00c98c7adcf15125db"
+                            ]
+    },
+    {
+        "dataset_id":  "NAUMANN_CYCLE",
+        "version":  "Mendeley-v1",
+        "source_uri":  "https://data.mendeley.com/datasets/6hgyr25h8d/1",
+        "paper_uri":  "https://doi.org/10.1016/j.jpowsour.2019.227666",
+        "license_status":  "CC BY 4.0",
+        "ingestion_mode":  "matlab",
+        "expected_suffixes":  [
+                                  ".mat"
+                              ],
+        "notes":  "29个月LFP/graphite循环老化研究，19种工况。",
+        "downloaded_at":  "2026-07-13T11:15:44.8769066Z",
+        "artifact_paths":  [
+                               "data/raw/NAUMANN_CYCLE/v1/EIS_40°C_25SOC_20DOD_1C_1C.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/EIS_40°C_50SOC_20DOD_1C_1C.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/EIS_40°C_50SOC_80DOD_0.2C_0.2C.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/EIS_40°C_50SOC_80DOD_1C_1C.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/Loadcollectives_Capacity_CC_CV_FEC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/Loadcollectives_Capacity_CC_CV_Time.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/Loadcollectives_R_DC_10s_FEC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/Loadcollectives_R_DC_10s_Time.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_25%SOC_20%DOD_1C_1C.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_50%SOC_20%DOD_1C_1C.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_50%SOC_80%DOD_0.2C_0.2C.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_50%SOC_80%DOD_1C_1C.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_50SOC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/xCyC_80DOD_40°C_Capacity_CC_CV_FEC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/xCyC_80DOD_40°C_R_DC_10s_FEC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/xDOD_1C1C_40°C_Capacity_CC_CV_FEC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/xDOD_1C1C_40°C_R_DC_10s_FEC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/xDOD_1C1C_x°C_Capacity_CC_CV_FEC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/xDOD_1C1C_x°C_R_DC_10s_FEC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/xSOC_20DOD_1C1C_40°C_Capacity_CC_CV_FEC.mat",
+                               "data/raw/NAUMANN_CYCLE/v1/xSOC_20DOD_1C1C_40°C_R_DC_10s_FEC.mat"
+                           ],
+        "artifact_sha256":  [
+                                "266e43b985fbf7277f6db99592d99004e29d83f1ba5ef1d43cdb138a6fa53439",
+                                "25b8a15ffcfd75aff67cd982612dabb7e1b7927c15c1459c9a8f885480856593",
+                                "8884fa4442d5502c354ec46b355f1713024e5e8fb805cd1414b573e6b1a3528d",
+                                "6bca2bdb2ccbf9ae94fdf5e4740ab98959e767688bff52a679800ae3fbf63978",
+                                "0ea77bc678ed504a21df3576c9678e097d1731f01a8cad0788ca07f8c9dab001",
+                                "15944cfb2c3ba813038165f2a48553daa90c720ee063703ec0646cb8dddf3b07",
+                                "c534402b1cf43803751c43795e8cea430481acb477590a392d3c59901c32641c",
+                                "4562ac758b0826b186343f79b9a7b720521c25bbf8d39995c3fb55a5129258d0",
+                                "2615b5eea637fe5f26168f70ddaf7e3ac56a3add7b307d0fe50cc5234e860f92",
+                                "68c665ea3cb7eeae7f258a3883799f36383d27a4b7db9888bd835ff2a5b59c9d",
+                                "d765f91ef145388e70def4be01183a65c740749fd76ec97bbed8fa13fefcf5ac",
+                                "8d39dc8ac5dfe43131acf8aab343dfb60a6ab7e79ecddec0af83e72c1ce804e8",
+                                "f800eeef869cae1182d7d57bd7948003431f96912e9e7d9064442095eed93ce8",
+                                "a5022e805a20a64a81e1699dec7bd63c73d8e7959543ec9df78cef99ef3ed782",
+                                "c02268f129061705a760dc690caa440541024b4f8bc2c2b17e2a946c826f156d",
+                                "2b3f640783d72dec17ec57d438d570e891057ecdf5690d444688dd1e1b2209da",
+                                "4a88d3c43ccdcd5213d0a58ef8437f23735f0a3fc8677895a04ebeba8ab3f638",
+                                "cda758cc9208ebf03925bf68495339adda4a4b79595d0b2cf27c5fbbe4435f17",
+                                "81c60cf2490f56b7c69a18634c1856cbd70e9f2665bda15ef8294421a1a8b73a",
+                                "0cea4471ec3fe16dea2de9e464121f2813595ba3aca3c1dbec9a0f38b5e52e30",
+                                "2d043804fe6be839913db1de43f7487e2178522cd5c0e7cb7a3a62714c6b5837"
+                            ]
+    },
+    {
+        "dataset_id":  "NAUMANN_CALENDAR",
+        "version":  "Mendeley-v1",
+        "source_uri":  "https://data.mendeley.com/datasets/kxh42bfgtj/1",
+        "paper_uri":  "https://doi.org/10.1016/j.est.2018.01.019",
+        "license_status":  "CC BY 4.0",
+        "ingestion_mode":  "tabular",
+        "expected_suffixes":  [
+                                  ".xlsx"
+                              ],
+        "notes":  "29个月LFP/graphite日历老化研究，17种温度与SOC工况。",
+        "downloaded_at":  "2026-07-13T11:15:49.3537200Z",
+        "artifact_paths":  [
+                               "data/raw/NAUMANN_CALENDAR/v1/DifferentialVoltageAnalysis.xlsx",
+                               "data/raw/NAUMANN_CALENDAR/v1/DischargeCapacity.xlsx",
+                               "data/raw/NAUMANN_CALENDAR/v1/ElectrochemicalImpedanceSpectroscopy.xlsx",
+                               "data/raw/NAUMANN_CALENDAR/v1/ResistanceR_DC10s.xlsx"
+                           ],
+        "artifact_sha256":  [
+                                "cc47d2d1fc481c79f2395f3763d0dcb9245be929622baa20237554afe8b5578c",
+                                "c684bdb2adc7314d7cf943b472068694e20425af8f84fbf249d5d7554dc7e3f0",
+                                "c7656fbf94ffd6ea3b6394f57aafea46fa64ab1eb3e0efb8c820ccc03dac7752",
+                                "7a27edb60043e21f510fe38ac0ea6ea015b16633ce5b23882065a12556dfbd2a"
+                            ]
+    },
+    {
+        "dataset_id":  "LFP_280AH_DOD",
+        "version":  "Zenodo-14576042-v3",
+        "source_uri":  "https://zenodo.org/records/14576042",
+        "paper_uri":  "https://doi.org/10.5281/zenodo.14576042",
+        "license_status":  "CC BY 4.0",
+        "ingestion_mode":  "archive_tabular",
+        "expected_suffixes":  [
+                                  ".zip",
+                                  ".txt"
+                              ],
+        "downloaded_at":  "2026-08-04T03:20:08.8710948Z",
+        "artifact_paths":  [
+                               "data/raw/LFP_280AH_DOD/v3/CATL.zip",
+                               "data/raw/LFP_280AH_DOD/v3/EVE.zip",
+                               "data/raw/LFP_280AH_DOD/v3/Readme.txt"
+                           ],
+        "artifact_sha256":  [
+                                "ef6e01c06952f0d43c9ee02b9a84d34d286c40db799c6baced5e5879b55ea364",
+                                "6c9af32eeccd15c6bf7ef734e121695617f18bedf201ebf639a2d520b05aeaf0",
+                                "08fa58ffd1ed5f410358582d93667ee0eaf3e4b24fd09a8bf66b2e42e42d7ba3"
+                            ],
+        "notes":  "280 Ah/40 Ah LFP super-short charging and DoD data; small-sample calibration or external-test role only."
+    },
+    {
+        "dataset_id":  "LFP_280AH_TEMPEST",
+        "version":  "Newcastle-20813753-v2",
+        "source_uri":  "https://data.ncl.ac.uk/articles/dataset/_/20813753",
+        "paper_uri":  "https://data.ncl.ac.uk/articles/dataset/_/20813753",
+        "license_status":  "UNVERIFIED",
+        "ingestion_mode":  "archive_tabular",
+        "expected_suffixes":  [
+                                  ".zip"
+                              ],
+        "downloaded_at":  "2026-08-04T03:23:44.7359566Z",
+        "artifact_paths":  [
+                               "data/raw/LFP_280AH_TEMPEST/v2/aging.zip",
+                               "data/raw/LFP_280AH_TEMPEST/v2/capacity_hppc_entropy.zip"
+                           ],
+        "artifact_sha256":  [
+                                "7c43b108b619c1c67f5865d7000ed00a9300954d608626ff86f9da3325c086a0",
+                                "cbc737511848eb70186fe677dce7549eff285ac75e43b5a66cd22dc2adec9f45"
+                            ],
+        "notes":  "Project TEMPEST single-cell 280 Ah LFP temperature/HPPC/ageing data; license metadata remains unverified."
+    },
+    {
+        "dataset_id":  "LFP_180AH_FORKLIFT",
+        "version":  "Mendeley-yz4pttm73n-v2",
+        "source_uri":  "https://data.mendeley.com/datasets/yz4pttm73n/2",
+        "paper_uri":  "https://doi.org/10.17632/yz4pttm73n.2",
+        "license_status":  "CC BY 4.0",
+        "ingestion_mode":  "archive_tabular",
+        "expected_suffixes":  [
+                                  ".zip"
+                              ],
+        "downloaded_at":  "2026-08-04T02:52:43.8933634Z",
+        "artifact_paths":  [
+                               "data/raw/LFP_180AH_FORKLIFT/v2/Lithium-ion battery degradation dataset based on a realistic forklift operation profile.zip"
+                           ],
+        "artifact_sha256":  [
+                                "c4a9e4cd1f422ab5f9347f5e37898cbc7e05bc25b9ed24d48817b661bd361e35"
+                            ],
+        "notes":  "Three prismatic cells with distinct ageing and RPT phases; phases must remain separate."
+    },
+    {
+        "dataset_id":  "LFP_FIELD_160AH",
+        "version":  "Zenodo-13715694-v1",
+        "source_uri":  "https://zenodo.org/records/13715694",
+        "paper_uri":  "https://doi.org/10.5281/zenodo.13715694",
+        "license_status":  "CC BY-NC 4.0",
+        "ingestion_mode":  "archive_tabular",
+        "expected_suffixes":  [
+                                  ".zip",
+                                  ".pdf",
+                                  ".md"
+                              ],
+        "downloaded_at":  "2026-08-04T03:38:52.2934612Z",
+        "artifact_paths":  [
+                               "data/raw/LFP_FIELD_160AH/v1/battery_system_sketch.pdf",
+                               "data/raw/LFP_FIELD_160AH/v1/field_data.zip",
+                               "data/raw/LFP_FIELD_160AH/v1/README.md"
+                           ],
+        "artifact_sha256":  [
+                                "3edc80350740edc12ef5519ea48299db1004982df7f8e9886b4bbeb2328c0274",
+                                "20966d5db076a578832ef7b4850371e37b2940dddf5cbbcdadc7db20f0b57dd5",
+                                "30a28c3df9e299b7e22ce70b23586bcd6a0e8698dde32c783806f9f2db0f39f5"
+                            ],
+        "notes":  "28 system-level field histories; no SOH, RUL, or cell-life labels may be inferred from time."
+    }
 ]

@@ -160,6 +160,8 @@ def test_loads_reviewed_relative_capacity_ratio_layout_from_json(tmp_path: Path)
 
     assert loaded.metric_name == "relative_capacity_ratio"
     assert loaded.layout_version == "naumann-cycle-fixture-v1"
+    assert loaded.identity_level == "condition"
+    assert loaded.cell_level_split_supported is False
 
 
 def test_cycle_layout_loader_rejects_non_json_file(tmp_path: Path) -> None:

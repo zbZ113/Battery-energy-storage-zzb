@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from deploy.advanced_agent_context import CompetitionAgentPolicyContextResolver
 from deploy.competition_inputs import (
@@ -20,6 +20,7 @@ from quanxin_life.api.auth import AuthCookieConfig, create_auth_http_adapter
 from quanxin_life.api.datasets import create_dataset_http_adapter
 from quanxin_life.api.model_artifacts import create_model_artifact_http_adapter
 from quanxin_life.api.model_routes import create_model_route_http_adapter
+from quanxin_life.api.project_reports import create_project_report_http_adapter
 from quanxin_life.api.projects import create_project_http_adapter
 from quanxin_life.api.record_batches import create_record_batch_http_adapter
 from quanxin_life.application.advanced_calibration_evidence import (
@@ -64,6 +65,10 @@ from quanxin_life.application.model_artifact_catalog import (
 from quanxin_life.application.model_route_activation import (
     ModelRouteActivationService,
 )
+from quanxin_life.application.project_reports import (
+    ProjectReportExportService,
+    SqlProjectReportResultResolver,
+)
 from quanxin_life.application.projects import ProjectService
 from quanxin_life.application.record_batch_bindings import (
     RecordBatchBindingService,
@@ -83,15 +88,19 @@ from quanxin_life.infrastructure.celery_queue import (
     CeleryQueueConfig,
     create_celery_app,
 )
+from quanxin_life.infrastructure.report_queue import CeleryProjectReportQueue
 from quanxin_life.persistence import (
     create_engine_from_config,
     create_session_factory,
 )
 from quanxin_life.persistence.database import DatabaseConfig, SessionFactory
+from quanxin_life.reporting.audited_artifacts import reviewed_reportlab_vera_font
+from quanxin_life.reporting.project_artifacts import ProjectReportArtifactRenderer
 from quanxin_life.tasks.advanced_calibration import (
     register_advanced_calibration_task,
 )
 from quanxin_life.tasks.agent_runs import register_agent_run_task
+from quanxin_life.tasks.project_reports import register_project_report_task
 from quanxin_life.tools import ToolExecutionScope
 
 
@@ -104,10 +113,13 @@ class CompetitionRuntime:
     session_factory: SessionFactory
     agent_worker: AgentRunExecutionWorker
     calibration_worker: Any
+    report_worker: ProjectReportExportService
 
 
 def create_competition_runtime(
     settings: CompetitionRuntimeSettings,
+    *,
+    auth_environment: Literal["production", "development"] = "production",
 ) -> CompetitionRuntime:
     """Assemble the Advanced competition vertical without starting services."""
 
@@ -129,7 +141,7 @@ def create_competition_runtime(
     auth_adapter = create_auth_http_adapter(
         auth_service,
         AuthCookieConfig(
-            environment="production",
+            environment=auth_environment,
             allowed_origins=(settings.trusted_origin,),
         ),
     )
@@ -243,6 +255,17 @@ def create_competition_runtime(
         app=celery_task_app,
         worker=calibration.worker,
     )
+    report_worker = ProjectReportExportService(
+        session_factory,
+        run_reader=run_service,
+        result_resolver=SqlProjectReportResultResolver(session_factory),
+        renderer=ProjectReportArtifactRenderer(
+            pdf_font=reviewed_reportlab_vera_font()
+        ),
+        artifact_root=settings.artifact_root,
+    )
+    report_queue = CeleryProjectReportQueue(app=celery_app)
+    register_project_report_task(app=celery_task_app, worker=report_worker)
 
     http_app = create_fastapi_app(
         tool_service,
@@ -283,6 +306,11 @@ def create_competition_runtime(
             auth_adapter=auth_adapter,
         ),
         advanced_calibration_adapter=calibration.http_adapter,
+        project_report_adapter=create_project_report_http_adapter(
+            report_worker,
+            auth_adapter=auth_adapter,
+            queue=report_queue,
+        ),
         project_invocation_context_service=context_service,
     )
     return CompetitionRuntime(
@@ -291,6 +319,7 @@ def create_competition_runtime(
         session_factory=session_factory,
         agent_worker=agent_worker,
         calibration_worker=calibration.worker,
+        report_worker=report_worker,
     )
 
 

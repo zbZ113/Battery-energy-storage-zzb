@@ -15,7 +15,7 @@ import torch
 from pydantic import ConfigDict, Field, field_validator, model_validator
 from safetensors.torch import load_file, save_file
 
-from quanxin_life.core import PredictionTarget, sha256_canonical
+from quanxin_life.core import PredictionTarget, SelectionMetricDirection, sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
 
 
@@ -34,6 +34,15 @@ class CheckpointContext(ContractModel):
     split_version: str = Field(min_length=1)
     feature_version: str = Field(min_length=1)
     source_commit: str = Field(pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+    adapter_version: str = Field(default="legacy-native-v1", min_length=1)
+    model_view_sha256: Sha256 | None = None
+    effective_batch_size: int | None = Field(default=None, gt=0)
+    selection_metric_name: str = Field(default="mae", min_length=1)
+    selection_metric_direction: SelectionMetricDirection = SelectionMetricDirection.MINIMIZE
+    upstream_commit: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$",
+    )
 
 
 class AdvancedCheckpointContext(CheckpointContext):

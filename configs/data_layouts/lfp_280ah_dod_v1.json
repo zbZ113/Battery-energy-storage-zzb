@@ -1,0 +1,39 @@
+{
+    "layout_version":  "lfp-280ah-dod-dataset-v1",
+    "archives":  [
+                     {
+                         "layout_version":  "lfp-280ah-dod-v1",
+                         "vendor":  "CATL",
+                         "archive_sha256":  "ef6e01c06952f0d43c9ee02b9a84d34d286c40db799c6baced5e5879b55ea364",
+                         "expected_members":  [
+                                                  "CATL/CATL-0.5C-100% Depth of Discharge/2763.zip",
+                                                  "CATL/CATL-0.5C-100% Depth of Discharge/4296.zip",
+                                                  "CATL/CATL-0.5C-100% Depth of Discharge/4870.zip",
+                                                  "CATL/CATL-0.5C-20% Depth of Discharge/2899.zip",
+                                                  "CATL/CATL-0.5C-20% Depth of Discharge/4693.zip",
+                                                  "CATL/CATL-0.5C-20% Depth of Discharge/5535.zip",
+                                                  "CATL/CATL-0.5C-60% Depth of Discharge/3821.zip",
+                                                  "CATL/CATL-0.5C-60% Depth of Discharge/4699.zip",
+                                                  "CATL/CATL-0.5C-60% Depth of Discharge/4966.zip"
+                                              ],
+                         "task_role":  "external_test"
+                     },
+                     {
+                         "layout_version":  "lfp-280ah-dod-v1",
+                         "vendor":  "EVE",
+                         "archive_sha256":  "6c9af32eeccd15c6bf7ef734e121695617f18bedf201ebf639a2d520b05aeaf0",
+                         "expected_members":  [
+                                                  "EVE/EVE-0.5C-100% Depth of Discharge/1092.zip",
+                                                  "EVE/EVE-0.5C-100% Depth of Discharge/1859.zip",
+                                                  "EVE/EVE-0.5C-100% Depth of Discharge/5726.zip",
+                                                  "EVE/EVE-0.5C-20% Depth of Discharge/2297.zip",
+                                                  "EVE/EVE-0.5C-20% Depth of Discharge/4290.zip",
+                                                  "EVE/EVE-0.5C-20% Depth of Discharge/5123.zip",
+                                                  "EVE/EVE-0.5C-60% Depth of Discharge/0730.zip",
+                                                  "EVE/EVE-0.5C-60% Depth of Discharge/3611.zip",
+                                                  "EVE/EVE-0.5C-60% Depth of Discharge/3859.zip"
+                                              ],
+                         "task_role":  "external_test"
+                     }
+                 ]
+}

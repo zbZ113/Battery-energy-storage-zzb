@@ -6,14 +6,15 @@ import csv
 import json
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import torch
 
-from quanxin_life.core import PredictionTarget, sha256_canonical
+from quanxin_life.core import LastBatchPolicy, PredictionTarget, sha256_canonical
 from quanxin_life.data.matr_multibatch import MatrThreeBatchManifest
+from quanxin_life.data.model_views.builder import verify_model_view
 from quanxin_life.data.schemas import SplitManifest
 from quanxin_life.models.batlinet import (
     BatLiNetConfig,
@@ -22,6 +23,12 @@ from quanxin_life.models.batlinet import (
 )
 from quanxin_life.models.cyclepatch import CyclePatchConfig
 from quanxin_life.models.hybridpatch_v2 import HybridPatchV2Config
+from quanxin_life.training.adapters.native import (
+    NativeMatrViewRoots,
+    load_native_advanced_matr_final_data,
+    load_native_advanced_matr_selection_data,
+    resolve_native_matr_view_roots,
+)
 from quanxin_life.training.advanced_config import (
     AdvancedCandidate,
     AdvancedMatrThreeBatchRunConfig,
@@ -33,8 +40,6 @@ from quanxin_life.training.advanced_config import (
 from quanxin_life.training.advanced_data import (
     AdvancedFinalMatrData,
     AdvancedSelectionMatrData,
-    load_advanced_matr_final_data,
-    load_advanced_matr_selection_data,
 )
 from quanxin_life.training.advanced_selection import (
     AdvancedModelSelectionManifest,
@@ -45,10 +50,12 @@ from quanxin_life.training.advanced_selection import (
     select_stage2_finalists,
 )
 from quanxin_life.training.advanced_tasks import (
+    AdvancedCycleLifeBatch,
     CyclePatchBatLiNetTrainingTask,
     CyclePatchDirectTrainingTask,
     HybridPatchV2TrainingTask,
 )
+from quanxin_life.training.batching import BatchPlan
 from quanxin_life.training.checkpoint import AdvancedCheckpointContext, model_architecture_sha256
 from quanxin_life.training.config import ModelTrainingConfig
 from quanxin_life.training.engine import TrainingEngine, TrainingRunStatus
@@ -106,6 +113,8 @@ class _RegisteredInputs:
     data_version: str
     split_version: str
     source_commit: str
+    view_roots_by_cutoff: Mapping[int, NativeMatrViewRoots]
+    model_view_bundle_sha256: str
 
 
 def execute_advanced_matr_three_batch_suite(
@@ -130,12 +139,12 @@ def execute_advanced_matr_three_batch_suite(
         data_by_cutoff: dict[int, AdvancedSelectionMatrData | AdvancedFinalMatrData] = {}
         for key in keys:
             if key.cutoff_cycle not in data_by_cutoff:
-                data_by_cutoff[key.cutoff_cycle] = load_advanced_matr_selection_data(
-                    project_root=root,
-                    manifest=registered.manifest,
+                view_roots = _registered_view_roots(root, registered, key.cutoff_cycle)
+                data_by_cutoff[key.cutoff_cycle] = load_native_advanced_matr_selection_data(
+                    scalar_view_root=view_roots.scalar_root,
+                    trajectory_view_root=view_roots.trajectory_root,
                     combined_split=registered.split,
                     cutoff_cycle=key.cutoff_cycle,
-                    feature_version=ADVANCED_FEATURE_VERSION,
                 )
     elif config.mode == "select":
         if seed is not None:
@@ -149,16 +158,15 @@ def execute_advanced_matr_three_batch_suite(
         )
     else:
         keys = build_advanced_run_matrix(config, repository_root=root)
-        data_by_cutoff = {
-            cutoff: load_advanced_matr_final_data(
-                project_root=root,
-                manifest=registered.manifest,
+        data_by_cutoff = {}
+        for cutoff in config.cutoffs:
+            view_roots = _registered_view_roots(root, registered, cutoff)
+            data_by_cutoff[cutoff] = load_native_advanced_matr_final_data(
+                scalar_view_root=view_roots.scalar_root,
+                trajectory_view_root=view_roots.trajectory_root,
                 combined_split=registered.split,
                 cutoff_cycle=cutoff,
-                feature_version=ADVANCED_FEATURE_VERSION,
             )
-            for cutoff in config.cutoffs
-        }
 
     if seed is not None:
         if seed not in config.seeds:
@@ -231,9 +239,25 @@ def _run_key(
         normalization_sha256=_normalization_hash(data, key.family),
         selection_manifest_sha256=selection_hash,
         reference_library_sha256=_reference_hash(task),
+        adapter_version="native-tensor-view-v1",
+        model_view_sha256=_registered_view_roots(
+            root, registered, key.cutoff_cycle
+        ).model_view_sha256,
+        effective_batch_size=_effective_batch_size(task),
     )
     run_directory = (
         run_root / f"cutoff-{key.cutoff_cycle}" / key.family / key.candidate_id / f"seed-{key.seed}"
+    )
+    run_directory.mkdir(parents=True, exist_ok=True)
+    _write_run_manifest(
+        run_directory=run_directory,
+        context=context,
+        reference_library_sha256=_reference_hash(task),
+        final_test_cohort_sha256=(
+            _common_final_test_cohort(data)[1]
+            if isinstance(data, AdvancedFinalMatrData)
+            else None
+        ),
     )
     model_epochs: int
     if config.mode == "select":
@@ -317,12 +341,12 @@ def _execute_selection(
     stage1_keys = build_advanced_run_matrix(
         config, selection_stage="selection_stage1", repository_root=root
     )
-    data100 = load_advanced_matr_selection_data(
-        project_root=root,
-        manifest=registered.manifest,
+    roots100 = _registered_view_roots(root, registered, 100)
+    data100 = load_native_advanced_matr_selection_data(
+        scalar_view_root=roots100.scalar_root,
+        trajectory_view_root=roots100.trajectory_root,
         combined_split=registered.split,
         cutoff_cycle=100,
-        feature_version=ADVANCED_FEATURE_VERSION,
     )
     stage1_rows: list[AdvancedValidationEvidence] = []
     for key in stage1_keys:
@@ -403,12 +427,12 @@ def _execute_selection(
         repository_root=root,
     ):
         if key.cutoff_cycle not in data_cache:
-            data_cache[key.cutoff_cycle] = load_advanced_matr_selection_data(
-                project_root=root,
-                manifest=registered.manifest,
+            view_roots = _registered_view_roots(root, registered, key.cutoff_cycle)
+            data_cache[key.cutoff_cycle] = load_native_advanced_matr_selection_data(
+                scalar_view_root=view_roots.scalar_root,
+                trajectory_view_root=view_roots.trajectory_root,
                 combined_split=registered.split,
                 cutoff_cycle=key.cutoff_cycle,
-                feature_version=ADVANCED_FEATURE_VERSION,
             )
         row = _run_key(
             root=root,
@@ -640,6 +664,7 @@ def _build_training_task(
             learning_rate=float(candidate.learning_rate),
             weight_decay=float(getattr(candidate, "weight_decay", 0.0)),
             seed=run_key.seed,
+            batch_plan=_native_batch_plan(len(train_scalar.cell_ids)),
         )
     if run_key.family == "cyclepatch_batlinet":
         batlinet_candidate = cast(CyclePatchBatLiNetCandidate, candidate)
@@ -684,6 +709,7 @@ def _build_training_task(
             learning_rate=float(candidate.learning_rate),
             weight_decay=batlinet_candidate.weight_decay,
             seed=run_key.seed,
+            batch_plan=_native_batch_plan(len(train_scalar.cell_ids)),
         )
     if run_key.family == "current_hybrid":
         return _build_current_hybrid_task(
@@ -697,6 +723,7 @@ def _build_training_task(
         learning_rate=float(candidate.learning_rate),
         weight_decay=float(getattr(candidate, "weight_decay", 0.0)),
         seed=run_key.seed,
+        batch_plan=_native_batch_plan(len(data.hybrid_train.cell_ids)),
     )
 
 
@@ -745,6 +772,25 @@ def _build_current_hybrid_task(data: Any, candidate: CurrentHybridCandidate, see
         hidden_dim=candidate.hidden_dim,
         learning_rate=float(candidate.learning_rate),
         seed=seed,
+        batch_plan=_native_batch_plan(len(train.cell_ids)),
+    )
+
+
+def _native_batch_plan(sample_count: int) -> BatchPlan:
+    if sample_count <= 0:
+        raise ValueError("native training requires at least one cell")
+    micro_batch_size = min(16, sample_count)
+    gradient_accumulation_steps = 4 if sample_count > micro_batch_size else 1
+    micro_batches = math.ceil(sample_count / micro_batch_size)
+    optimizer_steps = math.ceil(micro_batches / gradient_accumulation_steps)
+    return BatchPlan(
+        micro_batch_size=micro_batch_size,
+        visible_gpu_count=1,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        effective_batch_size=micro_batch_size * gradient_accumulation_steps,
+        sample_count=sample_count,
+        last_batch_policy=LastBatchPolicy.KEEP,
+        optimizer_steps_per_epoch=optimizer_steps,
     )
 
 
@@ -812,8 +858,9 @@ def _write_final_test_metrics(
     data: AdvancedFinalMatrData,
     device: torch.device,
 ) -> None:
+    common_cell_ids, cohort_sha256 = _common_final_test_cohort(data)
     batch = (
-        data.scalar_test
+        _select_cycle_life_cells(data.scalar_test, common_cell_ids)
         if family in {"cyclepatch_direct", "cyclepatch_batlinet"}
         else _current_hybrid_batch(
             data.hybrid_test,
@@ -822,6 +869,8 @@ def _write_final_test_metrics(
         if family == "current_hybrid"
         else data.hybrid_test
     )
+    if batch.cell_ids != common_cell_ids:
+        raise ValueError("advanced final models must share one frozen test cohort")
     metrics = task.evaluate(batch, device=device)
     _write_json(
         run_directory / "metrics_test.json",
@@ -830,8 +879,70 @@ def _write_final_test_metrics(
             "family": family,
             "partition": "test",
             "cell_count": len(batch.cell_ids),
+            "cohort_sha256": cohort_sha256,
             "loss": metrics.loss,
             "metrics": metrics.metrics,
+        },
+    )
+
+
+def _common_final_test_cohort(data: Any) -> tuple[tuple[str, ...], str]:
+    scalar_cells = tuple(data.scalar_test.cell_ids)
+    trajectory_cells = tuple(data.hybrid_test.cell_ids)
+    if not trajectory_cells or len(trajectory_cells) != len(set(trajectory_cells)):
+        raise ValueError("advanced final trajectory test cohort is invalid")
+    if not set(trajectory_cells) <= set(scalar_cells):
+        raise ValueError("trajectory test cohort is not covered by scalar supervision")
+    return trajectory_cells, sha256_canonical(trajectory_cells)
+
+
+def _select_cycle_life_cells(
+    batch: AdvancedCycleLifeBatch,
+    cell_ids: tuple[str, ...],
+) -> AdvancedCycleLifeBatch:
+    positions = {cell_id: index for index, cell_id in enumerate(batch.cell_ids)}
+    if any(cell_id not in positions for cell_id in cell_ids):
+        raise ValueError("requested final cohort is absent from scalar test data")
+    indices = torch.tensor(
+        [positions[cell_id] for cell_id in cell_ids],
+        dtype=torch.int64,
+        device=batch.raw_labels.device,
+    )
+    early = batch.early_batch
+    return AdvancedCycleLifeBatch(
+        early_batch=replace(
+            early,
+            cell_ids=cell_ids,
+            values=early.values.index_select(0, indices),
+            cycle_indices=early.cycle_indices.index_select(0, indices),
+            cycle_mask=early.cycle_mask.index_select(0, indices),
+            sample_mask=early.sample_mask.index_select(0, indices),
+            condition_values=early.condition_values.index_select(0, indices),
+            condition_mask=early.condition_mask.index_select(0, indices),
+        ),
+        raw_labels=batch.raw_labels.index_select(0, indices),
+    )
+
+
+def _write_run_manifest(
+    *,
+    run_directory: Path,
+    context: AdvancedCheckpointContext,
+    reference_library_sha256: str | None,
+    final_test_cohort_sha256: str | None,
+) -> None:
+    _write_json(
+        run_directory / "run_manifest.json",
+        {
+            "schema_version": "advanced-native-run-manifest-v1",
+            "run_id": context.run_id,
+            "adapter_version": context.adapter_version,
+            "model_view_sha256": context.model_view_sha256,
+            "normalization_sha256": context.normalization_sha256,
+            "effective_batch_size": context.effective_batch_size,
+            "reference_library_sha256": reference_library_sha256,
+            "final_test_cohort_sha256": final_test_cohort_sha256,
+            "context_sha256": sha256_canonical(context.model_dump(mode="json")),
         },
     )
 
@@ -845,11 +956,29 @@ def _load_registered_inputs(
     split = SplitManifest.model_validate_json(split_path.read_bytes())
     if manifest.combined_split_manifest != config.paths.split_manifest:
         raise ValueError("advanced MATR manifest and config split path differ")
+    view_roots_by_cutoff = {
+        cutoff: resolve_native_matr_view_roots(root, cutoff_cycle=cutoff)
+        for cutoff in config.cutoffs
+    }
+    for roots in view_roots_by_cutoff.values():
+        scalar_view = verify_model_view(roots.scalar_root)
+        trajectory_view = verify_model_view(roots.trajectory_root)
+        if scalar_view.split_sha256 != manifest.combined_split_sha256 or (
+            trajectory_view.split_sha256 != manifest.combined_split_sha256
+        ):
+            raise ValueError("advanced MATR model Views and registered split differ")
+    model_view_bundle_sha = sha256_canonical(
+        {
+            str(cutoff): roots.model_view_sha256
+            for cutoff, roots in sorted(view_roots_by_cutoff.items())
+        }
+    )
     input_bundle_sha = sha256_canonical(
         {
             "manifest_sha256": _sha256_file(manifest_path),
             "split_sha256": _sha256_file(split_path),
             "config_sha256": config.config_sha256,
+            "model_view_bundle_sha256": model_view_bundle_sha,
         }
     )
     return _RegisteredInputs(
@@ -859,6 +988,29 @@ def _load_registered_inputs(
         data_version=manifest.data_version,
         split_version=manifest.split_version,
         source_commit=_source_commit(root),
+        view_roots_by_cutoff=view_roots_by_cutoff,
+        model_view_bundle_sha256=model_view_bundle_sha,
+    )
+
+
+def _registered_view_roots(
+    root: Path,
+    registered: Any,
+    cutoff_cycle: int,
+) -> NativeMatrViewRoots:
+    by_cutoff = getattr(registered, "view_roots_by_cutoff", None)
+    if isinstance(by_cutoff, Mapping):
+        try:
+            value = by_cutoff[cutoff_cycle]
+        except KeyError as exc:
+            raise ValueError("registered model View cutoff is unavailable") from exc
+        if not isinstance(value, NativeMatrViewRoots):
+            raise ValueError("registered model View roots are invalid")
+        return value
+    return NativeMatrViewRoots(
+        scalar_root=root / "unused-scalar-view",
+        trajectory_root=root / "unused-trajectory-view",
+        model_view_sha256="f" * 64,
     )
 
 
@@ -881,6 +1033,16 @@ def _reference_hash(task: Any) -> str | None:
     value = getattr(library, "library_sha256", None)
     if not isinstance(value, str) or len(value) != 64:
         raise ValueError("BatLiNet reference library is missing its registered hash")
+    return value
+
+
+def _effective_batch_size(task: Any) -> int | None:
+    plan = getattr(task, "batch_plan", None)
+    value = getattr(plan, "effective_batch_size", None)
+    if value is None:
+        return None
+    if not isinstance(value, int) or value <= 0:
+        raise ValueError("native task effective batch size is invalid")
     return value
 
 

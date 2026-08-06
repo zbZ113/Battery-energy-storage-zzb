@@ -11,11 +11,21 @@
     },
     {
       "slug": "diting-code",
-      "kind": "manual",
+      "kind": "git",
       "rank": 1,
       "title": "DITING official code",
-      "url": "https://openreview.net/forum?id=IMH7K8Jn6A",
-      "notes": "截至2026-07-19未发现作者公开的官方代码仓库；不得用非官方实现冒充。"
+      "url": "https://github.com/PHM-Batt/DITING.git",
+      "destination": "upstream/DITING",
+      "notes": "作者已公开官方GitHub仓库；当前仓库较新，复现前需独立审计许可证、数据划分和依赖。"
+    },
+    {
+      "slug": "pbt-code",
+      "kind": "git",
+      "rank": 1,
+      "title": "Pretrained Battery Transformer official repository",
+      "url": "https://github.com/Ruifeng-Tan/PBT.git",
+      "destination": "upstream/PBT",
+      "notes": "早期cycle-life主模型候选；不得直接加载未经清单与SHA-256核验的预训练制品或序列化嵌入。"
     },
     {
       "slug": "batterymformer-code",
@@ -176,6 +186,38 @@
       "url": "https://github.com/microsoft/BatteryML.git",
       "destination": "upstream/BatteryML",
       "notes": "基础设施和经典基线参考，不计入Top 10模型名次。"
+    },
+    {
+      "slug": "magnet-code",
+      "kind": "git",
+      "title": "MAGNet official repository",
+      "url": "https://github.com/Ruifeng-Tan/MAGNet.git",
+      "destination": "upstream/MAGNet",
+      "notes": "跨工况退化轨迹与域泛化研究候选，不自动进入正式模型路由。"
+    },
+    {
+      "slug": "blast-lite-code",
+      "kind": "git",
+      "title": "BLAST-Lite official repository",
+      "url": "https://github.com/NREL/BLAST-Lite.git",
+      "destination": "upstream/BLAST-Lite",
+      "notes": "大型方形LFP循环与日历工况推演参考；长期输出仅作为带假设的情景推演。"
+    },
+    {
+      "slug": "battgp-code",
+      "kind": "git",
+      "title": "BattGP official repository",
+      "url": "https://github.com/JoachimSchaeffer/BattGP.git",
+      "destination": "upstream/BattGP",
+      "notes": "与160Ah现场LFP系统数据配套，用于在线健康监测与异常分析，不等同于EOL预测。"
+    },
+    {
+      "slug": "smart-feature-identification-code",
+      "kind": "git",
+      "title": "Smart Feature Identification official repository",
+      "url": "https://github.com/Edward74751/Smart-Feature-Identification.git",
+      "destination": "upstream/Smart-Feature-Identification",
+      "notes": "与40Ah/280Ah数据配套的短充电片段SOH特征方法；MATLAB研究代码需隔离审计。"
     },
     {
       "slug": "world-model-paper",

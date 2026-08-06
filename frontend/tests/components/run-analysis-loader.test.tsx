@@ -5,15 +5,18 @@ import { RunAnalysisLoader } from "@/components/run-analysis-loader";
 import type { AgentRunRecord, AgentRunResultRecord } from "@/lib/types";
 
 vi.mock("@/components/single-cell-analysis", () => ({
-  SingleCellAnalysis: ({ projectId, recordBatchId, resultIds, runTerminal, showEvidence }: {
+  SingleCellAnalysis: ({ projectId, recordBatchId, resultIds, runCompleted, runId, runTerminal, showEvidence, toolResultIds }: {
     projectId: string;
     recordBatchId: string;
     resultIds: Record<string, string | null>;
+    runCompleted?: boolean;
+    runId?: string;
     runTerminal?: boolean;
     showEvidence?: boolean;
+    toolResultIds?: string[];
   }) => (
     <div data-testid="analysis">
-      {projectId}|{recordBatchId}|{JSON.stringify(resultIds)}|terminal={String(runTerminal)}|evidence={String(showEvidence)}
+      {projectId}|{recordBatchId}|{runId}|{JSON.stringify(resultIds)}|toolResults={JSON.stringify(toolResultIds)}|completed={String(runCompleted)}|terminal={String(runTerminal)}|evidence={String(showEvidence)}
     </div>
   ),
 }));
@@ -70,6 +73,11 @@ describe("RunAnalysisLoader", () => {
     expect(loadResults).toHaveBeenCalledWith("run-1");
     expect(await screen.findByTestId("analysis")).toHaveTextContent("project-1|record-batch-1");
     expect(screen.getByTestId("analysis")).toHaveTextContent('"reportResultId":"report-result"');
+    expect(screen.getByTestId("analysis")).toHaveTextContent("project-1|record-batch-1|run-1");
+    expect(screen.getByTestId("analysis")).toHaveTextContent("completed=true");
+    expect(screen.getByTestId("analysis")).toHaveTextContent(
+      'toolResults=["00000000-0000-4000-8000-000000000010"]',
+    );
     expect(screen.getByTestId("analysis")).toHaveTextContent("terminal=true");
     expect(screen.getByTestId("analysis")).toHaveTextContent("evidence=false");
     expect(screen.getByRole("heading", { name: "九步 ToolResult 证据目录" })).toBeInTheDocument();

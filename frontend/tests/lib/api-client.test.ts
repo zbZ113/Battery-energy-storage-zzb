@@ -4,6 +4,7 @@ import {
   apiRequest,
   approveAgentRun,
   changePassword,
+  createProjectReportExports,
   createAdvancedCalibrationMaterialization,
   createAdvancedAnalysis,
   createAgentRun,
@@ -11,6 +12,7 @@ import {
   getCurrentPrincipal,
   getAgentRunResult,
   getProjectResult,
+  getProjectReportExports,
   invokeProjectTool,
   listActiveModelRoutes,
   listAdvancedCalibrationMaterializations,
@@ -20,6 +22,8 @@ import {
   listProjectDatasets,
   logout,
   rejectAgentRun,
+  projectReportExportDownloadUrl,
+  projectToolResultDownloadUrl,
   resolveApiBaseUrl,
 } from "@/lib/api-client";
 
@@ -255,9 +259,95 @@ describe("apiRequest", () => {
     ]);
   });
 
+  it("creates and reads a run-scoped report export catalog", async () => {
+    const catalog = readyReportCatalog();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(catalog, 202))
+      .mockResolvedValueOnce(jsonResponse(catalog));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createProjectReportExports("project/1", "run/1", "report/1");
+    await getProjectReportExports("project/1", "run/1", "report/1");
+
+    const expectedUrl =
+      "http://localhost:8000/v1/projects/project%2F1/agent/runs/run%2F1/reports/report%2F1/exports";
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([expectedUrl, expectedUrl]);
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+    }));
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
+      credentials: "include",
+      cache: "no-store",
+    }));
+  });
+
+  it("builds ordinary encoded download links from the complete report identity", () => {
+    expect(projectReportExportDownloadUrl(
+      "project/1",
+      "run/1",
+      "report/1",
+      "soh_csv",
+    )).toBe(
+      "http://localhost:8000/v1/projects/project%2F1/agent/runs/run%2F1/reports/report%2F1/exports/soh_csv",
+    );
+    expect(projectToolResultDownloadUrl(
+      "project/1",
+      "run/1",
+      "report/1",
+      "result/1",
+    )).toBe(
+      "http://localhost:8000/v1/projects/project%2F1/agent/runs/run%2F1/reports/report%2F1/exports/tool-results/result%2F1.json",
+    );
+  });
+
+  it("rejects incomplete READY export metadata at the API boundary", async () => {
+    const catalog = readyReportCatalog();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({
+        ...catalog,
+        exports: [{ ...catalog.exports[0], sha256: null }],
+      })),
+    );
+
+    await expect(
+      getProjectReportExports("project-1", "run-1", "report-result"),
+    ).rejects.toThrow("invalid project report export catalog");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ ...catalog, status: "EXPIRED" })),
+    );
+    await expect(
+      getProjectReportExports("project-1", "run-1", "report-result"),
+    ).rejects.toThrow("invalid project report export catalog");
+  });
+
   it("rejects an unsafe or missing production API origin", () => {
     expect(() => resolveApiBaseUrl(undefined, "production")).toThrow("NEXT_PUBLIC_API_BASE_URL");
     expect(() => resolveApiBaseUrl("http://api.example.com", "production")).toThrow("HTTPS");
+    expect(() => resolveApiBaseUrl(
+      "http://localhost:8080",
+      "production",
+    )).toThrow("HTTPS");
+    expect(resolveApiBaseUrl(
+      "http://localhost:8080",
+      "production",
+      "local",
+    )).toBe("http://localhost:8080");
+    expect(() => resolveApiBaseUrl(
+      "http://192.168.1.2:8080",
+      "production",
+      "local",
+    )).toThrow("本机");
+    expect(() => resolveApiBaseUrl(
+      "http://localhost:8080",
+      "production",
+      "preview",
+    )).toThrow("运行配置");
     expect(resolveApiBaseUrl("http://localhost:8000", "development")).toBe(
       "http://localhost:8000",
     );
@@ -424,4 +514,30 @@ function jsonResponse(payload: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function readyReportCatalog() {
+  return {
+    report_id: "report-1",
+    project_id: "project/1",
+    run_id: "run/1",
+    report_result_id: "report/1",
+    status: "READY",
+    template_version: "advanced-cell-report-template-v1",
+    created_at: "2026-08-03T08:00:00Z",
+    completed_at: "2026-08-03T08:01:00Z",
+    exports: [{
+      export_id: "export-1",
+      report_id: "report-1",
+      format: "markdown",
+      status: "READY",
+      filename: "report.md",
+      media_type: "text/markdown; charset=utf-8",
+      size_bytes: 128,
+      sha256: "a".repeat(64),
+      created_at: "2026-08-03T08:00:00Z",
+      completed_at: "2026-08-03T08:01:00Z",
+      expires_at: "2026-08-04T08:01:00Z",
+    }],
+  };
 }

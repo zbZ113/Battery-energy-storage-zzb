@@ -16,8 +16,9 @@ import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import functional
+from torch.utils.data import DataLoader
 
-from quanxin_life.core import PredictionTarget
+from quanxin_life.core import LastBatchPolicy, PredictionTarget
 from quanxin_life.core.hashing import sha256_canonical
 from quanxin_life.data.schemas import SplitManifest
 from quanxin_life.models.batlinet import (
@@ -38,6 +39,11 @@ from quanxin_life.models.hybridpatch_v2 import (
     HybridPatchV2Predictor,
     HybridPatchV2Targets,
     compute_hybridpatch_v2_loss,
+)
+from quanxin_life.training.batching import (
+    BatchPlan,
+    normalize_accumulated_gradients,
+    scale_mean_loss_by_sample_count,
 )
 from quanxin_life.training.engine import EpochMetrics, Scheduler
 
@@ -135,6 +141,7 @@ class CyclePatchDirectTrainingTask:
         learning_rate: float,
         seed: int,
         weight_decay: float = 0.0,
+        batch_plan: BatchPlan | None = None,
     ) -> None:
         _validate_optimizer_inputs(learning_rate, weight_decay)
         supervised_split = _derive_supervised_split(
@@ -157,6 +164,17 @@ class CyclePatchDirectTrainingTask:
         self._train_batch = train_batch
         self._validation_batch = validation_batch
         self._train_standardized = self.target_scaler.transform(train_batch.raw_labels)
+        self.batch_plan = batch_plan or BatchPlan(
+            micro_batch_size=len(train_batch.cell_ids),
+            visible_gpu_count=1,
+            gradient_accumulation_steps=1,
+            effective_batch_size=len(train_batch.cell_ids),
+            sample_count=len(train_batch.cell_ids),
+            last_batch_policy=LastBatchPolicy.ERROR,
+            optimizer_steps_per_epoch=1,
+        )
+        if self.batch_plan.sample_count != len(train_batch.cell_ids):
+            raise ValueError("CyclePatch Direct batch plan sample_count must match train cells")
         self._model = CyclePatchLifeRegressor(
             config,
             condition_count=len(train_batch.early_batch.condition_names),
@@ -200,16 +218,47 @@ class CyclePatchDirectTrainingTask:
         del epoch
         batches = self._batches_for_device(device)
         self._model.train()
-        self._optimizer.zero_grad(set_to_none=True)
-        prediction = self._model(batches.train_early)
-        loss = functional.smooth_l1_loss(
-            prediction, batches.train_standardized, beta=1.0
+        loader: DataLoader[Tensor] = DataLoader(
+            range(len(self._train_batch.cell_ids)),  # type: ignore[arg-type]
+            batch_size=(
+                self.batch_plan.micro_batch_size * self.batch_plan.visible_gpu_count
+            ),
+            shuffle=False,
+            drop_last=self.batch_plan.last_batch_policy is LastBatchPolicy.DROP,
         )
-        _require_finite_loss(loss)
-        loss.backward()  # type: ignore[no-untyped-call]
-        torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
-        self._optimizer.step()
-        return EpochMetrics(loss=_as_float(loss))
+        self._optimizer.zero_grad(set_to_none=True)
+        weighted_loss = 0.0
+        observed_cells = 0
+        optimizer_steps = 0
+        window_cells = 0
+        micro_batches = tuple(loader)
+        for micro_index, indices in enumerate(micro_batches, start=1):
+            indexed = indices.to(dtype=torch.int64, device=device)
+            prediction = self._model(_index_early_batch(batches.train_early, indexed))
+            target = batches.train_standardized.index_select(0, indexed)
+            loss = functional.smooth_l1_loss(prediction, target, beta=1.0)
+            _require_finite_loss(loss)
+            batch_cells = int(indexed.numel())
+            scaled = scale_mean_loss_by_sample_count(loss, sample_count=batch_cells)
+            scaled.backward()  # type: ignore[no-untyped-call]
+            window_cells += batch_cells
+            weighted_loss += _as_float(loss) * batch_cells
+            observed_cells += batch_cells
+            if (
+                micro_index % self.batch_plan.gradient_accumulation_steps == 0
+                or micro_index == len(micro_batches)
+            ):
+                normalize_accumulated_gradients(
+                    self._model.parameters(), sample_count=window_cells
+                )
+                torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
+                self._optimizer.step()
+                self._optimizer.zero_grad(set_to_none=True)
+                window_cells = 0
+                optimizer_steps += 1
+        if optimizer_steps != self.batch_plan.optimizer_steps_per_epoch:
+            raise RuntimeError("CyclePatch Direct optimizer steps differ from BatchPlan")
+        return EpochMetrics(loss=weighted_loss / observed_cells)
 
     def validate(self, epoch: int, *, device: torch.device) -> EpochMetrics:
         del epoch
@@ -242,6 +291,7 @@ class CyclePatchBatLiNetTrainingTask:
         learning_rate: float,
         seed: int,
         weight_decay: float = 0.0,
+        batch_plan: BatchPlan | None = None,
     ) -> None:
         _validate_optimizer_inputs(learning_rate, weight_decay)
         supervised_split = _derive_supervised_split(
@@ -306,6 +356,17 @@ class CyclePatchBatLiNetTrainingTask:
         self._train_batch = train_batch
         self._validation_batch = validation_batch
         self._train_standardized = target_scaler.transform(train_batch.raw_labels)
+        self.batch_plan = batch_plan or BatchPlan(
+            micro_batch_size=len(train_batch.cell_ids),
+            visible_gpu_count=1,
+            gradient_accumulation_steps=1,
+            effective_batch_size=len(train_batch.cell_ids),
+            sample_count=len(train_batch.cell_ids),
+            last_batch_policy=LastBatchPolicy.ERROR,
+            optimizer_steps_per_epoch=1,
+        )
+        if self.batch_plan.sample_count != len(train_batch.cell_ids):
+            raise ValueError("BatLiNet batch plan sample_count must match train cells")
         self._reference_indices = reference_indices
         self._reference_labels = reference_labels
         self._model = CyclePatchBatLiNet(
@@ -355,24 +416,60 @@ class CyclePatchBatLiNetTrainingTask:
         assert batches.reference_indices is not None
         assert batches.reference_labels is not None
         self._model.train()
+        loader: DataLoader[Tensor] = DataLoader(
+            range(len(self._train_batch.cell_ids)),  # type: ignore[arg-type]
+            batch_size=(
+                self.batch_plan.micro_batch_size * self.batch_plan.visible_gpu_count
+            ),
+            shuffle=False,
+            drop_last=self.batch_plan.last_batch_policy is LastBatchPolicy.DROP,
+        )
         self._optimizer.zero_grad(set_to_none=True)
-        train_embeddings = self._model.encode(batches.train_early)
-        reference_embeddings = train_embeddings.index_select(
-            0, batches.reference_indices
+        reference_early = _index_early_batch(
+            batches.train_early,
+            batches.reference_indices,
         )
-        loss = self._model.loss(
-            CycleLifePairBatch(
-                target_embeddings=train_embeddings,
-                target_labels=batches.train_standardized,
-                reference_embeddings=reference_embeddings,
-                reference_labels=batches.reference_labels,
+        weighted_loss = 0.0
+        observed_cells = 0
+        optimizer_steps = 0
+        window_cells = 0
+        micro_batches = tuple(loader)
+        for micro_index, indices in enumerate(micro_batches, start=1):
+            indexed = indices.to(dtype=torch.int64, device=device)
+            target_embeddings = self._model.encode(
+                _index_early_batch(batches.train_early, indexed)
             )
-        )
-        _require_finite_loss(loss)
-        loss.backward()  # type: ignore[no-untyped-call]
-        torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
-        self._optimizer.step()
-        return EpochMetrics(loss=_as_float(loss))
+            reference_embeddings = self._model.encode(reference_early)
+            loss = self._model.loss(
+                CycleLifePairBatch(
+                    target_embeddings=target_embeddings,
+                    target_labels=batches.train_standardized.index_select(0, indexed),
+                    reference_embeddings=reference_embeddings,
+                    reference_labels=batches.reference_labels,
+                )
+            )
+            _require_finite_loss(loss)
+            batch_cells = int(indexed.numel())
+            scaled = scale_mean_loss_by_sample_count(loss, sample_count=batch_cells)
+            scaled.backward()  # type: ignore[no-untyped-call]
+            window_cells += batch_cells
+            weighted_loss += _as_float(loss) * batch_cells
+            observed_cells += batch_cells
+            if (
+                micro_index % self.batch_plan.gradient_accumulation_steps == 0
+                or micro_index == len(micro_batches)
+            ):
+                normalize_accumulated_gradients(
+                    self._model.parameters(), sample_count=window_cells
+                )
+                torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
+                self._optimizer.step()
+                self._optimizer.zero_grad(set_to_none=True)
+                window_cells = 0
+                optimizer_steps += 1
+        if optimizer_steps != self.batch_plan.optimizer_steps_per_epoch:
+            raise RuntimeError("BatLiNet optimizer steps differ from BatchPlan")
+        return EpochMetrics(loss=weighted_loss / observed_cells)
 
     def validate(self, epoch: int, *, device: torch.device) -> EpochMetrics:
         del epoch
@@ -417,6 +514,7 @@ class HybridPatchV2TrainingTask:
         learning_rate: float,
         seed: int,
         weight_decay: float = 0.0,
+        batch_plan: BatchPlan | None = None,
     ) -> None:
         _validate_optimizer_inputs(learning_rate, weight_decay)
         supervised_split = _derive_trajectory_supervised_split(
@@ -430,6 +528,17 @@ class HybridPatchV2TrainingTask:
         self._train_batch = train_batch
         self._validation_batch = validation_batch
         self._config = config
+        self.batch_plan = batch_plan or BatchPlan(
+            micro_batch_size=len(train_batch.cell_ids),
+            visible_gpu_count=1,
+            gradient_accumulation_steps=1,
+            effective_batch_size=len(train_batch.cell_ids),
+            sample_count=len(train_batch.cell_ids),
+            last_batch_policy=LastBatchPolicy.ERROR,
+            optimizer_steps_per_epoch=1,
+        )
+        if self.batch_plan.sample_count != len(train_batch.cell_ids):
+            raise ValueError("HybridPatch batch plan sample_count must match train cells")
         self._model = HybridPatchV2Predictor(
             config,
             condition_count=len(train_batch.inputs.early_batch.condition_names),
@@ -469,23 +578,66 @@ class HybridPatchV2TrainingTask:
         del epoch
         batch = self._batches_for_device(device).train
         self._model.train()
-        self._optimizer.zero_grad(set_to_none=True)
-        output = self._model(batch.inputs)
-        loss = compute_hybridpatch_v2_loss(
-            output, batch.targets, batch.inputs, self._config
+        loader: DataLoader[Tensor] = DataLoader(
+            range(len(self._train_batch.cell_ids)),  # type: ignore[arg-type]
+            batch_size=(
+                self.batch_plan.micro_batch_size * self.batch_plan.visible_gpu_count
+            ),
+            shuffle=False,
+            drop_last=self.batch_plan.last_batch_policy is LastBatchPolicy.DROP,
         )
-        _require_finite_loss(loss.total)
-        loss.total.backward()  # type: ignore[no-untyped-call]
-        torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
-        self._optimizer.step()
+        self._optimizer.zero_grad(set_to_none=True)
+        totals = {
+            "total": 0.0,
+            "trajectory": 0.0,
+            "history": 0.0,
+            "smooth": 0.0,
+            "order": 0.0,
+            "residual": 0.0,
+        }
+        observed_cells = 0
+        optimizer_steps = 0
+        window_cells = 0
+        micro_batches = tuple(loader)
+        for micro_index, indices in enumerate(micro_batches, start=1):
+            indexed = indices.to(dtype=torch.int64, device=device)
+            micro_batch = _index_trajectory_batch(batch, indexed)
+            output = self._model(micro_batch.inputs)
+            loss = compute_hybridpatch_v2_loss(
+                output,
+                micro_batch.targets,
+                micro_batch.inputs,
+                self._config,
+            )
+            _require_finite_loss(loss.total)
+            batch_cells = int(indexed.numel())
+            scaled = scale_mean_loss_by_sample_count(
+                loss.total, sample_count=batch_cells
+            )
+            scaled.backward()  # type: ignore[no-untyped-call]
+            window_cells += batch_cells
+            observed_cells += batch_cells
+            for name in totals:
+                totals[name] += _as_float(getattr(loss, name)) * batch_cells
+            if (
+                micro_index % self.batch_plan.gradient_accumulation_steps == 0
+                or micro_index == len(micro_batches)
+            ):
+                normalize_accumulated_gradients(
+                    self._model.parameters(), sample_count=window_cells
+                )
+                torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=1.0)
+                self._optimizer.step()
+                self._optimizer.zero_grad(set_to_none=True)
+                window_cells = 0
+                optimizer_steps += 1
+        if optimizer_steps != self.batch_plan.optimizer_steps_per_epoch:
+            raise RuntimeError("HybridPatch optimizer steps differ from BatchPlan")
         return EpochMetrics(
-            loss=_as_float(loss.total),
+            loss=totals["total"] / observed_cells,
             metrics={
-                "trajectory": _as_float(loss.trajectory),
-                "history": _as_float(loss.history),
-                "smooth": _as_float(loss.smooth),
-                "order": _as_float(loss.order),
-                "residual": _as_float(loss.residual),
+                name: totals[name] / observed_cells
+                for name in ("trajectory", "history", "smooth", "order", "residual")
             },
         )
 
@@ -652,6 +804,24 @@ def _label_mapping(batch: AdvancedCycleLifeBatch) -> dict[str, float]:
     }
 
 
+def _index_early_batch(batch: EarlyCycleBatch, indices: Tensor) -> EarlyCycleBatch:
+    positions = tuple(int(value) for value in indices.detach().cpu().tolist())
+    return EarlyCycleBatch(
+        dataset_id=batch.dataset_id,
+        data_version=batch.data_version,
+        feature_version=batch.feature_version,
+        normalization_statistics_sha256=batch.normalization_statistics_sha256,
+        cell_ids=tuple(batch.cell_ids[index] for index in positions),
+        condition_names=batch.condition_names,
+        values=batch.values.index_select(0, indices),
+        cycle_indices=batch.cycle_indices.index_select(0, indices),
+        cycle_mask=batch.cycle_mask.index_select(0, indices),
+        sample_mask=batch.sample_mask.index_select(0, indices),
+        condition_values=batch.condition_values.index_select(0, indices),
+        condition_mask=batch.condition_mask.index_select(0, indices),
+    )
+
+
 def _move_early_batch(batch: EarlyCycleBatch, device: torch.device) -> EarlyCycleBatch:
     return EarlyCycleBatch(
         dataset_id=batch.dataset_id,
@@ -684,6 +854,25 @@ def _move_trajectory_batch(
         target_mask=batch.targets.target_mask.to(device=device),
     )
     return AdvancedTrajectoryBatch(inputs=inputs, targets=targets)
+
+
+def _index_trajectory_batch(
+    batch: AdvancedTrajectoryBatch,
+    indices: Tensor,
+) -> AdvancedTrajectoryBatch:
+    return AdvancedTrajectoryBatch(
+        inputs=HybridPatchV2Inputs(
+            early_batch=_index_early_batch(batch.inputs.early_batch, indices),
+            initial_soh=batch.inputs.initial_soh.index_select(0, indices),
+            prediction_cycles=batch.inputs.prediction_cycles,
+        ),
+        targets=HybridPatchV2Targets(
+            history_soh=batch.targets.history_soh.index_select(0, indices),
+            history_mask=batch.targets.history_mask.index_select(0, indices),
+            target_soh=batch.targets.target_soh.index_select(0, indices),
+            target_mask=batch.targets.target_mask.index_select(0, indices),
+        ),
+    )
 
 
 def _raw_cycle_metrics(prediction: Tensor, target: Tensor) -> dict[str, float]:

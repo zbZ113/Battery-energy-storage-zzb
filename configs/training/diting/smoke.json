@@ -1,0 +1,41 @@
+{
+  "schema_version": "diting-offline-training-v1",
+  "mode": "smoke",
+  "enabled": false,
+  "blocked_reasons": ["BLOCKED_DATA_VIEW", "BLOCKED_DEPENDENCY"],
+  "promotion_blocked_reasons": ["BLOCKED_LICENSE"],
+  "adapter_version": "diting-offline-v1",
+  "upstream_commit": "b67f48373c591ca62c030fca257ee94910c974ce",
+  "license_status": "RESEARCH_ONLY_LICENSE_UNVERIFIED",
+  "dependency_status": "BLOCKED_DEPENDENCY",
+  "dataset_ids": ["MATR", "HUST"],
+  "model_view_version": "multi-domain-early-life-v1",
+  "cutoff_cycle": 100,
+  "runtime_dependencies": ["torch", "safetensors"],
+  "loss_names": ["prediction", "source", "target", "mmd_domain"],
+  "shot_cell_manifests": {
+    "zero_shot": {"adaptation": "hust-zero-shot-adaptation-cells.json", "test": "hust-zero-shot-test-cells.json"},
+    "five_shot": {"adaptation": "hust-five-shot-adaptation-cells.json", "test": "hust-five-shot-test-cells.json"},
+    "ten_shot": {"adaptation": "hust-ten-shot-adaptation-cells.json", "test": "hust-ten-shot-test-cells.json"}
+  },
+  "source_training_cells_manifest": "hust-source-training-cells.json",
+  "early_stopping_cells_manifest": "matr-source-validation-cells.json",
+  "model": {
+    "d_model": 128,
+    "n_heads": 4,
+    "encoder_layers": 12,
+    "d_ff": 256,
+    "dropout": 0.0
+  },
+  "optimization": {
+    "optimizer": "adam",
+    "learning_rate": 0.00005,
+    "weight_decay": 0.0,
+    "domain_loss_weight": 1.0,
+    "micro_batch_size": 32,
+    "visible_gpu_count": 1,
+    "gradient_accumulation_steps": 2,
+    "effective_batch_size": 64,
+    "max_epochs": 10
+  }
+}

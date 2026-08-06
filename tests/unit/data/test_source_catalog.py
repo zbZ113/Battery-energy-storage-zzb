@@ -50,9 +50,46 @@ def test_three_reviewed_matr_raw_manifests_are_registered() -> None:
         manifest = RawFileManifest.model_validate_json(path.read_bytes())
         assert manifest.relative_path == name
         assert manifest.sha256 == sha256
-        raw_path = Path("data", name)
-        if raw_path.exists():
-            assert raw_path.stat().st_size == size_bytes
+        raw_path = Path("data", "raw", "MATR", "v1", name)
+        assert raw_path.stat().st_size == size_bytes
+
+
+def test_catalog_registers_all_eight_domains_with_audited_artifacts() -> None:
+    catalog = SourceCatalog.load(Path("configs/data_sources.json"))
+
+    expected = {
+        "MATR",
+        "HUST",
+        "NAUMANN_CYCLE",
+        "NAUMANN_CALENDAR",
+        "LFP_280AH_DOD",
+        "LFP_280AH_TEMPEST",
+        "LFP_180AH_FORKLIFT",
+        "LFP_FIELD_160AH",
+    }
+    assert {entry.dataset_id for entry in catalog.entries} == expected
+    for entry in catalog.entries:
+        assert entry.downloaded_at.tzinfo is not None
+        assert entry.artifact_paths
+        assert len(entry.artifact_paths) == len(entry.artifact_sha256)
+        assert all(path.startswith("data/raw/") for path in entry.artifact_paths)
+        assert entry.source_uri.startswith("https://")
+
+
+def test_naumann_v2_manifest_uses_versioned_raw_layout() -> None:
+    payload = json.loads(
+        Path("configs/data_manifests/naumann_public_files_v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert payload["manifest_version"] == "naumann-public-files-local-audit-v2"
+    assert all(
+        item["relative_path"].startswith(
+            f"data/raw/{item['dataset_id']}/v1/"
+        )
+        for item in payload["files"]
+    )
 
 
 def test_catalog_rejects_duplicate_dataset_ids(tmp_path: Path) -> None:
@@ -65,6 +102,9 @@ def test_catalog_rejects_duplicate_dataset_ids(tmp_path: Path) -> None:
         "license_status": "must_verify_before_download",
         "ingestion_mode": "hdf5",
         "expected_suffixes": [".mat"],
+        "downloaded_at": "2026-08-04T00:00:00Z",
+        "artifact_paths": ["data/raw/MATR/v1/example.mat"],
+        "artifact_sha256": ["a" * 64],
     }
     path.write_text(json.dumps([entry, entry]), encoding="utf-8")
 
@@ -82,4 +122,7 @@ def test_quarantine_mode_requires_prohibited_suffix() -> None:
             license_status="must_verify_before_download",
             ingestion_mode=IngestionMode.QUARANTINE_CONVERSION,
             expected_suffixes=(".zip",),
+            downloaded_at="2026-08-04T00:00:00Z",
+            artifact_paths=("data/raw/HUST/v2/our_data.zip",),
+            artifact_sha256=("a" * 64,),
         )

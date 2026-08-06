@@ -6,6 +6,7 @@ import {
   type SingleCellResultIds,
 } from "@/components/single-cell-analysis";
 import type { ToolResult } from "@/lib/types";
+import type { ProjectReportExportCatalog } from "@/lib/api-client";
 
 const resultIds: SingleCellResultIds = {
   reportResultId: "report-result",
@@ -351,6 +352,155 @@ describe("SingleCellAnalysis", () => {
     expect(screen.getAllByText("已签发工具结果")).toHaveLength(5);
   });
 
+  it("dispatches once, polls pending exports, and renders only complete READY links", async () => {
+    const results = validResults();
+    const loadResult = vi.fn(
+      async (_projectId: string, resultId: string) => results[resultId],
+    );
+    const pending = reportCatalog("PENDING", [
+      reportExport("markdown", "PENDING"),
+      reportExport("pdf", "PENDING"),
+    ]);
+    const ready = reportCatalog("READY", [
+      reportExport("markdown", "READY"),
+      reportExport("pdf", "READY"),
+      reportExport("docx", "FAILED"),
+    ]);
+    const createExports = vi.fn().mockResolvedValue(pending);
+    const loadExports = vi.fn().mockResolvedValue(ready);
+
+    render(
+      <SingleCellAnalysis
+        createReportExports={createExports}
+        exportPollIntervalMs={1}
+        loadReportExports={loadExports}
+        loadResult={loadResult}
+        projectId="project-1"
+        recordBatchId="batch-1"
+        resultIds={resultIds}
+        runCompleted
+        runId="run-export-1"
+        runTerminal
+        toolResultIds={["tool-result-1", "tool-result-2"]}
+      />,
+    );
+
+    await waitFor(() => expect(loadExports).toHaveBeenCalledTimes(1));
+    expect(createExports).toHaveBeenCalledTimes(1);
+    expect(createExports).toHaveBeenCalledWith(
+      "project-1",
+      "run-export-1",
+      "report-result",
+    );
+    expect(loadExports).toHaveBeenCalledWith(
+      "project-1",
+      "run-export-1",
+      "report-result",
+    );
+
+    const markdown = await screen.findByRole("link", { name: /Markdown/ });
+    expect(markdown).toHaveAttribute(
+      "href",
+      "http://localhost:8000/v1/projects/project-1/agent/runs/run-export-1/reports/report-result/exports/markdown",
+    );
+    expect(markdown).toHaveAttribute("download", "report-markdown.md");
+    expect(screen.getByRole("link", { name: /PDF/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /DOCX/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "下载 ToolResult 1 JSON" })).toHaveAttribute(
+      "href",
+      "http://localhost:8000/v1/projects/project-1/agent/runs/run-export-1/reports/report-result/exports/tool-results/tool-result-1.json",
+    );
+    expect(screen.getByRole("link", { name: "下载 ToolResult 2 JSON" })).toBeInTheDocument();
+    const downloadCenter = screen.getByRole("region", { name: "报告下载中心" });
+    expect(downloadCenter).toHaveTextContent("128 B");
+    expect(downloadCenter).toHaveTextContent("a".repeat(64));
+    expect(downloadCenter).toHaveTextContent("2026-08-04T08:01:00Z");
+  });
+
+  it("reports a failed server export job instead of presenting an empty catalog", async () => {
+    const results = validResults();
+    const failed = reportCatalog("FAILED", [reportExport("markdown", "FAILED")]);
+    render(
+      <SingleCellAnalysis
+        createReportExports={vi.fn().mockResolvedValue(failed)}
+        loadReportExports={vi.fn()}
+        loadResult={vi.fn(async (_projectId: string, resultId: string) => results[resultId])}
+        projectId="project-1"
+        recordBatchId="batch-1"
+        resultIds={resultIds}
+        runCompleted
+        runId="run-export-1"
+        runTerminal
+      />,
+    );
+
+    expect(await screen.findByRole("alert", { name: "导出任务失败" })).toHaveTextContent(
+      "服务端未能生成报告",
+    );
+  });
+
+  it("fails closed when a catalog identity does not match the validated run", async () => {
+    const results = validResults();
+    const loadResult = vi.fn(
+      async (_projectId: string, resultId: string) => results[resultId],
+    );
+    const createExports = vi.fn().mockResolvedValue({
+      ...reportCatalog("READY", [reportExport("markdown", "READY")]),
+      run_id: "another-run",
+    });
+
+    render(
+      <SingleCellAnalysis
+        createReportExports={createExports}
+        loadReportExports={vi.fn()}
+        loadResult={loadResult}
+        projectId="project-1"
+        recordBatchId="batch-1"
+        resultIds={resultIds}
+        runCompleted
+        runId="run-export-mismatch"
+        runTerminal
+      />,
+    );
+
+    expect(await screen.findByRole("alert", { name: "下载错误" })).toHaveTextContent(
+      "导出目录身份核验失败",
+    );
+    expect(screen.queryByRole("link", { name: /Markdown/ })).not.toBeInTheDocument();
+  });
+
+  it("does not dispatch exports before a completed report passes ToolResult validation", async () => {
+    const results = validResults();
+    const values = results["report-result"].values;
+    results["report-result"] = {
+      ...results["report-result"],
+      values: {
+        ...values,
+        artifact: {
+          ...(values.artifact as Record<string, unknown>),
+          cell_id: "another-cell",
+        },
+      },
+    };
+    const createExports = vi.fn();
+    render(
+      <SingleCellAnalysis
+        createReportExports={createExports}
+        loadReportExports={vi.fn()}
+        loadResult={vi.fn(async (_projectId: string, resultId: string) => results[resultId])}
+        projectId="project-1"
+        recordBatchId="batch-1"
+        resultIds={resultIds}
+        runCompleted
+        runId="run-invalid-results"
+        runTerminal
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("分析结果暂不可用");
+    expect(createExports).not.toHaveBeenCalled();
+  });
+
   it("fails closed when loaded artifacts do not describe the same cell", async () => {
     const results = validResults();
     const values = results["soh-result"].values;
@@ -505,3 +655,40 @@ describe("SingleCellAnalysis", () => {
     expect(screen.queryByText("MATR 官方 cycle life（非统一 EOL80）")).not.toBeInTheDocument();
   });
 });
+
+function reportCatalog(
+  status: ProjectReportExportCatalog["status"],
+  exports: ProjectReportExportCatalog["exports"],
+): ProjectReportExportCatalog {
+  return {
+    report_id: "report-1",
+    project_id: "project-1",
+    run_id: "run-export-1",
+    report_result_id: "report-result",
+    status,
+    template_version: "advanced-cell-report-template-v1",
+    created_at: "2026-08-03T08:00:00Z",
+    completed_at: status === "READY" ? "2026-08-03T08:01:00Z" : null,
+    exports,
+  };
+}
+
+function reportExport(
+  format: ProjectReportExportCatalog["exports"][number]["format"],
+  status: ProjectReportExportCatalog["exports"][number]["status"],
+): ProjectReportExportCatalog["exports"][number] {
+  const ready = status === "READY";
+  return {
+    export_id: `export-${format}`,
+    report_id: "report-1",
+    format,
+    status,
+    filename: ready ? `report-${format}.${format === "markdown" ? "md" : format}` : null,
+    media_type: ready ? "application/octet-stream" : null,
+    size_bytes: ready ? 128 : null,
+    sha256: ready ? "a".repeat(64) : null,
+    created_at: "2026-08-03T08:00:00Z",
+    completed_at: ready ? "2026-08-03T08:01:00Z" : null,
+    expires_at: ready ? "2026-08-04T08:01:00Z" : null,
+  };
+}

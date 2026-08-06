@@ -37,6 +37,7 @@ def test_hust_quarantine_build_context_is_narrow_and_versioned() -> None:
 
     assert "context: ." in compose
     assert "COPY discover.py /app/discover.py" in dockerfile
+    assert "COPY convert.py /app/convert.py" in dockerfile
     assert "COPY requirements.lock /app/requirements.lock" in dockerfile
     assert "COPY ." not in dockerfile
     assert "python:3.11.13-slim-bookworm" in dockerfile
@@ -62,3 +63,12 @@ def test_hust_quarantine_discovery_has_explicit_gates_and_bounded_output() -> No
     assert "pickle.loads(" not in text
     assert "extractall" not in text
     assert ".extract(" not in text
+
+
+def test_main_process_and_a100_paths_do_not_deserialize_unsafe_artifacts() -> None:
+    roots = [Path("src/quanxin_life"), Path("scripts/a100")]
+    forbidden = ("pickle.load(", "joblib.load(", "torch.load(")
+    for root in roots:
+        for path in root.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            assert not any(fragment in text for fragment in forbidden), path

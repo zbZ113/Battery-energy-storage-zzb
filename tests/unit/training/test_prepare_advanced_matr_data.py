@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,17 @@ def _module():
     spec = importlib.util.spec_from_file_location("prepare_advanced_matr_data", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _three_batch_module():
+    path = Path(__file__).parents[3] / "scripts" / "prepare_matr_three_batch_data.py"
+    spec = importlib.util.spec_from_file_location("prepare_matr_three_batch_data", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -76,6 +88,14 @@ def test_plan_only_never_calls_data_loader(tmp_path: Path, monkeypatch) -> None:
     assert report["cutoffs"] == [20, 50, 100, 150]
     assert called is False
     assert "cutoffs_detail" in report and report["cutoffs_detail"] == []
+
+
+def test_three_batch_preparation_uses_versioned_raw_paths() -> None:
+    module = _three_batch_module()
+
+    assert all(
+        spec.raw_path.startswith("data/raw/MATR/v1/") for spec in module.SPECS
+    )
 
 
 def test_smoke_preflight_loads_only_cutoff_50_and_writes_atomic_report(

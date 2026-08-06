@@ -1,0 +1,35 @@
+{
+    "layout_version":  "lfp-280ah-tempest-v1",
+    "cell_id":  "TEMPEST-LIC-280AH",
+    "archives":  [
+                     {
+                         "role":  "aging",
+                         "archive_sha256":  "7c43b108b619c1c67f5865d7000ed00a9300954d608626ff86f9da3325c086a0",
+                         "expected_members":  [
+                                                  "LIC_aging/LIC_aging_analysed.csv",
+                                                  "LIC_aging/LIC_aging_data.csv",
+                                                  "LIC_aging/LIC_aging_readme.txt"
+                                              ]
+                     },
+                     {
+                         "role":  "characterization",
+                         "archive_sha256":  "cbc737511848eb70186fe677dce7549eff285ac75e43b5a66cd22dc2adec9f45",
+                         "expected_members":  [
+                                                  "capacity_hppc_entropy/15C_capacity.csv",
+                                                  "capacity_hppc_entropy/15C_hppc.csv",
+                                                  "capacity_hppc_entropy/20C_capacity.csv",
+                                                  "capacity_hppc_entropy/20C_hppc.csv",
+                                                  "capacity_hppc_entropy/25C_capacity.csv",
+                                                  "capacity_hppc_entropy/25C_hppc.csv",
+                                                  "capacity_hppc_entropy/30C_capacity.csv",
+                                                  "capacity_hppc_entropy/30C_hppc.csv",
+                                                  "capacity_hppc_entropy/35C_capacity.csv",
+                                                  "capacity_hppc_entropy/35C_hppc.csv",
+                                                  "capacity_hppc_entropy/LIC_capacity_analysis.csv",
+                                                  "capacity_hppc_entropy/LIC_characterisation_readme.txt",
+                                                  "capacity_hppc_entropy/LIC_entropy_analysis.csv",
+                                                  "capacity_hppc_entropy/LIC_hppc_analysis.csv"
+                                              ]
+                     }
+                 ]
+}

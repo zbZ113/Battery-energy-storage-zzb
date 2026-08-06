@@ -58,7 +58,10 @@ SPECS = (
     BatchSpec(
         batch_index=1,
         batch_date=date(2017, 5, 12),
-        raw_path="data/2017-05-12_batchdata_updated_struct_errorcorrect.mat",
+        raw_path=(
+            "data/raw/MATR/v1/"
+            "2017-05-12_batchdata_updated_struct_errorcorrect.mat"
+        ),
         raw_manifest="configs/data_manifests/matr_2017_05_12_batch_v1.json",
         processed_root="data/processed/MATR/2017-05-12-cutoff150",
         conversion_report="reports/data_quality/matr_2017_05_12_cutoff150.json",
@@ -73,7 +76,10 @@ SPECS = (
     BatchSpec(
         batch_index=2,
         batch_date=date(2017, 6, 30),
-        raw_path="data/2017-06-30_batchdata_updated_struct_errorcorrect.mat",
+        raw_path=(
+            "data/raw/MATR/v1/"
+            "2017-06-30_batchdata_updated_struct_errorcorrect.mat"
+        ),
         raw_manifest="configs/data_manifests/matr_2017_06_30_batch_v1.json",
         processed_root="data/processed/MATR/2017-06-30-cutoff150",
         conversion_report="reports/data_quality/matr_2017_06_30_cutoff150.json",
@@ -88,7 +94,10 @@ SPECS = (
     BatchSpec(
         batch_index=3,
         batch_date=date(2018, 4, 12),
-        raw_path="data/2018-04-12_batchdata_updated_struct_errorcorrect.mat",
+        raw_path=(
+            "data/raw/MATR/v1/"
+            "2018-04-12_batchdata_updated_struct_errorcorrect.mat"
+        ),
         raw_manifest="configs/data_manifests/matr_2018_04_12_batch_v1.json",
         processed_root="data/processed/MATR/2018-04-12-cutoff150",
         conversion_report="reports/data_quality/matr_2018_04_12_cutoff150.json",
@@ -149,9 +158,7 @@ def main() -> int:
     manifest_path = _path(COMBINED_MANIFEST, must_exist=False)
     if manifest_path.exists():
         existing = MatrThreeBatchManifest.model_validate_json(manifest_path.read_bytes())
-        if existing.model_dump(exclude={"created_at"}) != proposed.model_dump(
-            exclude={"created_at"}
-        ):
+        if not _manifest_matches_verified_inputs(existing, proposed):
             raise ValueError("existing three-batch manifest differs from verified inputs")
         manifest = existing
     else:
@@ -352,6 +359,28 @@ def _load_or_publish_eligibility(
         return existing
     _write_json_atomic(path, proposed.model_dump(mode="json"))
     return proposed
+
+
+def _manifest_matches_verified_inputs(
+    existing: MatrThreeBatchManifest,
+    proposed: MatrThreeBatchManifest,
+) -> bool:
+    """Allow the reviewed v1 manifest to retain its historical raw locations."""
+
+    left = existing.model_dump(exclude={"created_at"})
+    right = proposed.model_dump(exclude={"created_at"})
+    for payload in (left, right):
+        batches = payload.get("batches")
+        if not isinstance(batches, (list, tuple)):
+            return False
+        for batch in batches:
+            if not isinstance(batch, dict):
+                return False
+            raw_path = batch.get("raw_relative_path")
+            if not isinstance(raw_path, str):
+                return False
+            batch["raw_relative_path"] = Path(raw_path).name
+    return left == right
 
 
 def _path(relative: str, *, must_exist: bool = True) -> Path:

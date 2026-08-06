@@ -24,7 +24,17 @@ import {
   type SingleCellResultIds,
 } from "@/components/single-cell-analysis-contract";
 import { SohTrajectoryChart } from "@/components/soh-trajectory-chart";
-import { getProjectResult } from "@/lib/api-client";
+import {
+  createProjectReportExports,
+  getProjectReportExports,
+  getProjectResult,
+  projectReportExportDownloadUrl,
+  projectToolResultDownloadUrl,
+  type ProjectReportExportCatalog,
+  type ProjectReportExportCreator,
+  type ProjectReportExportLoader,
+  type ReportExportFormat,
+} from "@/lib/api-client";
 import type { ToolResult } from "@/lib/types";
 
 export type { SingleCellResultIds } from "@/components/single-cell-analysis-contract";
@@ -75,16 +85,152 @@ function WaitingState({
   );
 }
 
-function ExportStatus() {
+const EXPORT_LABELS: Record<ReportExportFormat, string> = {
+  markdown: "Markdown",
+  json: "JSON 审计数据",
+  pdf: "PDF",
+  docx: "DOCX",
+  soh_csv: "SOH 曲线 CSV",
+  tool_results_json: "九步 ToolResult JSON",
+  zip: "完整证据 ZIP",
+};
+
+function ExportStatus({
+  catalog,
+  eligible,
+  error,
+  projectId,
+  reportResultId,
+  runId,
+  toolResultIds,
+}: {
+  catalog: ProjectReportExportCatalog | null;
+  eligible: boolean;
+  error: string | null;
+  projectId: string;
+  reportResultId: string | null;
+  runId: string | null;
+  toolResultIds: string[];
+}) {
+  if (!eligible || reportResultId === null || runId === null) {
+    return (
+      <section aria-label="下载状态" className="export-status" role="status">
+        <Download aria-hidden="true" />
+        <div>
+          <h2>下载</h2>
+          <p>待服务端提供导出；页面不会在浏览器中拼装业务报告。</p>
+        </div>
+      </section>
+    );
+  }
+  const readyExports = catalog?.exports.filter((item) => item.status === "READY") ?? [];
+  const exportFailed = catalog?.status === "FAILED";
   return (
-    <section aria-label="下载状态" className="export-status" role="status">
+    <section aria-label="报告下载中心" className="export-status" role="region">
       <Download aria-hidden="true" />
       <div>
-        <h2>下载</h2>
-        <p>待服务端提供导出；页面不会在浏览器中拼装业务报告。</p>
+        <h2>报告下载中心</h2>
+        {error ? <p aria-label="下载错误" className="alert alert-error" role="alert">{error}</p> : null}
+        {exportFailed ? (
+          <p aria-label="导出任务失败" className="alert alert-error" role="alert">
+            服务端未能生成报告，请重新提交本次导出任务。
+          </p>
+        ) : null}
+        {!error && (!catalog || ["PENDING", "RUNNING"].includes(catalog.status)) ? (
+          <p role="status">服务端正在生成签名导出制品…</p>
+        ) : null}
+        {!error && !exportFailed && catalog && readyExports.length === 0 ? (
+          <p role="status">本次运行没有可下载的 READY 制品。</p>
+        ) : null}
+        {readyExports.length ? (
+          <ul className="export-list">
+            {readyExports.map((item) => (
+              <li key={item.export_id}>
+                <a
+                  download={item.filename ?? undefined}
+                  href={projectReportExportDownloadUrl(
+                    projectId,
+                    runId,
+                    reportResultId,
+                    item.format,
+                  )}
+                >
+                  <Download aria-hidden="true" size={16} />
+                  下载 {EXPORT_LABELS[item.format]}
+                </a>
+                <dl>
+                  <div><dt>文件</dt><dd>{item.filename}</dd></div>
+                  <div><dt>类型</dt><dd>{item.media_type}</dd></div>
+                  <div><dt>大小</dt><dd>{formatBytes(item.size_bytes)}</dd></div>
+                  <div><dt>SHA-256</dt><dd><code>{item.sha256}</code></dd></div>
+                  <div><dt>过期时间</dt><dd>{item.expires_at}</dd></div>
+                </dl>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {catalog && catalog.status === "READY" && toolResultIds.length ? (
+          <div className="tool-result-downloads">
+            <h3>单个 ToolResult JSON</h3>
+            <ul>
+              {toolResultIds.map((resultId, index) => (
+                <li key={resultId}>
+                  <a
+                    download={`tool-result-${resultId}.json`}
+                    href={projectToolResultDownloadUrl(
+                      projectId,
+                      runId,
+                      reportResultId,
+                      resultId,
+                    )}
+                  >
+                    <Download aria-hidden="true" size={16} />
+                    下载 ToolResult {index + 1} JSON
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </section>
   );
+}
+
+function formatBytes(value: number | null): string {
+  if (value === null) return "不可用";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+const reportDispatches = new Map<string, Promise<ProjectReportExportCatalog>>();
+
+function dispatchReportOnce(
+  identity: string,
+  dispatch: () => Promise<ProjectReportExportCatalog>,
+): Promise<ProjectReportExportCatalog> {
+  const existing = reportDispatches.get(identity);
+  if (existing) return existing;
+  const promise = dispatch();
+  reportDispatches.set(identity, promise);
+  const cleanup = () => {
+    if (reportDispatches.get(identity) === promise) reportDispatches.delete(identity);
+  };
+  void promise.then(cleanup, cleanup);
+  return promise;
+}
+
+function catalogHasIdentity(
+  catalog: ProjectReportExportCatalog,
+  projectId: string,
+  runId: string,
+  reportResultId: string,
+): boolean {
+  return catalog.project_id === projectId
+    && catalog.run_id === runId
+    && catalog.report_result_id === reportResultId
+    && catalog.exports.every((item) => item.report_id === catalog.report_id);
 }
 
 function Warnings({ results }: { results: LoadedResults }) {
@@ -113,22 +259,36 @@ function Warnings({ results }: { results: LoadedResults }) {
 }
 
 function SingleCellAnalysisLoader({
+  createReportExports,
+  exportPollIntervalMs,
   loadResult,
+  loadReportExports,
   projectId,
   recordBatchId,
   resultIds,
+  runCompleted,
+  runId,
+  toolResultIds,
   runTerminal,
   showEvidence,
 }: {
+  createReportExports: ProjectReportExportCreator;
+  exportPollIntervalMs: number;
   loadResult: ProjectResultLoader;
+  loadReportExports: ProjectReportExportLoader;
   projectId: string;
   recordBatchId: string;
   resultIds: SingleCellResultIds;
+  runCompleted: boolean;
+  runId: string | null;
+  toolResultIds: string[];
   runTerminal: boolean;
   showEvidence: boolean;
 }) {
   const [results, setResults] = useState<LoadedResults>({});
   const [loadErrors, setLoadErrors] = useState<ResultKey[]>([]);
+  const [exportCatalog, setExportCatalog] = useState<ProjectReportExportCatalog | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const {
     reportResultId,
     rulConformalResultId,
@@ -198,12 +358,78 @@ function SingleCellAnalysisLoader({
       validationError = "身份或证据链不一致，页面已停止展示业务数值。";
     }
   }
+  const exportEligible = Boolean(
+    runCompleted
+    && runId
+    && reportResultId
+    && parsed?.report
+    && !validationError
+    && !loadErrors.includes("reportResultId"),
+  );
+
+  useEffect(() => {
+    if (!exportEligible || runId === null || reportResultId === null) {
+      return;
+    }
+    let active = true;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    const identity = JSON.stringify([projectId, runId, reportResultId]);
+    const rejectCatalog = () => {
+      if (!active) return;
+      setExportCatalog(null);
+      setExportError("导出目录身份核验失败，下载已停止。");
+    };
+    const acceptCatalog = (catalog: ProjectReportExportCatalog) => {
+      if (!active) return;
+      if (!catalogHasIdentity(catalog, projectId, runId, reportResultId)) {
+        rejectCatalog();
+        return;
+      }
+      setExportCatalog(catalog);
+      setExportError(null);
+      if (["PENDING", "RUNNING"].includes(catalog.status)) {
+        pollTimer = setTimeout(() => {
+          void loadReportExports(projectId, runId, reportResultId)
+            .then(acceptCatalog)
+            .catch(() => {
+              if (active) setExportError("导出目录暂时无法读取，请稍后重试。");
+            });
+        }, exportPollIntervalMs);
+      }
+    };
+    void dispatchReportOnce(
+      identity,
+      () => createReportExports(projectId, runId, reportResultId),
+    ).then(acceptCatalog).catch(() => {
+      if (active) setExportError("报告导出任务暂时无法启动，请稍后重试。");
+    });
+    return () => {
+      active = false;
+      if (pollTimer !== undefined) clearTimeout(pollTimer);
+    };
+  }, [
+    createReportExports,
+    exportEligible,
+    exportPollIntervalMs,
+    loadReportExports,
+    projectId,
+    reportResultId,
+    runId,
+  ]);
 
   if (!requestedResults.length) {
     return (
       <div className="single-cell-analysis">
         <WaitingState missingKeys={missingKeys} runTerminal={runTerminal} />
-        <ExportStatus />
+        <ExportStatus
+          catalog={null}
+          eligible={false}
+          error={null}
+          projectId={projectId}
+          reportResultId={reportResultId}
+          runId={runId}
+          toolResultIds={toolResultIds}
+        />
       </div>
     );
   }
@@ -325,23 +551,43 @@ function SingleCellAnalysisLoader({
 
       {validationError ? null : <Warnings results={results} />}
       {showEvidence ? <EvidenceStack results={results} /> : null}
-      <ExportStatus />
+      <ExportStatus
+        catalog={exportCatalog}
+        eligible={exportEligible}
+        error={exportError}
+        projectId={projectId}
+        reportResultId={reportResultId}
+        runId={runId}
+        toolResultIds={toolResultIds}
+      />
     </div>
   );
 }
 
 export function SingleCellAnalysis({
+  createReportExports = createProjectReportExports,
+  exportPollIntervalMs = 1500,
   loadResult = getProjectResult,
+  loadReportExports = getProjectReportExports,
   projectId,
   recordBatchId,
   resultIds,
+  runCompleted = false,
+  runId = null,
+  toolResultIds = [],
   runTerminal = false,
   showEvidence = true,
 }: {
+  createReportExports?: ProjectReportExportCreator;
+  exportPollIntervalMs?: number;
   loadResult?: ProjectResultLoader;
+  loadReportExports?: ProjectReportExportLoader;
   projectId: string;
   recordBatchId: string;
   resultIds: SingleCellResultIds;
+  runCompleted?: boolean;
+  runId?: string | null;
+  toolResultIds?: string[];
   runTerminal?: boolean;
   showEvidence?: boolean;
 }) {
@@ -353,16 +599,25 @@ export function SingleCellAnalysis({
     resultIds.rulResultId,
     resultIds.sohConformalResultId,
     resultIds.sohResultId,
+    runCompleted,
+    runId,
+    toolResultIds,
     runTerminal,
     showEvidence,
   ]);
   return (
     <SingleCellAnalysisLoader
       key={requestSignature}
+      createReportExports={createReportExports}
+      exportPollIntervalMs={exportPollIntervalMs}
       loadResult={loadResult}
+      loadReportExports={loadReportExports}
       projectId={projectId}
       recordBatchId={recordBatchId}
       resultIds={resultIds}
+      runCompleted={runCompleted}
+      runId={runId}
+      toolResultIds={toolResultIds}
       runTerminal={runTerminal}
       showEvidence={showEvidence}
     />

@@ -69,7 +69,7 @@ def test_runtime_services_use_secret_files_and_fail_closed_dependencies() -> Non
     assert "deploy.migrate" in compose
     assert "deploy.competition_api:app" in compose
     assert "deploy.competition_worker:app" in compose
-    assert "agent-runs,advanced-calibration" in compose
+    assert "agent-runs,advanced-calibration,report-exports" in compose
 
 
 def test_competition_compose_mounts_certificates_and_evidence_with_safe_modes() -> None:
@@ -154,3 +154,21 @@ def test_production_entrypoints_use_the_strict_competition_runtime() -> None:
         assert "foundation_api" not in source
     assert "app = runtime.http_app" in api
     assert "app = runtime.celery_app" in worker
+
+
+def test_local_entrypoints_are_explicit_and_cannot_leak_into_production() -> None:
+    production_api = _read("deploy/competition_api.py")
+    production_worker = _read("deploy/competition_worker.py")
+    local_api = _read("deploy/local_api.py")
+    local_worker = _read("deploy/local_worker.py")
+
+    for production_source in (production_api, production_worker):
+        assert "LocalCompetitionRuntimeSettings" not in production_source
+        assert "auth_environment" not in production_source
+
+    for local_source in (local_api, local_worker):
+        assert "LocalCompetitionRuntimeSettings.from_environment(os.environ)" in local_source
+        assert 'auth_environment="development"' in local_source
+
+    assert "app = runtime.http_app" in local_api
+    assert "app = runtime.celery_app" in local_worker

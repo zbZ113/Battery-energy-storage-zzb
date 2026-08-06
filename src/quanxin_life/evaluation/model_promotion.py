@@ -6,7 +6,7 @@ import math
 from collections.abc import Sequence
 from typing import Literal, Protocol
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from quanxin_life.core.schemas import ContractModel
 
@@ -70,6 +70,80 @@ class ModelPromotionRecommendation(ContractModel):
     disposition: Literal["CONDITIONAL"] = "CONDITIONAL"
     reason_codes: tuple[str, ...] = Field(min_length=1)
     warnings: tuple[str, ...] = ()
+
+
+class PromotionGateEvidence(ContractModel):
+    """Boolean evidence ledger for the final, non-activating promotion gate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    complete: bool
+    leakage_free: bool
+    validation_only_selection: bool
+    five_seed_complete: bool
+    test_evaluated_once: bool
+    per_cell_metrics: bool
+    trajectory_metrics: bool
+    calibration_coverage: bool
+    ood_boundaries: bool
+    safety_artifacts: bool
+    license_verified: bool
+    manual_approval: bool = False
+
+    @model_validator(mode="after")
+    def all_required_evidence_is_present(self) -> PromotionGateEvidence:
+        required = (
+            "complete",
+            "leakage_free",
+            "validation_only_selection",
+            "five_seed_complete",
+            "test_evaluated_once",
+            "per_cell_metrics",
+            "trajectory_metrics",
+            "calibration_coverage",
+            "ood_boundaries",
+            "safety_artifacts",
+            "license_verified",
+        )
+        missing = [name for name in required if not getattr(self, name)]
+        if missing:
+            raise ValueError(f"promotion evidence is incomplete: {', '.join(missing)}")
+        return self
+
+
+class PromotionGateResult(ContractModel):
+    """A verified result that remains inactive until a separate product action."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gate_status: Literal["VERIFIED"] = "VERIFIED"
+    activation_status: Literal["VERIFIED_NOT_ACTIVATED"] = "VERIFIED_NOT_ACTIVATED"
+    manual_approval_recorded: bool = False
+    steps: tuple[str, ...] = (
+        "COMPLETE_EVIDENCE",
+        "NO_LEAKAGE",
+        "VALIDATION_ONLY_SELECTION",
+        "FIVE_SEEDS_COMPLETE",
+        "TEST_EVALUATED_ONCE",
+        "CELL_AND_TRAJECTORY_EVIDENCE",
+        "CALIBRATION_COVERAGE",
+        "OOD_BOUNDARIES",
+        "SAFETY_ARTIFACTS",
+        "LICENSE_VERIFIED",
+    )
+
+
+def verify_promotion_gate(evidence: PromotionGateEvidence) -> PromotionGateResult:
+    """Validate promotion evidence and return an explicitly inactive result."""
+
+    checked = PromotionGateEvidence.model_validate(evidence.model_dump())
+    steps = PromotionGateResult.model_fields["steps"].default
+    if checked.manual_approval:
+        steps = (*steps, "MANUAL_APPROVAL_RECORDED")
+    return PromotionGateResult(
+        manual_approval_recorded=checked.manual_approval,
+        steps=steps,
+    )
 
 
 def recommend_rul_routes(
@@ -271,8 +345,11 @@ def _dominates_error_metrics(
 
 __all__ = [
     "ModelPromotionRecommendation",
+    "PromotionGateEvidence",
+    "PromotionGateResult",
     "RulPromotionEvidence",
     "SohPromotionEvidence",
     "recommend_rul_routes",
     "recommend_soh_routes",
+    "verify_promotion_gate",
 ]

@@ -19,6 +19,11 @@ from quanxin_life.core import (
     sha256_canonical,
 )
 from quanxin_life.core.schemas import ContractModel, Sha256
+from quanxin_life.reporting.contracts import (
+    ADVANCED_CELL_REPORT_EVIDENCE_TYPE,
+    ADVANCED_CELL_REPORT_MODEL_VERSION,
+    ADVANCED_CELL_REPORT_TOOL_VERSION,
+)
 from quanxin_life.tools.advanced_conformal import (
     ADVANCED_RUL_SPLIT_INTERVAL_EVIDENCE_TYPE,
     ADVANCED_SOH_SPLIT_BAND_EVIDENCE_TYPE,
@@ -47,9 +52,6 @@ if TYPE_CHECKING:
         VerifiedProjectInvocationContext,
     )
 
-ADVANCED_CELL_REPORT_TOOL_VERSION = "advanced-cell-report-tool-v1"
-ADVANCED_CELL_REPORT_EVIDENCE_TYPE = "quanxin_life.advanced_cell_report.v1"
-ADVANCED_CELL_REPORT_MODEL_VERSION = "advanced-cell-report-template-v1"
 ADVANCED_CELL_REPORT_FEATURE_VERSION = "advanced-cell-report-evidence-v1"
 Clock = Callable[[], datetime]
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]

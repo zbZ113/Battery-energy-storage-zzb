@@ -1,0 +1,14 @@
+{
+  "schema_version": "blast-lite-cpu-training-v1",
+  "mode": "selection",
+  "enabled": false,
+  "blocked_reasons": ["BLOCKED_DATA_VIEW", "BLOCKED_DEPENDENCY"],
+  "task_type": "condition_degradation",
+  "adapter_version": "blast-lite-cpu-v1",
+  "upstream_commit": "b093495b47dc40dd96dba865d91f553619501e94",
+  "license_status": "VERIFIED_LICENSE_PRESENT",
+  "runtime_environment": "quanxin-blast-py311",
+  "runtime_dependencies": ["blast-lite==1.1.0", "numpy<2.0.0"],
+  "artifact_formats": {"parameters": ".json", "residuals": ".parquet"},
+  "optimization": {"micro_batch_size": 32, "visible_gpu_count": 1, "gradient_accumulation_steps": 2, "effective_batch_size": 64}
+}

@@ -1,0 +1,4 @@
+# Python 3.11 data-preparation environment; compile with hashes before offline use.
+-e .[training]
+pyarrow
+safetensors

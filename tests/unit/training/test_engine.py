@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from quanxin_life.core import PredictionTarget
+from quanxin_life.core import PredictionTarget, SelectionMetricDirection
 from quanxin_life.training.checkpoint import (
     AdvancedCheckpointContext,
     CheckpointContext,
@@ -59,6 +59,14 @@ class ToyTrainingTask:
         self.validated_epochs.append(epoch)
         value = self.validation_values[epoch]
         return EpochMetrics(loss=value, metrics={"mae": value})
+
+
+class ScoreTrainingTask(ToyTrainingTask):
+    def validate(self, epoch: int, *, device: torch.device) -> EpochMetrics:
+        del device
+        self.validated_epochs.append(epoch)
+        value = self.validation_values[epoch]
+        return EpochMetrics(loss=1.0, metrics={"score": value})
 
 
 def _assert_nested_state_equal(expected: object, actual: object) -> None:
@@ -192,6 +200,47 @@ def test_advanced_engine_pauses_at_30_and_resumes_to_90(tmp_path: Path) -> None:
     assert resumed.resumed_from_epoch == 30
     assert resumed.last_epoch == 90
     assert resumed_task.trained_epochs == list(range(31, 91))
+
+
+def test_engine_uses_bound_maximize_selection_metric(tmp_path: Path) -> None:
+    task = ScoreTrainingTask({1: 0.5, 2: 0.8, 3: 0.7})
+    context = _context().model_copy(
+        update={
+            "selection_metric_name": "score",
+            "selection_metric_direction": SelectionMetricDirection.MAXIMIZE,
+        }
+    )
+    result = TrainingEngine(
+        task=task,
+        context=context,
+        config=ModelTrainingConfig(
+            name="cpmlp",
+            max_epochs=3,
+            validation_interval=1,
+            early_stopping_patience=3,
+        ),
+        run_directory=tmp_path,
+        device=torch.device("cpu"),
+    ).run()
+
+    assert result.best_epoch == 2
+    assert result.best_metric == pytest.approx(0.8)
+
+
+def test_engine_rejects_missing_bound_selection_metric(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="score"):
+        TrainingEngine(
+            task=ToyTrainingTask({1: 1.0}),
+            context=_context().model_copy(update={"selection_metric_name": "score"}),
+            config=ModelTrainingConfig(
+                name="cpmlp",
+                max_epochs=1,
+                validation_interval=1,
+                early_stopping_patience=3,
+            ),
+            run_directory=tmp_path,
+            device=torch.device("cpu"),
+        ).run()
 
 
 @pytest.mark.parametrize("epoch_limit", [0, 3, True, 1.5, "2"])

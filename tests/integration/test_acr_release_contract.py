@@ -105,6 +105,14 @@ def test_backend_image_installs_the_llm_runtime_extra() -> None:
     assert "llm" in installed_extras
 
 
+def test_backend_image_uses_resumable_cpu_only_torch_wheels() -> None:
+    dockerfile = _read("deploy/Dockerfile.backend")
+
+    assert "https://download.pytorch.org/whl/cpu" in dockerfile
+    assert '"torch>=2.5,<3"' in dockerfile
+    assert "--resume-retries 30" in dockerfile
+
+
 def test_frontend_image_uses_locked_standalone_next_build() -> None:
     dockerfile = _read("frontend/Dockerfile")
     next_config = _read("frontend/next.config.ts")

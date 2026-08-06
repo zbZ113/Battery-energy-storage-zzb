@@ -1258,6 +1258,26 @@ class SqlProjectAuditLedger:
         return result, detached_binding
 
     @classmethod
+    def verify_persisted_binding(
+        cls,
+        binding: ProjectToolResultBindingRecord,
+        result: ToolResult,
+    ) -> None:
+        """Verify a detached binding for an internal completed-run reader."""
+
+        cls._verify_binding(binding, result)
+
+    @classmethod
+    def rebuild_persisted_result(
+        cls,
+        row: ToolResultRecord,
+        provenance_rows: tuple[ProvenanceRecordRow, ...],
+    ) -> ToolResult:
+        """Rebuild a stored ToolResult with the ledger's canonical ordering."""
+
+        return cls._result_from_rows(row, provenance_rows)
+
+    @classmethod
     def _verify_binding(
         cls,
         binding: ProjectToolResultBindingRecord,

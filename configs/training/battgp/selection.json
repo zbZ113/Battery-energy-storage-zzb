@@ -1,0 +1,15 @@
+{
+  "schema_version": "battgp-offline-training-v1",
+  "mode": "selection",
+  "enabled": false,
+  "blocked_reasons": ["BLOCKED_DATA_VIEW"],
+  "task_type": "field_monitoring",
+  "adapter_version": "battgp-offline-v1",
+  "upstream_commit": "6d5e1db3337f0de5f3a533acbc09eddccc178e9d",
+  "license_status": "VERIFIED_LICENSE_PRESENT",
+  "runtime_dependencies": ["torch", "gpytorch>=1.11", "botorch"],
+  "model_view_version": "field-monitoring-v1",
+  "metric_names": ["residual_mae", "auroc", "auprc", "fpr95"],
+  "anomaly_labels_required_for": ["auroc", "auprc", "fpr95"],
+  "optimization": {"micro_batch_size": 32, "visible_gpu_count": 1, "gradient_accumulation_steps": 2, "effective_batch_size": 64}
+}

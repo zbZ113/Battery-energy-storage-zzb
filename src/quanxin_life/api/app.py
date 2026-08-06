@@ -72,6 +72,7 @@ def create_fastapi_app(
     model_artifact_adapter: Any | None = None,
     model_route_adapter: Any | None = None,
     advanced_calibration_adapter: Any | None = None,
+    project_report_adapter: Any | None = None,
     report_exporter: Any | None = None,
     project_invocation_context_service: ProjectInvocationContextService | None = None,
 ) -> Any:
@@ -159,6 +160,10 @@ def create_fastapi_app(
         if auth_adapter is None:
             raise ValueError("advanced_calibration_adapter requires auth_adapter")
         app.include_router(advanced_calibration_adapter.router)
+    if project_report_adapter is not None:
+        if auth_adapter is None:
+            raise ValueError("project_report_adapter requires auth_adapter")
+        app.include_router(project_report_adapter.router)
     if project_invocation_context_service is not None and auth_adapter is None:
         raise ValueError("project_invocation_context_service requires auth_adapter")
     if project_invocation_context_service is not None:

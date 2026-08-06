@@ -19,7 +19,10 @@ COPY configs ./configs
 COPY alembic.ini ./
 
 RUN python -m pip install --upgrade "pip>=26.1.2,<27" "setuptools>=83" \
-    && python -m pip install \
+    && python -m pip install --resume-retries 30 \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch>=2.5,<3" \
+    && python -m pip install --resume-retries 30 \
         ".[agents,auth,data,knowledge,llm,ml,api,infrastructure,persistence,reporting]" \
     && python -m compileall -q src deploy migrations
 

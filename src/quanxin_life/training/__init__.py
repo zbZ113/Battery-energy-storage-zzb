@@ -78,6 +78,12 @@ from quanxin_life.training.preflight import (
     build_training_preflight,
     collect_local_training_preflight,
 )
+from quanxin_life.training.promotion_bundle import (
+    PromotionBundleFile,
+    PromotionBundleManifest,
+    export_promoted_model_bundle,
+    verify_promoted_model_bundle,
+)
 from quanxin_life.training.suite import (
     MatrRunConfig,
     MatrTrainingPaths,
@@ -119,6 +125,8 @@ __all__ = [
     "ModelTrainingConfig",
     "PackageSnapshot",
     "PhysicalGpuSnapshot",
+    "PromotionBundleFile",
+    "PromotionBundleManifest",
     "TrainingBundleFile",
     "TrainingBundleManifest",
     "TrainingCheckpointManifest",
@@ -142,6 +150,7 @@ __all__ = [
     "build_training_preflight",
     "collect_local_training_preflight",
     "curve_batch_to_tabular",
+    "export_promoted_model_bundle",
     "fit_dummy_cycle_life",
     "fit_variance_cycle_life",
     "load_advanced_inference_checkpoint",
@@ -156,6 +165,7 @@ __all__ = [
     "verify_matr_a100_archive",
     "verify_matr_a100_archive_index",
     "verify_matr_three_batch_a100_archive",
+    "verify_promoted_model_bundle",
     "verify_training_bundle_manifest",
     "verify_training_output_index",
 ]

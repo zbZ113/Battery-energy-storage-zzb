@@ -1059,7 +1059,14 @@ class ApprovalAction(Base):
 
 class Report(Base):
     __tablename__ = "reports"
-    __table_args__ = (Index("ix_reports_project_created", "project_id", "created_at"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_reports_run_id"),
+        Index("ix_reports_project_created", "project_id", "created_at"),
+        CheckConstraint(
+            "status IN ('PENDING', 'RUNNING', 'READY', 'FAILED')",
+            name="ck_reports_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
@@ -1069,14 +1076,26 @@ class Report(Base):
     result_ids_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     object_uri: Mapped[str | None] = mapped_column(Text)
     sha256: Mapped[str | None] = mapped_column(String(64))
+    failure_code: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ReportExport(Base):
     __tablename__ = "report_exports"
-    __table_args__ = (Index("ix_report_exports_report_id", "report_id"),)
+    __table_args__ = (
+        UniqueConstraint("report_id", "export_format", name="uq_report_export_format"),
+        Index("ix_report_exports_report_id", "report_id"),
+        CheckConstraint(
+            "status IN ('PENDING', 'RUNNING', 'READY', 'FAILED', 'EXPIRED')",
+            name="ck_report_exports_status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     report_id: Mapped[str] = mapped_column(
@@ -1086,10 +1105,15 @@ class ReportExport(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     object_uri: Mapped[str | None] = mapped_column(Text)
     sha256: Mapped[str | None] = mapped_column(String(64))
+    filename: Mapped[str | None] = mapped_column(String(255))
+    media_type: Mapped[str | None] = mapped_column(String(200))
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    failure_code: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class KnowledgeDocument(Base):

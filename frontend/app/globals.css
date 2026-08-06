@@ -260,8 +260,20 @@ code { overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospa
 .result-waiting li { padding: .35rem .5rem; border-radius: .4rem; background: var(--mint); font-size: .72rem; font-weight: 700; }
 .export-status { display: flex; align-items: flex-start; gap: .85rem; padding: 1rem; border: 1px solid var(--line); background: var(--surface); }
 .export-status > svg { flex: 0 0 auto; color: var(--green); }
+.export-status > div { flex: 1; min-width: 0; }
 .export-status h2 { margin: 0; font-size: 1rem; }
 .export-status p { margin: .25rem 0 0; color: var(--muted); font-size: .78rem; }
+.export-list { display: grid; gap: 0; margin: 1rem 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.export-list > li { display: grid; grid-template-columns: minmax(11rem, .7fr) minmax(0, 1.3fr); gap: 1rem; padding: .9rem 0; border-bottom: 1px solid var(--line); }
+.export-list a, .tool-result-downloads a { display: inline-flex; align-items: center; align-self: start; gap: .4rem; color: var(--green-dark); font-size: .82rem; font-weight: 760; text-decoration: none; }
+.export-list a:hover, .tool-result-downloads a:hover { text-decoration: underline; }
+.export-list dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem 1rem; margin: 0; }
+.export-list dl div { min-width: 0; }
+.export-list dt { color: var(--muted); font-size: .68rem; }
+.export-list dd { margin: .15rem 0 0; color: var(--ink); font-size: .74rem; overflow-wrap: anywhere; }
+.tool-result-downloads { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.tool-result-downloads h3 { margin: 0 0 .65rem; font-size: .82rem; }
+.tool-result-downloads ul { display: flex; flex-wrap: wrap; gap: .45rem 1rem; margin: 0; padding: 0; list-style: none; }
 .calibration-entry { color: inherit; text-decoration: none; }
 .calibration-entry:hover { border-color: #a8c9b5; box-shadow: var(--shadow); }
 .calibration-page-header { align-items: flex-start; }
@@ -352,6 +364,7 @@ code { overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospa
   .nine-step-tracker li { grid-template-columns: 2rem minmax(0, 1fr) auto; }
   .nine-step-failure-code { max-width: 9rem; }
   .metric-list, .provenance-grid { grid-template-columns: 1fr; }
+  .export-list > li, .export-list dl { grid-template-columns: 1fr; }
   .section-heading { flex-direction: column; }
   .trajectory-status { justify-content: flex-start; }
   .evidence-disclosure > div { padding: .65rem; }

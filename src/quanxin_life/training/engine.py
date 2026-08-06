@@ -19,7 +19,7 @@ from typing import Any, Protocol
 import torch
 from pydantic import ConfigDict, Field
 
-from quanxin_life.core import sha256_canonical
+from quanxin_life.core import SelectionMetricDirection, sha256_canonical
 from quanxin_life.core.schemas import ContractModel
 from quanxin_life.training.checkpoint import (
     AdvancedCheckpointContext,
@@ -164,8 +164,22 @@ class TrainingEngine:
                 if epoch % self.config.validation_interval == 0:
                     validation = self.task.validate(epoch, device=self.device)
                     _validate_metrics(validation)
-                    metric = validation.metrics.get("mae", validation.loss)
-                    if progress.best_metric is None or metric < progress.best_metric:
+                    metric = _selection_metric(validation, self.context.selection_metric_name)
+                    direction = SelectionMetricDirection(
+                        self.context.selection_metric_direction
+                    )
+                    improved_metric = (
+                        progress.best_metric is None
+                        or (
+                            direction is SelectionMetricDirection.MINIMIZE
+                            and metric < progress.best_metric
+                        )
+                        or (
+                            direction is SelectionMetricDirection.MAXIMIZE
+                            and metric > progress.best_metric
+                        )
+                    )
+                    if improved_metric:
                         improved = True
                         best_epoch = epoch
                         best_metric = metric
@@ -428,6 +442,17 @@ def _validate_metrics(metrics: EpochMetrics) -> None:
         not math.isfinite(value) for value in metrics.metrics.values()
     ):
         raise ValueError("training metrics must be finite")
+
+
+def _selection_metric(metrics: EpochMetrics, name: str) -> float:
+    if name == "loss":
+        return metrics.loss
+    if name not in metrics.metrics:
+        raise ValueError(f"selection metric {name!r} is missing from validation metrics")
+    value = metrics.metrics[name]
+    if not math.isfinite(value):
+        raise ValueError(f"selection metric {name!r} must be finite")
+    return value
 
 
 def _append_csv(path: Path, row: Mapping[str, object]) -> None:

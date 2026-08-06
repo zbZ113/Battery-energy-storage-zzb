@@ -1,0 +1,158 @@
+{
+    "manifest_version":  "naumann-public-files-local-audit-v2",
+    "source_catalog":  "configs/data_sources.json",
+    "file_count":  25,
+    "total_size_bytes":  131126,
+    "files":  [
+                  {
+                      "dataset_id":  "NAUMANN_CALENDAR",
+                      "relative_path":  "data/raw/NAUMANN_CALENDAR/v1/DifferentialVoltageAnalysis.xlsx",
+                      "size_bytes":  11984,
+                      "sha256":  "cc47d2d1fc481c79f2395f3763d0dcb9245be929622baa20237554afe8b5578c"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CALENDAR",
+                      "relative_path":  "data/raw/NAUMANN_CALENDAR/v1/DischargeCapacity.xlsx",
+                      "size_bytes":  18248,
+                      "sha256":  "c684bdb2adc7314d7cf943b472068694e20425af8f84fbf249d5d7554dc7e3f0"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CALENDAR",
+                      "relative_path":  "data/raw/NAUMANN_CALENDAR/v1/ElectrochemicalImpedanceSpectroscopy.xlsx",
+                      "size_bytes":  18714,
+                      "sha256":  "c7656fbf94ffd6ea3b6394f57aafea46fa64ab1eb3e0efb8c820ccc03dac7752"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CALENDAR",
+                      "relative_path":  "data/raw/NAUMANN_CALENDAR/v1/ResistanceR_DC10s.xlsx",
+                      "size_bytes":  18541,
+                      "sha256":  "7a27edb60043e21f510fe38ac0ea6ea015b16633ce5b23882065a12556dfbd2a"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/EIS_40°C_25SOC_20DOD_1C_1C.mat",
+                      "size_bytes":  1096,
+                      "sha256":  "266e43b985fbf7277f6db99592d99004e29d83f1ba5ef1d43cdb138a6fa53439"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/EIS_40°C_50SOC_20DOD_1C_1C.mat",
+                      "size_bytes":  1117,
+                      "sha256":  "25b8a15ffcfd75aff67cd982612dabb7e1b7927c15c1459c9a8f885480856593"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/EIS_40°C_50SOC_80DOD_0.2C_0.2C.mat",
+                      "size_bytes":  1138,
+                      "sha256":  "8884fa4442d5502c354ec46b355f1713024e5e8fb805cd1414b573e6b1a3528d"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/EIS_40°C_50SOC_80DOD_1C_1C.mat",
+                      "size_bytes":  1115,
+                      "sha256":  "6bca2bdb2ccbf9ae94fdf5e4740ab98959e767688bff52a679800ae3fbf63978"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/Loadcollectives_Capacity_CC_CV_FEC.mat",
+                      "size_bytes":  2829,
+                      "sha256":  "0ea77bc678ed504a21df3576c9678e097d1731f01a8cad0788ca07f8c9dab001"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/Loadcollectives_Capacity_CC_CV_Time.mat",
+                      "size_bytes":  2830,
+                      "sha256":  "15944cfb2c3ba813038165f2a48553daa90c720ee063703ec0646cb8dddf3b07"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/Loadcollectives_R_DC_10s_FEC.mat",
+                      "size_bytes":  2816,
+                      "sha256":  "c534402b1cf43803751c43795e8cea430481acb477590a392d3c59901c32641c"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/Loadcollectives_R_DC_10s_Time.mat",
+                      "size_bytes":  2817,
+                      "sha256":  "4562ac758b0826b186343f79b9a7b720521c25bbf8d39995c3fb55a5129258d0"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_25%SOC_20%DOD_1C_1C.mat",
+                      "size_bytes":  377,
+                      "sha256":  "2615b5eea637fe5f26168f70ddaf7e3ac56a3add7b307d0fe50cc5234e860f92"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_50%SOC_20%DOD_1C_1C.mat",
+                      "size_bytes":  376,
+                      "sha256":  "68c665ea3cb7eeae7f258a3883799f36383d27a4b7db9888bd835ff2a5b59c9d"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_50%SOC_80%DOD_0.2C_0.2C.mat",
+                      "size_bytes":  376,
+                      "sha256":  "d765f91ef145388e70def4be01183a65c740749fd76ec97bbed8fa13fefcf5ac"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_50%SOC_80%DOD_1C_1C.mat",
+                      "size_bytes":  377,
+                      "sha256":  "8d39dc8ac5dfe43131acf8aab343dfb60a6ab7e79ecddec0af83e72c1ce804e8"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/dVdQ_40°C_50SOC.mat",
+                      "size_bytes":  376,
+                      "sha256":  "f800eeef869cae1182d7d57bd7948003431f96912e9e7d9064442095eed93ce8"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/xCyC_80DOD_40°C_Capacity_CC_CV_FEC.mat",
+                      "size_bytes":  6982,
+                      "sha256":  "a5022e805a20a64a81e1699dec7bd63c73d8e7959543ec9df78cef99ef3ed782"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/xCyC_80DOD_40°C_R_DC_10s_FEC.mat",
+                      "size_bytes":  6847,
+                      "sha256":  "c02268f129061705a760dc690caa440541024b4f8bc2c2b17e2a946c826f156d"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/xDOD_1C1C_40°C_Capacity_CC_CV_FEC.mat",
+                      "size_bytes":  7949,
+                      "sha256":  "2b3f640783d72dec17ec57d438d570e891057ecdf5690d444688dd1e1b2209da"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/xDOD_1C1C_40°C_R_DC_10s_FEC.mat",
+                      "size_bytes":  7868,
+                      "sha256":  "4a88d3c43ccdcd5213d0a58ef8437f23735f0a3fc8677895a04ebeba8ab3f638"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/xDOD_1C1C_x°C_Capacity_CC_CV_FEC.mat",
+                      "size_bytes":  4337,
+                      "sha256":  "cda758cc9208ebf03925bf68495339adda4a4b79595d0b2cf27c5fbbe4435f17"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/xDOD_1C1C_x°C_R_DC_10s_FEC.mat",
+                      "size_bytes":  4273,
+                      "sha256":  "81c60cf2490f56b7c69a18634c1856cbd70e9f2665bda15ef8294421a1a8b73a"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/xSOC_20DOD_1C1C_40°C_Capacity_CC_CV_FEC.mat",
+                      "size_bytes":  3885,
+                      "sha256":  "0cea4471ec3fe16dea2de9e464121f2813595ba3aca3c1dbec9a0f38b5e52e30"
+                  },
+                  {
+                      "dataset_id":  "NAUMANN_CYCLE",
+                      "relative_path":  "data/raw/NAUMANN_CYCLE/v1/xSOC_20DOD_1C1C_40°C_R_DC_10s_FEC.mat",
+                      "size_bytes":  3858,
+                      "sha256":  "2d043804fe6be839913db1de43f7487e2178522cd5c0e7cb7a3a62714c6b5837"
+                  }
+              ]
+}

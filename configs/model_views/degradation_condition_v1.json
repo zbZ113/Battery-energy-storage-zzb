@@ -1,0 +1,12 @@
+{
+  "schema_version": "model-view-config-v1",
+  "view_id": "degradation_condition",
+  "view_version": "degradation-condition-v1",
+  "task_type": "condition_degradation",
+  "target_semantics": "direct_condition_response",
+  "entity_key": "condition_id",
+  "feature_names": ["temperature_c", "mean_soc", "dod", "charge_c_rate", "discharge_c_rate"],
+  "mask_semantics": ["false_means_not_applicable", "no_condition_inference"],
+  "source_dataset_ids": ["NAUMANN_CYCLE", "NAUMANN_CALENDAR", "LFP_280AH_DOD"],
+  "cutoff_cycle": null
+}
