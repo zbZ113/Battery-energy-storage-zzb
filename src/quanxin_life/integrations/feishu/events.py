@@ -13,7 +13,9 @@ from typing import Protocol
 
 from pydantic import SecretStr
 
-from .security import FeishuWebhookVerifier
+from .decryptor import FeishuDecryptorError
+from .routing import FeishuEventReference, parse_feishu_event_reference
+from .security import FeishuSignatureError, FeishuWebhookVerifier
 
 
 class FeishuEventError(ValueError):
@@ -106,6 +108,7 @@ class FeishuEventOutcome:
     duplicate: bool
     receipt_status: FeishuReceiptClaimStatus | None
     claim_token: str | None
+    reference: FeishuEventReference | None
     response: dict[str, str]
 
 
@@ -127,6 +130,12 @@ class FeishuEventProcessor:
         self._receipts = receipts
         self._decryptor = decryptor
 
+    @property
+    def decryptor_configured(self) -> bool:
+        """Expose only whether an injected decryptor exists, never its details."""
+
+        return self._decryptor is not None
+
     def handle(
         self,
         *,
@@ -139,6 +148,15 @@ class FeishuEventProcessor:
             return self._url_verification_outcome(envelope)
 
         normalized_headers = {key.lower(): value for key, value in headers.items()}
+        if envelope.get("encrypt") is not None and not _has_signature_header(
+            normalized_headers
+        ):
+            payload = self._decrypt_payload_if_needed(envelope)
+            if payload.get("type") == "url_verification":
+                return self._url_verification_outcome(payload)
+            raise FeishuSignatureError(
+                "encrypted Feishu events require signature headers"
+            )
         self._verifier.verify(
             timestamp=_required_header(normalized_headers, "x-lark-request-timestamp"),
             nonce=_required_header(normalized_headers, "x-lark-request-nonce"),
@@ -157,6 +175,7 @@ class FeishuEventProcessor:
         self._verify_token(header.get("token"))
         event_id = _required_text(header.get("event_id"), field_name="header.event_id")
         event_type = _required_text(header.get("event_type"), field_name="header.event_type")
+        reference = parse_feishu_event_reference(payload)
         payload_sha256 = hashlib.sha256(body).hexdigest()
         claim = self._receipts.claim(
             event_id=event_id,
@@ -179,6 +198,7 @@ class FeishuEventProcessor:
             },
             receipt_status=claim.status,
             claim_token=claim.claim_token,
+            reference=reference,
             response={},
         )
 
@@ -221,6 +241,7 @@ class FeishuEventProcessor:
             duplicate=False,
             receipt_status=None,
             claim_token=None,
+            reference=None,
             response={"challenge": challenge},
         )
 
@@ -239,6 +260,8 @@ class FeishuEventProcessor:
             plaintext = self._decryptor.decrypt(ciphertext)
         except FeishuEventError:
             raise
+        except FeishuDecryptorError as exc:
+            raise FeishuEventError(str(exc)) from exc
         except Exception as exc:
             raise FeishuEventError("Feishu payload decryption failed") from exc
         return _json_object(plaintext)
@@ -255,6 +278,17 @@ def _required_header(headers: Mapping[str, str], name: str) -> str:
     if value is None or not value.strip():
         raise FeishuEventError(f"missing required Feishu header: {name}")
     return value
+
+
+def _has_signature_header(headers: Mapping[str, str]) -> bool:
+    return any(
+        headers.get(name, "").strip()
+        for name in (
+            "x-lark-request-timestamp",
+            "x-lark-request-nonce",
+            "x-lark-signature",
+        )
+    )
 
 
 def _json_object(body: bytes) -> dict[str, object]:

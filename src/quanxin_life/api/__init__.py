@@ -11,6 +11,8 @@ _EXPORT_MODULES = {
     "ToolInvocationService": "service",
     "create_available_tool_invocation_service": "service",
     "create_fastapi_app": "app",
+    "FeishuCallbackSecurityMode": "feishu_runner",
+    "create_feishu_callback_app": "feishu_runner",
 }
 
 __all__ = list(_EXPORT_MODULES)

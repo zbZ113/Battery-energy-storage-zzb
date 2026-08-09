@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -15,12 +16,15 @@ from starlette.concurrency import run_in_threadpool
 from quanxin_life.integrations.feishu import (
     FeishuEventError,
     FeishuEventProcessor,
+    FeishuEventReference,
+    FeishuEventReferenceError,
     FeishuPayloadDecryptionUnavailable,
     FeishuReceiptClaimStatus,
     FeishuSignatureError,
 )
 
 MAX_FEISHU_CALLBACK_BYTES = 1024 * 1024
+_LOGGER = logging.getLogger(__name__)
 
 
 class FeishuEventRouteStatus(StrEnum):
@@ -40,6 +44,14 @@ class FeishuEventRouter(Protocol):
         ...
 
 
+class FeishuSanitizedEventRouter(Protocol):
+    """Versioned router that receives no raw message content."""
+
+    def route_event(
+        self, *, event: FeishuEventReference, claim_token: str
+    ) -> FeishuEventRouteStatus: ...
+
+
 @dataclass(frozen=True, slots=True)
 class FeishuHttpAdapter:
     """Optional unauthenticated-by-session router secured by Feishu signatures."""
@@ -50,7 +62,7 @@ class FeishuHttpAdapter:
 def create_feishu_http_adapter(
     processor: FeishuEventProcessor,
     *,
-    router: FeishuEventRouter | None = None,
+    router: FeishuEventRouter | FeishuSanitizedEventRouter | None = None,
     now_factory: Callable[[], datetime] | None = None,
 ) -> FeishuHttpAdapter:
     """Create the callback endpoint around the reviewed event processor."""
@@ -77,7 +89,13 @@ def create_feishu_http_adapter(
                 status_code=503,
                 detail="feishu_callback_decryption_unavailable",
             ) from exc
-        except FeishuEventError as exc:
+        except (FeishuEventError, FeishuEventReferenceError) as exc:
+            _LOGGER.warning(
+                "Feishu callback rejected reason=%s error_type=%s detail=%s",
+                _safe_feishu_error_code(exc),
+                type(exc).__name__,
+                str(exc),
+            )
             raise HTTPException(status_code=422, detail="invalid_feishu_callback") from exc
 
         if outcome.kind == "url_verification":
@@ -105,12 +123,22 @@ def create_feishu_http_adapter(
             raise HTTPException(status_code=503, detail="feishu_event_router_unavailable")
 
         try:
-            route_status = await run_in_threadpool(
-                router.route,
-                event_id=event_id,
-                event_type=event_type,
-                claim_token=claim_token,
-            )
+            route_event = getattr(router, "route_event", None)
+            if callable(route_event):
+                if outcome.reference is None:
+                    raise RuntimeError("Feishu event has no sanitized reference")
+                route_status = await run_in_threadpool(
+                    route_event,
+                    event=outcome.reference,
+                    claim_token=claim_token,
+                )
+            else:
+                route_status = await run_in_threadpool(
+                    router.route,  # type: ignore[union-attr]
+                    event_id=event_id,
+                    event_type=event_type,
+                    claim_token=claim_token,
+                )
             if not isinstance(route_status, FeishuEventRouteStatus):
                 raise RuntimeError("Feishu event router did not confirm durable enqueue")
             processor.mark_processed(
@@ -129,6 +157,19 @@ def create_feishu_http_adapter(
         return {}
 
     return FeishuHttpAdapter(router=api_router)
+
+
+def _safe_feishu_error_code(exc: Exception) -> str:
+    message = str(exc).lower()
+    if "decrypt" in message or "encrypt" in message:
+        return "payload_decryption_failed"
+    if "verification token" in message:
+        return "verification_token_mismatch"
+    if "challenge" in message:
+        return "challenge_invalid"
+    if "json" in message:
+        return "invalid_json"
+    return "invalid_callback_contract"
 
 
 async def _read_limited_body(request: Request) -> bytes:
@@ -168,5 +209,6 @@ __all__ = [
     "FeishuEventRouteStatus",
     "FeishuEventRouter",
     "FeishuHttpAdapter",
+    "FeishuSanitizedEventRouter",
     "create_feishu_http_adapter",
 ]

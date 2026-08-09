@@ -14,7 +14,7 @@ Next.js UI。个人比赛单机部署代码及 ECS/TLS 前置设施已经准备�
 
 ## 当前状态
 
-状态更新时间：2026-07-28。
+状态更新时间：2026-08-09。
 
 | 状态 | 定义 | 当前结论 |
 | --- | --- | --- |
@@ -246,6 +246,48 @@ docker compose -f deploy/compose.yaml up --build
 `JsonlAuditLedger`；正式竞赛运行使用 PostgreSQL、Redis 和 strict competition
 composition root。
 
+### 飞书/Aily 第一阶段
+
+第一阶段已经把飞书回调、出站客户端、CSV 附件策略、固定工具工作流、受审计卡片、
+多维表格摘要、报告交付和 Aily Bearer façade 接到现有 `ToolRegistry`、`ToolResult`、
+审计账本和模型激活门。完整架构、环境变量、飞书权限、Bitable 字段与 Aily 配置见
+[飞书/Aily 模型工具联动指南](docs/integrations/feishu-aily-model-tools.md)。
+
+安全边界保持不变：第一阶段上传只接受 canonical CSV；所有展示的业务数值必须来自有效
+`ToolResult`，并保留 `run_id`、`result_id`、JSON 路径和版本信息；LLM/Aily 不得生成、
+补全或改写 SOH、RUL、EOL、区间及其他业务数值。`CONDITIONAL` 或
+`NOT_ACTIVATED` 模型路由继续拒绝，循环寿命不得自动换算为工业自然年寿命。
+
+Windows PowerShell 配置检查：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\feishu_preflight.py
+```
+
+启动无需真实凭证的 Fake Feishu Sandbox：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_fake_feishu_sandbox.py --host 127.0.0.1 --port 8765
+```
+
+启动本地加密 callback runner：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_feishu_callback.py --host 127.0.0.1 --port 8787
+```
+
+另开一个 PowerShell 检查：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8787/health
+```
+
+这个 runner 只做验签、解密、verification token、防重、receipt claim、sanitized event
+路由和快速 ACK；它不下载附件、不运行模型、也不自动回复。进程内队列、本地 SQLite 和
+Cloudflare Quick Tunnel 只适合受控联调，不是完整生产 callback worker 或生产部署。
+真实 Aily 连接器仍需目标租户凭证与受保护网关验证；PBT/MAGNet 仍需训练完成、制品核验
+和人工晋级后才能作为内部候选路由。
+
 ### Next.js 与 Streamlit
 
 Next.js 版本以 [`frontend/package.json`](frontend/package.json) 为准，固定使用
@@ -359,6 +401,7 @@ GitHub Actions 使用 Python 3.11、Node.js 24 和锁定 pnpm。测试通过只�
 | 算法原理 | RUL、SOH、Conformal、指标与拒绝条件 | [算法原理](docs/algorithms/README.md) |
 | ADR | 关键架构取舍与后果 | [Architecture Decision Records](docs/adr/README.md) |
 | 部署与使用 | 本地、ECS、安全、备份和回滚 | [运行指南](docs/runtime-setup.md) / [ECS 部署](docs/deployment/competition-ecs.md) |
+| 飞书/Aily 集成 | 回调、Sandbox、Bitable、受审计交付和连接器边界 | [飞书/Aily 模型工具联动](docs/integrations/feishu-aily-model-tools.md) |
 
 ### 实验与可信证据
 

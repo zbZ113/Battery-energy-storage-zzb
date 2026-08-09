@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import SecretStr
 
+from quanxin_life.integrations.feishu.decryptor import FeishuDecryptorError
 from quanxin_life.integrations.feishu.events import (
     FeishuEventError,
     FeishuEventProcessor,
@@ -164,6 +165,8 @@ def test_event_claim_uses_existing_receipt_row_semantics_and_blocks_replay() -> 
 
     assert first.kind == "event"
     assert first.event_id == "evt-001"
+    assert first.reference is not None
+    assert first.reference.message_id == "om-001"
     assert first.duplicate is False
     assert replay.duplicate is True
     assert first.receipt_status is FeishuReceiptClaimStatus.NEW
@@ -177,6 +180,27 @@ def test_event_claim_uses_existing_receipt_row_semantics_and_blocks_replay() -> 
         "payload_sha256": hashlib.sha256(body).hexdigest(),
         "received_at": NOW,
     }
+
+
+def test_invalid_event_reference_is_rejected_before_receipt_claim() -> None:
+    store = _MemoryReceiptStore()
+    body = json.dumps(
+        {
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt-invalid-reference",
+                "event_type": "im.message.receive_v1",
+                "token": "verification-secret",
+            },
+            "event": {"message": {"message_id": "../unsafe"}},
+        },
+        separators=(",", ":"),
+    ).encode()
+
+    with pytest.raises(ValueError, match="safe reference"):
+        _processor(store).handle(headers=_signed_headers(body), body=body, now=NOW)
+
+    assert store.claims == []
 
 
 def test_event_can_be_marked_processed_without_storing_the_payload() -> None:
@@ -270,6 +294,12 @@ class _FakeDecryptor:
         return self.plaintext
 
 
+class _FailingDecryptor:
+    def decrypt(self, encrypted: str) -> bytes:
+        del encrypted
+        raise FeishuDecryptorError("Feishu encrypted payload is not valid base64")
+
+
 def test_encrypted_event_uses_injected_decryptor_after_signature_verification() -> None:
     plaintext = _event_body(event_id="evt-encrypted")
     envelope = b'{"encrypt":"opaque-ciphertext"}'
@@ -290,6 +320,15 @@ def test_encrypted_event_fails_explicitly_without_a_decryptor() -> None:
         _processor(_MemoryReceiptStore()).handle(
             headers=_signed_headers(envelope), body=envelope, now=NOW
         )
+
+
+def test_encrypted_event_preserves_safe_decryptor_error_category() -> None:
+    envelope = b'{"encrypt":"opaque-ciphertext"}'
+
+    with pytest.raises(FeishuEventError, match="not valid base64"):
+        _processor(
+            _MemoryReceiptStore(), decryptor=_FailingDecryptor()
+        ).handle(headers=_signed_headers(envelope), body=envelope, now=NOW)
 
 
 @pytest.mark.parametrize(
@@ -316,7 +355,15 @@ def _event_body(*, event_id: str, message_id: str = "om-001") -> bytes:
                 "event_type": "im.message.receive_v1",
                 "token": "verification-secret",
             },
-            "event": {"message": {"message_id": message_id}},
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou-sender"}},
+                "message": {
+                    "message_id": message_id,
+                    "chat_id": "oc-chat",
+                    "message_type": "text",
+                    "content": '{"text":"must-not-be-retained"}',
+                },
+            },
         },
         separators=(",", ":"),
     ).encode()

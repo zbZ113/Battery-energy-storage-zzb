@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -18,6 +19,7 @@ from quanxin_life.api.feishu import (
 from quanxin_life.api.service import create_available_tool_invocation_service
 from quanxin_life.integrations.feishu import (
     FeishuEventProcessor,
+    FeishuEventReference,
     FeishuReceiptClaim,
     FeishuReceiptClaimStatus,
     FeishuWebhookSecrets,
@@ -123,6 +125,18 @@ class _NoConfirmationRouter:
         del event_id, event_type, claim_token
 
 
+@dataclass
+class _RecordingSanitizedRouter:
+    def __post_init__(self) -> None:
+        self.calls: list[tuple[FeishuEventReference, str]] = []
+
+    def route_event(
+        self, *, event: FeishuEventReference, claim_token: str
+    ) -> FeishuEventRouteStatus:
+        self.calls.append((event, claim_token))
+        return FeishuEventRouteStatus.ENQUEUED
+
+
 def _client(
     *,
     router: FeishuEventRouter | None = None,
@@ -159,7 +173,15 @@ def _event_body(*, event_id: str = "evt-safe-001", token: str = TOKEN) -> bytes:
                 "event_type": "im.message.receive_v1",
                 "token": token,
             },
-            "event": {"message": {"content": "must-not-be-forwarded"}},
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou-sender"}},
+                "message": {
+                    "message_id": "om-source",
+                    "chat_id": "oc-chat",
+                    "message_type": "text",
+                    "content": '{"text":"must-not-be-forwarded"}',
+                },
+            },
         },
         separators=(",", ":"),
     ).encode()
@@ -215,6 +237,24 @@ def test_valid_event_routes_once_and_duplicate_delivery_is_acknowledged() -> Non
     assert len(claim_token) == 64
 
 
+def test_new_router_receives_sanitized_reference_without_message_body() -> None:
+    router = _RecordingSanitizedRouter()
+    client, _ = _client(router=router)  # type: ignore[arg-type]
+    body = _event_body(event_id="evt-sanitized-001")
+
+    response = client.post(
+        "/v1/integrations/feishu/events", headers=_signed_headers(body), content=body
+    )
+
+    assert response.status_code == 200
+    assert len(router.calls) == 1
+    reference, claim_token = router.calls[0]
+    assert reference.message_id == "om-source"
+    assert reference.chat_id == "oc-chat"
+    assert len(claim_token) == 64
+    assert "must-not-be-forwarded" not in repr(reference)
+
+
 def test_in_progress_delivery_returns_retryable_error_instead_of_false_ack() -> None:
     router = _RecordingRouter()
     client, receipts = _client(router=router)
@@ -263,6 +303,44 @@ def test_invalid_signature_token_and_json_return_secret_free_errors() -> None:
     assert TOKEN not in combined
     assert ENCRYPT_KEY not in combined
     assert "must-not-be-forwarded" not in combined
+
+
+def test_invalid_callback_logs_only_a_safe_reason_code(
+    caplog,  # type: ignore[no-untyped-def]
+) -> None:
+    client, _ = _client(router=_RecordingRouter())
+    body = _event_body(token="wrong-callback-token")
+
+    with caplog.at_level(logging.WARNING, logger="quanxin_life.api.feishu"):
+        response = client.post(
+            "/v1/integrations/feishu/events",
+            headers=_signed_headers(body),
+            content=body,
+        )
+
+    assert response.status_code == 422
+    assert "reason=verification_token_mismatch" in caplog.text
+    assert "error_type=FeishuEventError" in caplog.text
+    assert "detail=Feishu verification token mismatch" in caplog.text
+    assert TOKEN not in caplog.text
+    assert ENCRYPT_KEY not in caplog.text
+
+
+def test_unsafe_event_reference_is_rejected_before_receipt_claim() -> None:
+    client, receipts = _client(router=_RecordingRouter())
+    payload = json.loads(_event_body(event_id="evt-unsafe-reference"))
+    payload["event"]["message"]["message_id"] = "../unsafe"
+    body = json.dumps(payload, separators=(",", ":")).encode()
+
+    response = client.post(
+        "/v1/integrations/feishu/events",
+        headers=_signed_headers(body),
+        content=body,
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_feishu_callback"}
+    assert receipts.identities == {}
 
 
 def test_encrypted_payload_without_reviewed_decryptor_returns_503() -> None:

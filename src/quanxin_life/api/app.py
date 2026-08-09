@@ -67,6 +67,7 @@ def create_fastapi_app(
     analysis_catalog_adapter: Any | None = None,
     knowledge_adapter: Any | None = None,
     feishu_adapter: Any | None = None,
+    aily_adapter: Any | None = None,
     industrial_adapter: Any | None = None,
     experiment_adapter: Any | None = None,
     model_artifact_adapter: Any | None = None,
@@ -140,6 +141,10 @@ def create_fastapi_app(
         # Feishu callbacks authenticate their exact body bytes and deliberately
         # do not pass through browser session or CSRF dependencies.
         app.include_router(feishu_adapter.router)
+    if aily_adapter is not None:
+        # Aily uses its own connector Bearer credential and never inherits the
+        # browser session or the generic unauthenticated MCP transport.
+        app.include_router(aily_adapter.router)
     if industrial_adapter is not None:
         if auth_adapter is None:
             raise ValueError("industrial_adapter requires auth_adapter")

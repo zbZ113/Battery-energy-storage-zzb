@@ -1,0 +1,142 @@
+"""Validation-first fixed tool workflow for Feishu and Aily adapters."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Protocol
+
+from quanxin_life.api.service import ToolInvocation, ToolInvocationService
+from quanxin_life.core import ToolResult
+from quanxin_life.tools import StandardToolName
+
+
+class FeishuWorkflowRejected(RuntimeError):
+    """Machine-readable refusal propagated to cards and connector callers."""
+
+
+class FeishuAnalysisTask(StrEnum):
+    PREDICT_CYCLE_LIFE = "predict_cycle_life"
+    PREDICT_SOH_TRAJECTORY = "predict_soh_trajectory"
+    COMPARE_OPERATION_SCENARIOS = "compare_operation_scenarios"
+    INGEST_OBSERVED_SOH = "ingest_observed_soh"
+    UPDATE_TRAJECTORY = "update_trajectory"
+
+
+class FeishuRouteAuthorizer(Protocol):
+    def authorize(
+        self,
+        *,
+        tool_name: StandardToolName,
+        validation_result: ToolResult,
+    ) -> None: ...
+
+
+class FeishuAnalysisInputBinder(Protocol):
+    def bind_analysis_input(
+        self,
+        *,
+        task: FeishuAnalysisTask,
+        validation_result: ToolResult,
+        validation_input: Mapping[str, object],
+        requested_analysis_input: Mapping[str, object],
+    ) -> Mapping[str, object]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FeishuWorkflowOutcome:
+    validation_result: ToolResult
+    analysis_result: ToolResult
+
+
+_TASK_TO_TOOL = {
+    FeishuAnalysisTask.PREDICT_CYCLE_LIFE: StandardToolName.PREDICT_CYCLE_LIFE,
+    FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY: StandardToolName.PREDICT_SOH_TRAJECTORY,
+    FeishuAnalysisTask.INGEST_OBSERVED_SOH: StandardToolName.INGEST_NEWLY_OBSERVED_SOH,
+    FeishuAnalysisTask.UPDATE_TRAJECTORY: StandardToolName.UPDATE_CELL_PARAMETERS,
+}
+_MODEL_TOOLS = frozenset(
+    {StandardToolName.PREDICT_CYCLE_LIFE, StandardToolName.PREDICT_SOH_TRAJECTORY}
+)
+
+
+class FeishuAnalysisWorkflow:
+    """Invoke only audited tools, with data validation as a hard prerequisite."""
+
+    def __init__(
+        self,
+        service: ToolInvocationService,
+        *,
+        route_authorizer: FeishuRouteAuthorizer,
+        input_binder: FeishuAnalysisInputBinder,
+    ) -> None:
+        if service.audit_ledger is None:
+            raise ValueError("Feishu workflow requires an audit ledger")
+        if not callable(getattr(input_binder, "bind_analysis_input", None)):
+            raise ValueError("Feishu workflow requires an analysis input binder")
+        self._service = service
+        self._route_authorizer = route_authorizer
+        self._input_binder = input_binder
+
+    def run(
+        self,
+        *,
+        task: FeishuAnalysisTask,
+        validation_input: Mapping[str, object],
+        analysis_input: Mapping[str, object],
+    ) -> FeishuWorkflowOutcome:
+        if task is FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS:
+            raise FeishuWorkflowRejected("SCENARIO_TOOL_NOT_AVAILABLE")
+        try:
+            tool_name = _TASK_TO_TOOL[task]
+        except KeyError as exc:  # pragma: no cover - exhaustive enum map
+            raise FeishuWorkflowRejected("ANALYSIS_TASK_NOT_SUPPORTED") from exc
+        validation_result = self._service.invoke_for_agent(
+            ToolInvocation(
+                tool_name=StandardToolName.VALIDATE_BATTERY_DATA,
+                input_value=dict(validation_input),
+            ),
+            allowed_tool_names={StandardToolName.VALIDATE_BATTERY_DATA},
+        )
+        blocked = validation_result.values.get("blocked")
+        if not isinstance(blocked, bool):
+            raise FeishuWorkflowRejected("DATA_VALIDATION_RESULT_INVALID")
+        if blocked:
+            raise FeishuWorkflowRejected("DATA_VALIDATION_BLOCKED")
+        if tool_name in _MODEL_TOOLS:
+            self._route_authorizer.authorize(
+                tool_name=tool_name,
+                validation_result=validation_result,
+            )
+        try:
+            bound_analysis_input = self._input_binder.bind_analysis_input(
+                task=task,
+                validation_result=validation_result,
+                validation_input=dict(validation_input),
+                requested_analysis_input=dict(analysis_input),
+            )
+        except FeishuWorkflowRejected:
+            raise
+        except Exception as exc:
+            raise FeishuWorkflowRejected("ANALYSIS_INPUT_BINDING_FAILED") from exc
+        if not isinstance(bound_analysis_input, Mapping):
+            raise FeishuWorkflowRejected("ANALYSIS_INPUT_BINDING_INVALID")
+        analysis_result = self._service.invoke_for_agent(
+            ToolInvocation(tool_name=tool_name, input_value=dict(bound_analysis_input)),
+            allowed_tool_names={tool_name},
+        )
+        return FeishuWorkflowOutcome(
+            validation_result=validation_result,
+            analysis_result=analysis_result,
+        )
+
+
+__all__ = [
+    "FeishuAnalysisInputBinder",
+    "FeishuAnalysisTask",
+    "FeishuAnalysisWorkflow",
+    "FeishuRouteAuthorizer",
+    "FeishuWorkflowOutcome",
+    "FeishuWorkflowRejected",
+]
