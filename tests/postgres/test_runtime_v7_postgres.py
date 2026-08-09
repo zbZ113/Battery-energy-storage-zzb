@@ -242,7 +242,7 @@ def test_postgresql_migrations_reach_runtime_v7_head(
 ) -> None:
     engine, _ = postgres_runtime
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0015"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0016"
 
 
 def test_fixed_nine_step_agent_persists_exact_results_on_postgresql(
