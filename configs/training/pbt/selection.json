@@ -1,9 +1,8 @@
 {
   "schema_version": "pbt-offline-training-v1",
   "mode": "select",
-  "enabled": false,
-  "blocked_reasons": ["BLOCKED_DATA_VIEW"],
-  "adapter_version": "pbt-offline-v1",
+  "enabled": true,
+  "adapter_version": "pbt-offline-v2",
   "upstream_commit": "a2df9d36db3f57ab2c5686638952ad7715ea0646",
   "license_status": "VERIFIED_LICENSE_PRESENT",
   "dataset_ids": ["MATR", "HUST"],
@@ -35,7 +34,7 @@
   "optimization": {
     "optimizer": "adamw",
     "learning_rate": 0.000025,
-    "weight_decay": 0.0,
+    "weight_decay": 0.01,
     "micro_batch_size": 128,
     "visible_gpu_count": 1,
     "gradient_accumulation_steps": 2,

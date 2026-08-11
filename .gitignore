@@ -36,6 +36,7 @@ artifacts/
 /models/
 /runs/
 /server-results/
+/download/
 reports/generated/
 /reports/data_quality/advanced_matr_*_preflight.json
 *.log

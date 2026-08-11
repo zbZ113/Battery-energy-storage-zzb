@@ -1,0 +1,41 @@
+schema_version: pbt-model-v1
+model_family: pbt
+adapter_version: pbt-offline-v2
+upstream:
+  url: https://github.com/Ruifeng-Tan/BatteryLife
+  commit: a2df9d36db3f57ab2c5686638952ad7715ea0646
+  license: Apache-2.0
+  license_status: VERIFIED_LICENSE_PRESENT
+  files:
+    finetune_model.py: 31bd3233bc572ae12b17196d21fc86ebf75e7f5308e88ac44139c3fb1e051c71
+    models/PBT.py: 8ff2936a7666942193ad80e77cc529f3c61b05451fe8b8b6c04eecc86a4576e3
+    utils/losses.py: 2b4310b491e6486ebc037b9e3560148e0de20189593be0d128f4431b653f3c00
+    LICENSE: 1d1f52a4bbf74b7c5e9bbe2e1732e331988b351ee4eabf450a07d698aa4fd9e6
+architecture:
+  curve_length: 300
+  early_cycle_threshold: 100
+  d_model: 128
+  n_heads: 8
+  e_layers: 2
+  d_layers: 5
+  d_ff: 32
+  dropout: 0.05
+  num_experts: 20
+  num_general_experts: 5
+  top_k: 2
+  condition_embedding_dim: 4096
+  gate_d_ff: 512
+optimization:
+  optimizer: AdamW
+  learning_rate: 0.000025
+  weight_decay: 0.01
+  scheduler: ReduceLROnPlateau
+  scheduler_factor: 0.5
+  scheduler_patience: 2
+  min_learning_rate: 0.000001
+loss:
+  objective: MSE
+  use_guidance: false
+  use_load_balancing: false
+  importance_weight: 0.0
+  disabled_terms_recorded_as_zero: true

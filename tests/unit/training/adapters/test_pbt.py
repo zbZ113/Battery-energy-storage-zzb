@@ -10,7 +10,6 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from quanxin_life.core import TrainingBlockedReason
 from quanxin_life.training.adapters.base import TrainingAdapter
 from quanxin_life.training.adapters.pbt import (
     PBT_LICENSE_STATUS,
@@ -35,7 +34,7 @@ def test_pbt_binds_reviewed_upstream_and_implements_adapter_protocol() -> None:
     assert PBT_UPSTREAM_COMMIT == "a2df9d36db3f57ab2c5686638952ad7715ea0646"
     assert PBT_LICENSE_STATUS == "VERIFIED_LICENSE_PRESENT"
     assert isinstance(adapter, TrainingAdapter)
-    assert adapter.adapter_version == "pbt-offline-v1"
+    assert adapter.adapter_version == "pbt-offline-v2"
     registry = TrainingAdapterRegistry()
     registry.register("pbt", adapter)
     assert registry.get("pbt") is adapter
@@ -80,11 +79,10 @@ def test_pbt_accepts_only_verified_non_executable_condition_artifacts(
         validate_pbt_artifacts(artifacts)
 
 
-def test_pbt_missing_frozen_embedding_is_explicitly_blocked() -> None:
-    assert PBTAdapter().readiness({"normalizer", "pca_components", "pca_mean"}) is (
-        TrainingBlockedReason.BLOCKED_DATA_VIEW
-    )
-    with pytest.raises(RuntimeError, match="BLOCKED_DATA_VIEW"):
+def test_pbt_missing_frozen_embedding_fails_closed() -> None:
+    with pytest.raises(ValueError, match="condition_embeddings"):
+        PBTAdapter().readiness({"normalizer", "pca_components", "pca_mean"})
+    with pytest.raises(ValueError, match="condition embedding is required"):
         PBTModel()(torch.ones((2, 4)), None)
 
 
@@ -237,15 +235,43 @@ def test_pbt_runtime_dependency_graph_has_no_online_llm_or_unsafe_loader() -> No
     assert imported_roots.isdisjoint({"transformers", "qwen", "BatteryML", "joblib", "pickle"})
 
 
+def test_pbt_export_uses_safe_weights_with_a_hash_bound_json_manifest(
+    tmp_path: Path,
+) -> None:
+    adapter = PBTAdapter()
+    adapter._model = PBTModel(
+        curve_length=4,
+        early_cycle_threshold=3,
+        d_model=8,
+        n_heads=2,
+        e_layers=1,
+        d_layers=1,
+        d_ff=4,
+        num_experts=3,
+        num_general_experts=1,
+        condition_embedding_dim=6,
+        gate_d_ff=5,
+        top_k=2,
+    )
+
+    manifest = adapter.export_best(tmp_path)
+
+    weights = tmp_path / "targets" / "pbt_model.safetensors"
+    metadata = tmp_path / "targets" / "pbt_model.json"
+    assert weights.is_file() and metadata.is_file()
+    payload = json.loads(metadata.read_text(encoding="utf-8"))
+    assert payload["weights_sha256"] == _sha256(weights)
+    assert manifest.files[0].relative_path == "targets/pbt_model.json"
+
+
 @pytest.mark.parametrize("stage", ["smoke", "selection", "final"])
-def test_pbt_configs_are_single_card_offline_and_explicitly_blocked(stage: str) -> None:
+def test_pbt_configs_are_single_card_offline_and_enabled(stage: str) -> None:
     root = Path(__file__).parents[4]
     payload = json.loads(
         (root / "configs" / "training" / "pbt" / f"{stage}.json").read_text(encoding="utf-8")
     )
 
-    assert payload["enabled"] is False
-    assert payload["blocked_reasons"] == ["BLOCKED_DATA_VIEW"]
+    assert payload["enabled"] is True
     assert payload["upstream_commit"] == PBT_UPSTREAM_COMMIT
     assert payload["online_condition_embedding"] is False
     assert set(payload["required_condition_artifacts"]) == {
@@ -293,20 +319,22 @@ def test_pbt_training_matrix_matches_frozen_adapter_config() -> None:
     entries = json.loads(
         (root / "configs" / "training" / "task_matrix_v1.json").read_text(encoding="utf-8")
     )["entries"]
-    entry = next(item for item in entries if item["model_family"] == "pbt")
-    assert entry["cutoff_cycle"] == 100
-    assert entry["loss_names"] == [
-        "label",
-        "guidance",
-        "contrastive",
-        "alignment",
-        "moe_load_balancing",
-    ]
-    assert (
-        entry["micro_batch_size"],
-        entry["gradient_accumulation_steps"],
-        entry["effective_batch_size"],
-    ) == (128, 2, 256)
+    pbt_entries = [item for item in entries if item["model_family"] == "pbt"]
+    assert len(pbt_entries) == 80
+    assert {entry["cutoff_cycle"] for entry in pbt_entries} == {20, 50, 100, 150}
+    for entry in pbt_entries:
+        assert entry["loss_names"] == [
+            "label",
+            "guidance",
+            "contrastive",
+            "alignment",
+            "moe_load_balancing",
+        ]
+        assert (
+            entry["micro_batch_size"],
+            entry["gradient_accumulation_steps"],
+            entry["effective_batch_size"],
+        ) == (128, 2, 256)
 
 
 def test_pbt_guidance_and_contrastive_losses_match_frozen_upstream_equations() -> None:
