@@ -10,6 +10,7 @@ from deploy.advanced_agent_context import CompetitionAgentPolicyContextResolver
 from deploy.competition_inputs import (
     load_advanced_agent_policy,
     load_calibration_source_registrations,
+    load_feishu_csv_registrations,
 )
 from deploy.runtime_settings import CompetitionRuntimeSettings
 from quanxin_life.agents.supervisor import SupervisorPlanner
@@ -53,6 +54,11 @@ from quanxin_life.application.assembly import (
     create_project_prediction_tool_invocation_service,
 )
 from quanxin_life.application.datasets import DatasetService
+from quanxin_life.application.feishu_aily_assembly import (
+    FeishuAilyAssemblyConfig,
+    RegisteredFeishuCsvRegistrationResolver,
+    create_feishu_aily_components,
+)
 from quanxin_life.application.ingestion import (
     FileSystemVerifiedEarlyCycleBatchStore,
 )
@@ -100,6 +106,7 @@ from quanxin_life.tasks.advanced_calibration import (
     register_advanced_calibration_task,
 )
 from quanxin_life.tasks.agent_runs import register_agent_run_task
+from quanxin_life.tasks.feishu import register_feishu_analysis_task
 from quanxin_life.tasks.project_reports import register_project_report_task
 from quanxin_life.tools import ToolExecutionScope
 
@@ -114,6 +121,7 @@ class CompetitionRuntime:
     agent_worker: AgentRunExecutionWorker
     calibration_worker: Any
     report_worker: ProjectReportExportService
+    feishu_worker: Any | None
 
 
 def create_competition_runtime(
@@ -266,6 +274,37 @@ def create_competition_runtime(
     )
     report_queue = CeleryProjectReportQueue(app=celery_app)
     register_project_report_task(app=celery_task_app, worker=report_worker)
+    feishu_aily = None
+    if settings.feishu_aily is not None:
+        integration = settings.feishu_aily
+        feishu_aily = create_feishu_aily_components(
+            session_factory=session_factory,
+            celery_app=celery_task_app,
+            config=FeishuAilyAssemblyConfig(
+                app_id=integration.app_id,
+                app_secret=integration.app_secret,
+                verification_token=integration.verification_token,
+                encrypt_key=integration.encrypt_key,
+                aily_connector_api_key=integration.aily_connector_api_key,
+                bitable_app_token=integration.bitable_app_token,
+                bitable_table_id=integration.bitable_table_id,
+                external_https_base_url=integration.external_https_base_url,
+                data_root=settings.data_root,
+                allow_candidate_scenario_execution=(
+                    integration.allow_candidate_scenario_execution
+                ),
+                allow_candidate_scenario_results=(
+                    integration.allow_candidate_scenario_results
+                ),
+            ),
+            registration_resolver=RegisteredFeishuCsvRegistrationResolver(
+                load_feishu_csv_registrations(integration.csv_registrations_file)
+            ),
+        )
+        register_feishu_analysis_task(
+            app=celery_task_app,
+            worker=feishu_aily.worker,
+        )
 
     http_app = create_fastapi_app(
         tool_service,
@@ -311,6 +350,12 @@ def create_competition_runtime(
             auth_adapter=auth_adapter,
             queue=report_queue,
         ),
+        feishu_adapter=(
+            feishu_aily.feishu_http_adapter if feishu_aily is not None else None
+        ),
+        aily_adapter=(
+            feishu_aily.aily_http_adapter if feishu_aily is not None else None
+        ),
         project_invocation_context_service=context_service,
     )
     return CompetitionRuntime(
@@ -320,6 +365,7 @@ def create_competition_runtime(
         agent_worker=agent_worker,
         calibration_worker=calibration.worker,
         report_worker=report_worker,
+        feishu_worker=feishu_aily.worker if feishu_aily is not None else None,
     )
 
 

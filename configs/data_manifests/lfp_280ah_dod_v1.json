@@ -1,0 +1,26 @@
+{
+  "manifest_version": "lfp-280ah-dod-public-files-local-audit-v1",
+  "source_catalog": "configs/data_sources.json",
+  "file_count": 3,
+  "total_size_bytes": 5174692220,
+  "files": [
+    {
+      "dataset_id": "LFP_280AH_DOD",
+      "relative_path": "data/raw/LFP_280AH_DOD/v3/CATL.zip",
+      "size_bytes": 2112139209,
+      "sha256": "ef6e01c06952f0d43c9ee02b9a84d34d286c40db799c6baced5e5879b55ea364"
+    },
+    {
+      "dataset_id": "LFP_280AH_DOD",
+      "relative_path": "data/raw/LFP_280AH_DOD/v3/EVE.zip",
+      "size_bytes": 3062552580,
+      "sha256": "6c9af32eeccd15c6bf7ef734e121695617f18bedf201ebf639a2d520b05aeaf0"
+    },
+    {
+      "dataset_id": "LFP_280AH_DOD",
+      "relative_path": "data/raw/LFP_280AH_DOD/v3/Readme.txt",
+      "size_bytes": 431,
+      "sha256": "08fa58ffd1ed5f410358582d93667ee0eaf3e4b24fd09a8bf66b2e42e42d7ba3"
+    }
+  ]
+}

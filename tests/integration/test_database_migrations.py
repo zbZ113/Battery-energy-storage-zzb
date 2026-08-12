@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,17 @@ def _config(database_url: str) -> Config:
     config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
     config.set_main_option("sqlalchemy.url", database_url)
     return config
+
+
+def test_alembic_keeps_existing_application_loggers_enabled(tmp_path: Path) -> None:
+    database_path = tmp_path / "logging.sqlite3"
+    database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
+    logger = logging.getLogger("quanxin_life.api.feishu")
+    logger.disabled = False
+
+    command.upgrade(_config(database_url), "0001")
+
+    assert logger.disabled is False
 
 
 def test_initial_migration_upgrades_empty_sqlite_and_downgrades_to_base(

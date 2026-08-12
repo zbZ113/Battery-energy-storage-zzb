@@ -80,11 +80,21 @@ reporting = [
   "python-docx>=1.2,<2",
   "reportlab>=4.4,<5",
 ]
+scenarios = [
+  "matplotlib>=3.9,<4",
+  "numpy>=2.1,<3",
+  "pandas>=2.2,<3",
+  "scipy>=1.14,<2",
+]
 streamlit = ["httpx>=0.27,<1", "plotly>=5.24,<7", "streamlit>=1.40,<2"]
 tooling = ["dvc>=3.58,<4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"quanxin_life.scenarios" = ["manifests/*.json"]
+"quanxin_life._vendor.blast_lite" = ["LICENSE", "NOTICE", "UPSTREAM.json"]
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --import-mode=importlib"
@@ -92,6 +102,7 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.ruff]
+extend-exclude = ["src/quanxin_life/_vendor/blast_lite"]
 line-length = 100
 target-version = "py311"
 
@@ -99,6 +110,7 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.mypy]
+exclude = "^src/quanxin_life/_vendor/blast_lite/(degradation_model|lfp_gr_250AhPrismatic_2019|lfp_gr_SonyMurata3Ah_2018|rainflow)\\.py$"
 python_version = "3.11"
 strict = true
 mypy_path = "src"

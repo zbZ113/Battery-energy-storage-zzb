@@ -141,6 +141,64 @@ def test_decision_policy_threshold_is_not_labeled_as_model_inference() -> None:
     assert "DOMAIN_KNOWLEDGE" in markdown
 
 
+def test_storage_scenario_report_labels_model_values_as_physics_reference() -> None:
+    from quanxin_life.tools.audited_report import (
+        AuditedReportClaimReference,
+        GenerateAuditedReportToolInput,
+        NumericEvidenceReference,
+        ReportClaimKind,
+        ReportKind,
+        execute_generate_audited_report_tool,
+    )
+
+    result = _result(value=0.91).model_copy(
+        update={
+            "tool_name": StandardToolName.PROJECT_STORAGE_LIFETIME.value,
+            "tool_version": "project-storage-lifetime-tool-v1",
+            "values": {
+                "artifact": {
+                    "projection": {
+                        "final_soh": 0.91,
+                        "final_natural_year": 10.0,
+                    }
+                }
+            },
+        }
+    )
+    tool_input = GenerateAuditedReportToolInput(
+        report_kind=ReportKind.STORAGE_LIFETIME_SCENARIO,
+        claims=(
+            AuditedReportClaimReference(
+                claim_kind=ReportClaimKind.SCENARIO_PROJECTION,
+                numeric_evidence=(
+                    NumericEvidenceReference(
+                        result_id=result.result_id,
+                        json_path="values.artifact.projection.final_soh",
+                    ),
+                    NumericEvidenceReference(
+                        result_id=result.result_id,
+                        json_path="values.artifact.projection.final_natural_year",
+                    ),
+                ),
+            ),
+        ),
+        upstream_result_ids=(result.result_id,),
+    )
+
+    output = execute_generate_audited_report_tool(
+        tool_input,
+        audit_ledger=AuditLedger((result,)),
+        clock=lambda: datetime(2026, 7, 14, 8, 30, tzinfo=UTC),
+    )
+
+    markdown = output.values["markdown"]
+    assert output.values["report_kind"] == "storage_lifetime_scenario"
+    assert output.values["claim_ids"] == ["scenario_projection"]
+    assert "PHYSICS_REFERENCE" in markdown
+    assert "MODEL_INFERENCE" not in markdown
+    assert "confidence interval" in markdown
+
+
 @pytest.mark.parametrize(
     ("field_name", "value"),
     (

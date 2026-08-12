@@ -8,6 +8,7 @@ import pytest
 from quanxin_life.api.service import ToolInvocationService
 from quanxin_life.audit import AuditLedger
 from quanxin_life.core import ProvenanceRecord, SourceKind, ToolResult, sha256_canonical
+from quanxin_life.core.schemas import ContractModel
 from quanxin_life.integrations.feishu.workflow import (
     FeishuAnalysisTask,
     FeishuAnalysisWorkflow,
@@ -38,6 +39,10 @@ def _provenance() -> tuple[ProvenanceRecord, ...]:
 
 class _PredictionInput(ValidateBatteryDataToolInput):
     """Test-only input type used to distinguish the prediction registry entry."""
+
+
+class _ScenarioWorkflowInput(ContractModel):
+    scenario_context_id: str
 
 
 class _RecordingRouteAuthorizer:
@@ -76,6 +81,16 @@ class _SameEvidenceInputBinder:
             for field in evidence_fields
         ):
             raise FeishuWorkflowRejected("ANALYSIS_INPUT_NOT_BOUND_TO_VALIDATION")
+        return dict(requested_analysis_input)
+
+
+class _ScenarioInputBinder:
+    def bind_analysis_input(
+        self,
+        *,
+        requested_analysis_input: dict[str, object],
+        **_: object,
+    ) -> dict[str, object]:
         return dict(requested_analysis_input)
 
 
@@ -140,7 +155,9 @@ def test_validation_block_prevents_prediction_invocation() -> None:
         input_binder=_SameEvidenceInputBinder(),
     )
 
-    with pytest.raises(FeishuWorkflowRejected, match="DATA_VALIDATION_BLOCKED"):
+    with pytest.raises(
+        FeishuWorkflowRejected, match="DATA_VALIDATION_BLOCKED"
+    ) as captured:
         workflow.run(
             task=FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
             validation_input=_input(),
@@ -149,6 +166,8 @@ def test_validation_block_prevents_prediction_invocation() -> None:
 
     assert prediction_calls == []
     assert authorizer.calls == []
+    assert captured.value.validation_result is not None
+    assert captured.value.validation_result.tool_name == "validate_battery_data"
 
 
 def test_inactive_model_route_is_rejected_after_validation_and_before_prediction() -> None:
@@ -244,19 +263,83 @@ def test_active_route_executes_only_allowlisted_tool_and_registers_both_results(
     )
 
 
-def test_scenario_comparison_is_explicitly_unavailable_before_magnet_promotion() -> None:
+@pytest.mark.parametrize(
+    ("task", "tool_name"),
+    (
+        (
+            FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+            StandardToolName.COMPARE_OPERATION_SCENARIOS,
+        ),
+        (
+            FeishuAnalysisTask.PROJECT_STORAGE_LIFETIME,
+            StandardToolName.PROJECT_STORAGE_LIFETIME,
+        ),
+    ),
+)
+def test_scenario_tasks_run_only_their_registered_allowlisted_tool(
+    task: FeishuAnalysisTask,
+    tool_name: StandardToolName,
+) -> None:
+    registry = ToolRegistry()
+    register_validate_battery_data_tool(registry)
+
+    def execute_scenario(input_value: _ScenarioWorkflowInput) -> ToolResult:
+        return ToolResult(
+            result_id=str(uuid4()),
+            tool_name=tool_name.value,
+            tool_version=f"{tool_name.value}-test-v1",
+            model_version="blast-candidate-test-v1",
+            data_version="uploaded-data-v1",
+            feature_version="operation-scenario-contract-v1",
+            input_hash=sha256_canonical(input_value.model_dump(mode="json")),
+            values={"scenario_context_id": input_value.scenario_context_id},
+            warnings=["TEST_ONLY_SCENARIO_RESULT"],
+            provenance=list(_provenance()),
+            created_at=NOW,
+        )
+
+    registry.register(
+        ToolDefinition(
+            tool_name=tool_name,
+            tool_version=f"{tool_name.value}-test-v1",
+            input_model=_ScenarioWorkflowInput,
+            executor=execute_scenario,
+        )
+    )
+    authorizer = _RecordingRouteAuthorizer()
     workflow = FeishuAnalysisWorkflow(
-        _service(prediction_calls=[]),
-        route_authorizer=_RecordingRouteAuthorizer(),
-        input_binder=_SameEvidenceInputBinder(),
+        ToolInvocationService(registry=registry, audit_ledger=AuditLedger()),
+        route_authorizer=authorizer,
+        input_binder=_ScenarioInputBinder(),
+    )
+    valid_input = _input(
+        records=(
+            {
+                "dataset_id": "source",
+                "cell_id": "cell",
+                "cycle_index": 0,
+                "sample_index": 0,
+                "time_s": 0,
+                "voltage_v": 3,
+                "current_a": 0,
+                "temperature_c": None,
+                "charge_capacity_ah": None,
+                "discharge_capacity_ah": None,
+                "internal_resistance_ohm": None,
+                "diagnostic": False,
+                "valid": True,
+            },
+        )
     )
 
-    with pytest.raises(FeishuWorkflowRejected, match="SCENARIO_TOOL_NOT_AVAILABLE"):
-        workflow.run(
-            task=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
-            validation_input=_input(),
-            analysis_input={},
-        )
+    outcome = workflow.run(
+        task=task,
+        validation_input=valid_input,
+        analysis_input={"scenario_context_id": "ctx-workflow"},
+    )
+
+    assert outcome.analysis_result.tool_name == tool_name.value
+    assert authorizer.calls == []
 
 
 def test_workflow_requires_a_persistent_audit_boundary() -> None:

@@ -71,6 +71,7 @@ def test_runtime_settings_load_only_explicit_files_and_paths(tmp_path: Path) -> 
     assert settings.calibration_registrations_file.is_file()
     assert settings.calibration_evidence_root.is_dir()
     assert settings.agent_policy_file.is_file()
+    assert settings.feishu_aily is None
 
 
 def test_runtime_settings_repr_never_exposes_credentials(tmp_path: Path) -> None:
@@ -132,4 +133,123 @@ def test_runtime_settings_reject_secret_symlinks(tmp_path: Path) -> None:
     environment["QUANXIN_DATABASE_URL_FILE"] = str(link)
 
     with pytest.raises(ValueError, match="symbolic link"):
+        CompetitionRuntimeSettings.from_environment(environment)
+
+
+def test_runtime_settings_load_complete_feishu_aily_bundle_from_secret_files(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(tmp_path)
+    secret_values = {
+        "QUANXIN_FEISHU_APP_SECRET_FILE": "feishu-app-secret",
+        "QUANXIN_FEISHU_VERIFICATION_TOKEN_FILE": "verification-token",
+        "QUANXIN_FEISHU_ENCRYPT_KEY_FILE": "encrypt-key",
+        "QUANXIN_AILY_CONNECTOR_API_KEY_FILE": "aily-connector-key",
+    }
+    for key, value in secret_values.items():
+        path = tmp_path / key.casefold()
+        path.write_text(value + "\n", encoding="utf-8")
+        environment[key] = str(path)
+    csv_registrations = tmp_path / "feishu-csv-registrations.json"
+    csv_registrations.write_text(
+        '{"schema_version":"feishu-canonical-csv-registration-registry-v1",'
+        '"registrations":[]}\n',
+        encoding="utf-8",
+    )
+    environment.update(
+        {
+            "QUANXIN_FEISHU_AILY_ENABLED": "true",
+            "QUANXIN_FEISHU_APP_ID": "cli-reviewed-app",
+            "QUANXIN_FEISHU_BITABLE_APP_TOKEN": "bascn-reviewed",
+            "QUANXIN_FEISHU_BITABLE_TABLE_ID": "tbl-reviewed",
+            "QUANXIN_EXTERNAL_HTTPS_BASE_URL": "https://integration.example.test",
+            "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE": str(csv_registrations),
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION": "true",
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS": "false",
+        }
+    )
+
+    settings = CompetitionRuntimeSettings.from_environment(environment)
+
+    assert settings.feishu_aily is not None
+    integration = settings.feishu_aily
+    assert integration.app_id == "cli-reviewed-app"
+    assert integration.bitable_app_token == "bascn-reviewed"
+    assert integration.bitable_table_id == "tbl-reviewed"
+    assert integration.external_https_base_url == "https://integration.example.test"
+    assert integration.csv_registrations_file == csv_registrations.resolve(strict=True)
+    assert integration.allow_candidate_scenario_execution is True
+    assert integration.allow_candidate_scenario_results is False
+    rendered = repr(settings) + str(settings)
+    assert "feishu-app-secret" not in rendered
+    assert "verification-token" not in rendered
+    assert "encrypt-key" not in rendered
+    assert "aily-connector-key" not in rendered
+
+
+def test_runtime_settings_reject_partial_or_unsafe_feishu_aily_configuration(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(tmp_path)
+    environment["QUANXIN_FEISHU_AILY_ENABLED"] = "true"
+
+    with pytest.raises(ValueError, match="QUANXIN_FEISHU_APP_ID"):
+        CompetitionRuntimeSettings.from_environment(environment)
+
+    environment = _environment(tmp_path / "unsafe")
+    environment["QUANXIN_FEISHU_AILY_ENABLED"] = "false"
+    environment["QUANXIN_FEISHU_APP_ID"] = "partially-configured"
+    with pytest.raises(ValueError, match="disabled"):
+        CompetitionRuntimeSettings.from_environment(environment)
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    (
+        ("QUANXIN_FEISHU_AILY_ENABLED", "sometimes", "boolean"),
+        (
+            "QUANXIN_EXTERNAL_HTTPS_BASE_URL",
+            "http://integration.example.test",
+            "HTTPS",
+        ),
+        ("QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION", "1", "boolean"),
+    ),
+)
+def test_runtime_settings_reject_invalid_feishu_aily_flags_and_url(
+    tmp_path: Path,
+    key: str,
+    value: str,
+    message: str,
+) -> None:
+    environment = _environment(tmp_path)
+    for secret_key in (
+        "QUANXIN_FEISHU_APP_SECRET_FILE",
+        "QUANXIN_FEISHU_VERIFICATION_TOKEN_FILE",
+        "QUANXIN_FEISHU_ENCRYPT_KEY_FILE",
+        "QUANXIN_AILY_CONNECTOR_API_KEY_FILE",
+    ):
+        path = tmp_path / secret_key.casefold()
+        path.write_text("reviewed-secret\n", encoding="utf-8")
+        environment[secret_key] = str(path)
+    csv_registrations = tmp_path / "feishu-csv-registrations.json"
+    csv_registrations.write_text(
+        '{"schema_version":"feishu-canonical-csv-registration-registry-v1",'
+        '"registrations":[]}\n',
+        encoding="utf-8",
+    )
+    environment.update(
+        {
+            "QUANXIN_FEISHU_AILY_ENABLED": "true",
+            "QUANXIN_FEISHU_APP_ID": "cli-reviewed-app",
+            "QUANXIN_FEISHU_BITABLE_APP_TOKEN": "bascn-reviewed",
+            "QUANXIN_FEISHU_BITABLE_TABLE_ID": "tbl-reviewed",
+            "QUANXIN_EXTERNAL_HTTPS_BASE_URL": "https://integration.example.test",
+            "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE": str(csv_registrations),
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION": "false",
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS": "false",
+            key: value,
+        }
+    )
+
+    with pytest.raises(ValueError, match=message):
         CompetitionRuntimeSettings.from_environment(environment)

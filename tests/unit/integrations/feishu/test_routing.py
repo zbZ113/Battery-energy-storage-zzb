@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -39,7 +40,11 @@ def test_text_message_retains_only_machine_references() -> None:
 
 def test_file_message_extracts_file_key_and_safe_filename_only() -> None:
     payload = {
-        "header": {"event_id": "evt_file", "event_type": "im.message.receive_v1"},
+        "header": {
+            "event_id": "evt_file",
+            "event_type": "im.message.receive_v1",
+            "create_time": "1786424400000",
+        },
         "event": {
             "sender": {"sender_id": {"open_id": "ou_sender"}},
             "message": {
@@ -58,6 +63,8 @@ def test_file_message_extracts_file_key_and_safe_filename_only() -> None:
     assert reference.kind is FeishuInboundEventKind.FILE
     assert reference.file_key == "file_source"
     assert reference.file_name == "observed.csv"
+    assert reference.receive_id_type == "chat_id"
+    assert reference.event_time == datetime.fromtimestamp(1786424400, tz=UTC)
 
 
 def test_card_action_extracts_only_allowlisted_identity_and_action_value() -> None:

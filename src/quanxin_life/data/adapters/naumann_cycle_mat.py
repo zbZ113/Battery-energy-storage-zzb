@@ -63,6 +63,36 @@ class NaumannCycleMatrixLayout(ContractModel):
         return self
 
 
+class CycleMatrixColumnReadPolicy(ContractModel):
+    """Reviewed exception for one source column; defaults remain strict."""
+
+    column_index: int = Field(ge=0)
+    allow_duplicate_axis: bool = False
+    exclusion_reason: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def excluded_columns_do_not_declare_axis_behavior(
+        self,
+    ) -> CycleMatrixColumnReadPolicy:
+        if self.exclusion_reason is not None and self.allow_duplicate_axis:
+            raise ValueError("excluded columns cannot also allow duplicate axis values")
+        return self
+
+
+class NaumannCycleReadPolicy(ContractModel):
+    """Versioned per-column exceptions for a reviewed MATLAB source."""
+
+    policy_version: str = Field(min_length=1)
+    columns: tuple[CycleMatrixColumnReadPolicy, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def column_indices_are_unique(self) -> NaumannCycleReadPolicy:
+        indices = [item.column_index for item in self.columns]
+        if len(indices) != len(set(indices)):
+            raise ValueError("cycle read policy column indices must be unique")
+        return self
+
+
 class CycleMatrixObservation(ContractModel):
     """One direct metric observation from a reviewed cycle-ageing matrix."""
 
@@ -126,6 +156,21 @@ def load_naumann_cycle_layout(path: Path) -> NaumannCycleMatrixLayout:
     except json.JSONDecodeError as exc:
         raise ValueError("cycle layout must contain valid JSON") from exc
     return NaumannCycleMatrixLayout.model_validate(payload)
+
+
+def load_naumann_cycle_read_policy(path: Path) -> NaumannCycleReadPolicy:
+    """Load explicit per-column source exceptions from versioned JSON."""
+
+    path = Path(path)
+    if path.suffix.lower() != ".json":
+        raise ValueError("cycle read policy must use a .json file")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"cycle read policy does not exist: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError("cycle read policy must contain valid JSON") from exc
+    return NaumannCycleReadPolicy.model_validate(payload)
 
 
 def select_reviewed_axis_observations(
@@ -222,7 +267,12 @@ def _validate_source(
         raise ValueError("Naumann cycle manifest license does not match the source catalog")
 
 
-def _require_matrix(value: object, *, variable_name: str) -> Any:
+def _require_matrix(
+    value: object,
+    *,
+    variable_name: str,
+    allow_nonfinite: bool = False,
+) -> Any:
     try:
         import numpy as np
     except ImportError as exc:  # pragma: no cover - only without optional data extras
@@ -234,7 +284,7 @@ def _require_matrix(value: object, *, variable_name: str) -> Any:
     if not np.issubdtype(matrix.dtype, np.number):
         raise ValueError(f"MATLAB variable {variable_name!r} must be numeric")
     numeric = matrix.astype(float, copy=False)
-    if not np.all(np.isfinite(numeric)):
+    if not allow_nonfinite and not np.all(np.isfinite(numeric)):
         raise ValueError(f"MATLAB variable {variable_name!r} contains non-finite values")
     return numeric
 
@@ -282,12 +332,21 @@ def load_naumann_cycle_matrix(
     source: SourceCatalogEntry,
     *,
     layout: NaumannCycleMatrixLayout,
+    read_policy: NaumannCycleReadPolicy | None = None,
 ) -> tuple[CycleMatrixObservation, ...]:
     """Load one explicitly declared condition matrix after source verification."""
 
     path = Path(path)
     _validate_source(path, manifest, source)
     layout = _validated_layout(layout)
+    policy = (
+        NaumannCycleReadPolicy.model_validate(read_policy.model_dump(mode="json"))
+        if read_policy is not None
+        else None
+    )
+    policy_by_column = (
+        {item.column_index: item for item in policy.columns} if policy is not None else {}
+    )
     source_sha256 = verify_raw_file(path, manifest)
 
     try:
@@ -316,8 +375,16 @@ def load_naumann_cycle_matrix(
     if missing:
         raise ValueError("MATLAB source is missing declared variables: " + ", ".join(missing))
 
-    x_axis = _require_matrix(raw[layout.x_axis_variable], variable_name=layout.x_axis_variable)
-    y_axis = _require_matrix(raw[layout.y_axis_variable], variable_name=layout.y_axis_variable)
+    x_axis = _require_matrix(
+        raw[layout.x_axis_variable],
+        variable_name=layout.x_axis_variable,
+        allow_nonfinite=policy is not None,
+    )
+    y_axis = _require_matrix(
+        raw[layout.y_axis_variable],
+        variable_name=layout.y_axis_variable,
+        allow_nonfinite=policy is not None,
+    )
     if x_axis.shape != y_axis.shape:
         raise ValueError("MATLAB x and y matrices must have identical shapes")
     if x_axis.shape[1] != len(layout.condition_columns):
@@ -332,9 +399,20 @@ def load_naumann_cycle_matrix(
             raise ValueError(
                 "MATLAB expected_legend mismatch for " f"condition {condition.condition_id!r}"
             )
+        column_policy = policy_by_column.get(condition.column_index)
+        if column_policy is not None and column_policy.exclusion_reason is not None:
+            continue
         x_values = x_axis[:, condition.column_index]
         y_values = y_axis[:, condition.column_index]
-        if np.any(np.diff(x_values) <= 0):
+        if not np.all(np.isfinite(x_values)) or not np.all(np.isfinite(y_values)):
+            raise ValueError("included cycle matrix columns must contain only finite values")
+        axis_differences = np.diff(x_values)
+        allow_duplicate_axis = (
+            column_policy.allow_duplicate_axis if column_policy is not None else False
+        )
+        if np.any(axis_differences < 0) or (
+            not allow_duplicate_axis and np.any(axis_differences == 0)
+        ):
             message = "cycle observation axis must strictly increase without reordering rows"
             raise ValueError(message)
         if np.any(y_values < 0):

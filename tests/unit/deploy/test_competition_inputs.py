@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -8,7 +10,40 @@ import pytest
 from deploy.competition_inputs import (
     load_advanced_agent_policy,
     load_calibration_source_registrations,
+    load_feishu_csv_registrations,
 )
+from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
+from quanxin_life.core import CellMetadata, ProvenanceRecord, SourceKind
+from quanxin_life.features import EarlyCycleFeatureConfig
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def _feishu_registration(payload_sha256: str) -> CanonicalCsvBatchRegistration:
+    return CanonicalCsvBatchRegistration(
+        metadata=CellMetadata(
+            dataset_id="UPLOAD",
+            cell_id="registered-cell",
+            chemistry="LFP/graphite",
+            nominal_capacity_ah=250.0,
+            source_uri="feishu://canonical/registered-cell.csv",
+            source_sha256=payload_sha256,
+            schema_version="cycle-record-v1",
+        ),
+        feature_config=EarlyCycleFeatureConfig(cutoff_cycle=20),
+        data_version="feishu-upload-v1",
+        split_version="operator-registration-v1",
+        provenance=(
+            ProvenanceRecord(
+                source_id="registered-feishu-upload",
+                source_kind=SourceKind.OBSERVED,
+                uri="feishu://canonical/registered-cell.csv",
+                sha256=payload_sha256,
+                description="Operator-approved canonical CSV registration.",
+                created_at=datetime(2026, 8, 12, tzinfo=UTC),
+            ),
+        ),
+    )
 
 
 def test_agent_policy_is_strict_versioned_and_hash_bound(tmp_path: Path) -> None:
@@ -138,3 +173,77 @@ def test_calibration_registry_rejects_duplicate_keys_and_sources(
             duplicate_source,
             evidence_root=evidence_root,
         )
+
+
+def test_feishu_csv_registry_loads_strict_sha_bound_registrations(tmp_path: Path) -> None:
+    payload_sha256 = "b" * 64
+    registration = _feishu_registration(payload_sha256)
+    registry = tmp_path / "feishu-csv-registrations.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": "feishu-canonical-csv-registration-registry-v1",
+                "registrations": [
+                    {
+                        "payload_sha256": payload_sha256,
+                        "registration": registration.model_dump(mode="json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_feishu_csv_registrations(registry)
+
+    assert tuple(loaded) == (payload_sha256,)
+    assert loaded[payload_sha256] == registration
+    assert loaded[payload_sha256] is not registration
+
+
+def test_feishu_csv_registration_example_is_a_valid_empty_registry() -> None:
+    loaded = load_feishu_csv_registrations(
+        ROOT / "deploy" / "feishu-csv-registrations.example.json"
+    )
+
+    assert dict(loaded) == {}
+
+
+def test_feishu_csv_registry_rejects_duplicate_or_mismatched_sha(tmp_path: Path) -> None:
+    payload_sha256 = "c" * 64
+    entry = {
+        "payload_sha256": payload_sha256,
+        "registration": _feishu_registration(payload_sha256).model_dump(mode="json"),
+    }
+    duplicate = tmp_path / "duplicate-feishu.json"
+    duplicate.write_text(
+        json.dumps(
+            {
+                "schema_version": "feishu-canonical-csv-registration-registry-v1",
+                "registrations": [entry, entry],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unique"):
+        load_feishu_csv_registrations(duplicate)
+
+    mismatched = tmp_path / "mismatched-feishu.json"
+    mismatched.write_text(
+        json.dumps(
+            {
+                "schema_version": "feishu-canonical-csv-registration-registry-v1",
+                "registrations": [
+                    {
+                        "payload_sha256": payload_sha256,
+                        "registration": _feishu_registration("d" * 64).model_dump(
+                            mode="json"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="SHA-256"):
+        load_feishu_csv_registrations(mismatched)

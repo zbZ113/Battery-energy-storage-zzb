@@ -1,0 +1,36 @@
+services:
+  migrate: &feishu-aily-service
+    environment:
+      QUANXIN_FEISHU_AILY_ENABLED: "true"
+      QUANXIN_FEISHU_APP_ID: ${FEISHU_APP_ID}
+      QUANXIN_FEISHU_APP_SECRET_FILE: /run/secrets/feishu_app_secret
+      QUANXIN_FEISHU_VERIFICATION_TOKEN_FILE: /run/secrets/feishu_verification_token
+      QUANXIN_FEISHU_ENCRYPT_KEY_FILE: /run/secrets/feishu_encrypt_key
+      QUANXIN_AILY_CONNECTOR_API_KEY_FILE: /run/secrets/aily_connector_api_key
+      QUANXIN_FEISHU_BITABLE_APP_TOKEN: ${FEISHU_BITABLE_APP_TOKEN}
+      QUANXIN_FEISHU_BITABLE_TABLE_ID: ${FEISHU_BITABLE_TABLE_ID}
+      QUANXIN_EXTERNAL_HTTPS_BASE_URL: ${EXTERNAL_HTTPS_BASE_URL}
+      QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE: /srv/quanxin/config/feishu-csv-registrations.json
+      QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION: ${ALLOW_CANDIDATE_SCENARIO_EXECUTION}
+      QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS: ${ALLOW_CANDIDATE_SCENARIO_RESULTS}
+    secrets:
+      - feishu_app_secret
+      - feishu_verification_token
+      - feishu_encrypt_key
+      - aily_connector_api_key
+
+  api:
+    <<: *feishu-aily-service
+
+  worker:
+    <<: *feishu-aily-service
+
+secrets:
+  feishu_app_secret:
+    file: ${QUANXIN_SECRETS_ROOT}/feishu_app_secret
+  feishu_verification_token:
+    file: ${QUANXIN_SECRETS_ROOT}/feishu_verification_token
+  feishu_encrypt_key:
+    file: ${QUANXIN_SECRETS_ROOT}/feishu_encrypt_key
+  aily_connector_api_key:
+    file: ${QUANXIN_SECRETS_ROOT}/aily_connector_api_key

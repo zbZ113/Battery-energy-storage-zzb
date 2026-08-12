@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/NREL/BLAST-Lite.git",
+  "commit": "b093495b47dc40dd96dba865d91f553619501e94",
+  "describe": "v1.1.0-12-gb093495",
+  "declared_version": "1.1.0",
+  "license_spdx": "BSD-3-Clause",
+  "source_files": {
+    "blast/models/degradation_model.py": "1333d29393d2290669b8fb54170efefd68fdf0676e5994b71832adb6f8c0fd6f",
+    "blast/models/lfp_gr_250AhPrismatic_2019.py": "f2dd504eb4411feb6854ef30a60d68df5e0ef9719aa9748d725ac9102a40807c",
+    "blast/models/lfp_gr_SonyMurata3Ah_2018.py": "862f3920d786cfb3e541df2a7f2d548146f763bab0fc0effdb94482c6e4745f7",
+    "blast/utils/functions.py": "513d64937eac359b09323a1e7a1f9fe7091c48d05f829dcb6b22bf8e653eb55b",
+    "blast/utils/rainflow.py": "69ab19e24901604dda3162d0e9e0d4bd5970accf015af4bc1033b0805bb99833"
+  },
+  "modifications": [
+    "Replaced removed numpy.trapz calls with numpy.trapezoid for NumPy 2.x.",
+    "Replaced upstream absolute imports with package-relative imports.",
+    "Removed an unused matplotlib plotting import from the runtime core.",
+    "Vendored only the two reviewed LFP models and their minimal runtime dependencies."
+  ]
+}

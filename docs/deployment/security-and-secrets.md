@@ -21,6 +21,10 @@
 | `redis_password` | Redis healthcheck | Redis 应用用户密码 |
 | `redis_acl` | Redis | Redis ACL 配置 |
 | `redis_url` | API/Worker | 带认证信息的 Redis URL |
+| `feishu_app_secret` | migrate/API/Worker | 飞书企业自建应用 App Secret |
+| `feishu_verification_token` | migrate/API/Worker | 飞书事件 verification token |
+| `feishu_encrypt_key` | migrate/API/Worker | 飞书加密事件 Encrypt Key |
+| `aily_connector_api_key` | migrate/API/Worker | Aily OpenAPI Bearer key |
 
 首次 ADMIN 初始化还需要临时的 `bootstrap_admin_password`。它只用于一次性 override，
 不能长期挂载到 API 或 Worker。
@@ -72,6 +76,11 @@ for name, value in files.items():
 PY
 ```
 
+飞书/Aily 的四个值来自已批准的目标租户和 Aily 项目，不能用上述随机生成脚本替代。
+在服务器本地分别写入 `feishu_app_secret`、`feishu_verification_token`、
+`feishu_encrypt_key`、`aily_connector_api_key`，每个文件只含一行真实值并设置 `0600`；
+不要在命令行、shell history、截图或聊天中回显内容。
+
 创建后只检查权限、所有者和大小，不显示内容：
 
 ```bash
@@ -115,6 +124,25 @@ sudo find /etc/quanxin/secrets \
 
 API 不接受客户端提交 calibration 样本数组、服务器路径、哈希或 sample ID。Worker
 根据 `materialization_id` 从数据库和上述受管登记中重建上下文。
+
+### Feishu canonical CSV registry
+
+`/srv/quanxin/config/feishu-csv-registrations.json` 是非秘密但受版本和权限控制的输入。
+从 `deploy/feishu-csv-registrations.example.json` 的空注册表开始，为每个经人工核验的
+canonical CSV 添加一条 entry。每条 entry 至少包含：
+
+- 顶层 `payload_sha256`；
+- `registration.metadata` 中的真实 `cell_id`、chemistry、标称容量、来源 URI、
+  `metadata.source_sha256` 和 schema version；
+- `feature_config`、`data_version` 与 `split_version`；
+- 至少一条 `source_kind=OBSERVED` 的 provenance。
+
+同一文件字节的 SHA-256 必须同时用于 `payload_sha256`、`metadata.source_sha256` 和该
+`OBSERVED` provenance 的 `sha256`。不得把 3Ah 元数据登记为 250/280Ah 方形电芯，
+不得从文件名或 Aily 文本推断容量、化学体系或来源。空注册表可以安全启动但拒绝所有
+附件；未知或不一致的哈希也会 fail closed。运行文件名固定为
+`feishu-csv-registrations.json`，不要直接修改
+`feishu-csv-registrations.example.json`，也不要在登记中放密钥、完整轨迹或预测数值。
 
 ## TLS 私钥
 

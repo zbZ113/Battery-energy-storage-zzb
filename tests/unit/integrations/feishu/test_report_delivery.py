@@ -224,3 +224,47 @@ def test_delivery_rejects_an_exported_format_that_differs_from_the_request() -> 
         )
 
     assert client.uploads == []
+
+
+def test_delivery_reuses_checkpointed_upload_after_message_retry() -> None:
+    class _FailMessageOnceClient(_Client):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_once = True
+
+        def send_message(self, **kwargs: object) -> dict[str, object]:
+            if self.fail_once:
+                self.fail_once = False
+                raise RuntimeError("controlled message failure")
+            return super().send_message(**kwargs)  # type: ignore[arg-type]
+
+    exporter = _Exporter(_artifact())
+    client = _FailMessageOnceClient()
+    uploaded: list[str] = []
+    sent: list[str] = []
+    delivery = _delivery(exporter, client)
+
+    with pytest.raises(RuntimeError, match="controlled message failure"):
+        delivery.deliver(
+            result_id=REPORT_RESULT_ID,
+            chat_id="oc-reviewed-chat",
+            on_uploaded=uploaded.append,
+            on_sent=sent.append,
+        )
+
+    assert uploaded == ["file-audited-report"]
+    assert sent == []
+    delivered = delivery.deliver(
+        result_id=REPORT_RESULT_ID,
+        chat_id="oc-reviewed-chat",
+        existing_file_key=uploaded[0],
+        on_uploaded=uploaded.append,
+        on_sent=sent.append,
+    )
+
+    assert len(client.uploads) == 1
+    assert len(client.messages) == 1
+    assert uploaded == ["file-audited-report"]
+    assert sent == ["om-audited-report"]
+    assert delivered.file_key == "file-audited-report"
+    assert delivered.message_id == "om-audited-report"

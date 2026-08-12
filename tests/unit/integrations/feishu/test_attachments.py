@@ -11,7 +11,12 @@ from quanxin_life.integrations.feishu.attachments import (
 
 
 def _csv_payload() -> bytes:
-    return b"dataset_id,cell_id,cycle_index\nsource,cell,1\n"
+    return (
+        b"dataset_id,cell_id,cycle_index,sample_index,time_s,voltage_v,current_a,"
+        b"temperature_c,charge_capacity_ah,discharge_capacity_ah,"
+        b"internal_resistance_ohm,diagnostic,valid\n"
+        b"source,cell,1,0,0.0,3.6,1.0,25.0,1.2,1.1,0.02,true,true\n"
+    )
 
 
 def test_csv_attachment_preserves_exact_bytes_and_sha256() -> None:
@@ -120,4 +125,45 @@ def test_attachment_rejects_non_utf8_or_mismatched_content_type() -> None:
             filename="observed.csv",
             content_type="application/pdf",
             payload=_csv_payload(),
+        )
+
+
+def test_attachment_rejects_noncanonical_csv_structure_before_registration() -> None:
+    with pytest.raises(FeishuAttachmentError, match="canonical CSV header"):
+        FeishuAttachmentPolicy().verify(
+            filename="observed.csv",
+            content_type="text/csv",
+            payload=b"dataset_id,cell_id\nsource,cell\n",
+        )
+
+
+def test_attachment_rejects_row_and_cell_boundaries() -> None:
+    header, row = _csv_payload().splitlines()
+    payload = b"\n".join((header, row, row)) + b"\n"
+
+    with pytest.raises(FeishuAttachmentError, match="row limit"):
+        FeishuAttachmentPolicy(max_rows=1).verify(
+            filename="observed.csv",
+            content_type="text/csv",
+            payload=payload,
+        )
+    with pytest.raises(FeishuAttachmentError, match="cell length"):
+        FeishuAttachmentPolicy(max_cell_chars=3).verify(
+            filename="observed.csv",
+            content_type="text/csv",
+            payload=_csv_payload(),
+        )
+
+
+@pytest.mark.parametrize("dangerous", ["=cmd", "+SUM(A1)", "@link", "-not-a-number"])
+def test_attachment_rejects_formula_injection_in_propagated_identifiers(
+    dangerous: str,
+) -> None:
+    payload = _csv_payload().replace(b"source,cell,", f"source,{dangerous},".encode())
+
+    with pytest.raises(FeishuAttachmentError, match="formula"):
+        FeishuAttachmentPolicy().verify(
+            filename="observed.csv",
+            content_type="text/csv",
+            payload=payload,
         )

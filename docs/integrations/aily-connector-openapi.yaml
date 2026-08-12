@@ -1,17 +1,43 @@
 openapi: 3.1.0
 info:
   title: Quanxin Life Aily Connector
-  version: phase1-v1
-  description: Reference-only facade over audited Agent runs and ToolResults.
+  version: audited-scenarios-v1
+  description: >-
+    Reference-only facade over durable analysis jobs, audited ToolResults, and
+    support-bounded battery operating scenarios. The connector accepts scenario
+    assumptions but never caller-supplied SOH, EOL, lifetime, or interval outputs.
 servers:
   - url: https://YOUR_REVIEWED_HOST
 security:
   - connectorBearer: []
 paths:
+  /v1/aily/scenario-contexts:
+    post:
+      operationId: createScenarioContext
+      summary: Persist a support-bounded scenario against a verified data batch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScenarioContextRequest'
+      responses:
+        '201':
+          description: Durable scenario context reference without internal route names
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScenarioContextState'
+        '401':
+          description: Connector authentication failed
+        '422':
+          description: Missing, inconsistent, unsupported, or unauthorized scenario input
+        '503':
+          description: Verified batch or scenario context persistence is unavailable
   /v1/aily/analysis-tasks:
     post:
       operationId: createAnalysisTask
-      summary: Create an analysis task from a registered data batch
+      summary: Create an analysis task from one registered server-side reference
       requestBody:
         required: true
         content:
@@ -29,6 +55,8 @@ paths:
           description: Connector authentication failed
         '422':
           description: Task request rejected
+        '503':
+          description: Durable task gateway unavailable
   /v1/aily/analysis-tasks/{run_id}:
     get:
       operationId: getAnalysisTask
@@ -57,6 +85,7 @@ paths:
           required: true
           schema:
             type: string
+            format: uuid
       responses:
         '200':
           description: Revalidated ToolResult including exact provenance and versions
@@ -69,7 +98,7 @@ paths:
         '404':
           description: Result is absent, invalid, or not bound to the run
         '409':
-          description: Result exists but its model route or audit authorization is not active
+          description: Result exists but audit authorization rejects display
   /v1/aily/analysis-tasks/{run_id}/reports/{report_result_id}:
     get:
       operationId: getAuditedReport
@@ -81,6 +110,7 @@ paths:
           required: true
           schema:
             type: string
+            format: uuid
       responses:
         '200':
           description: SHA-verified audited report artifact
@@ -93,7 +123,7 @@ paths:
         '404':
           description: Report is absent, invalid, or not bound to the run
         '409':
-          description: Report result is not authorized or its artifact integrity check failed
+          description: Report result is unauthorized or artifact integrity failed
 components:
   securitySchemes:
     connectorBearer:
@@ -106,22 +136,176 @@ components:
       required: true
       schema:
         type: string
+        format: uuid
   schemas:
     CreateAnalysisTaskRequest:
+      $ref: '#/components/schemas/ScenarioAnalysisTaskRequest'
+    ScenarioAnalysisTaskRequest:
       type: object
       additionalProperties: false
-      required: [task_type, data_batch_id]
+      required: [task_type, scenario_context_id]
       properties:
         task_type:
           type: string
           enum:
-            - predict_cycle_life
-            - predict_soh_trajectory
             - compare_operation_scenarios
-            - ingest_observed_soh
-            - update_trajectory
+            - project_storage_lifetime
+        scenario_context_id:
+          $ref: '#/components/schemas/SafeReference'
+    CreateScenarioContextRequest:
+      oneOf:
+        - $ref: '#/components/schemas/CompareScenarioContextRequest'
+        - $ref: '#/components/schemas/ProjectLifetimeScenarioContextRequest'
+      discriminator:
+        propertyName: task_type
+        mapping:
+          compare_operation_scenarios: '#/components/schemas/CompareScenarioContextRequest'
+          project_storage_lifetime: '#/components/schemas/ProjectLifetimeScenarioContextRequest'
+    CompareScenarioContextRequest:
+      type: object
+      additionalProperties: false
+      required: [task_type, data_batch_id, cell_format, baseline, comparisons]
+      properties:
+        task_type:
+          const: compare_operation_scenarios
         data_batch_id:
+          $ref: '#/components/schemas/SafeReference'
+        cell_format:
+          $ref: '#/components/schemas/CellFormat'
+        current_state_reference:
+          oneOf:
+            - $ref: '#/components/schemas/ScenarioStateReference'
+            - type: 'null'
+        baseline:
+          $ref: '#/components/schemas/OperationScenario'
+        comparisons:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/OperationScenario'
+    ProjectLifetimeScenarioContextRequest:
+      type: object
+      additionalProperties: false
+      required: [task_type, data_batch_id, cell_format, scenario]
+      properties:
+        task_type:
+          const: project_storage_lifetime
+        data_batch_id:
+          $ref: '#/components/schemas/SafeReference'
+        cell_format:
+          $ref: '#/components/schemas/CellFormat'
+        current_state_reference:
+          oneOf:
+            - $ref: '#/components/schemas/ScenarioStateReference'
+            - type: 'null'
+        scenario:
+          $ref: '#/components/schemas/OperationScenario'
+        new_observation_reference:
+          oneOf:
+            - $ref: '#/components/schemas/ScenarioStateReference'
+            - type: 'null'
+    OperationScenario:
+      type: object
+      additionalProperties: false
+      required:
+        - scenario_id
+        - scenario_version
+        - horizon_years
+        - eol_threshold
+        - segments
+      properties:
+        scenario_id:
           type: string
+          minLength: 1
+          maxLength: 100
+        scenario_version:
+          type: string
+          minLength: 1
+          maxLength: 100
+        horizon_years:
+          type: integer
+          minimum: 1
+          maximum: 25
+        eol_threshold:
+          type: number
+          exclusiveMinimum: 0
+          exclusiveMaximum: 1
+        segments:
+          type: array
+          minItems: 1
+          description: Contiguous segments starting at year zero and covering the horizon.
+          items:
+            $ref: '#/components/schemas/ScenarioSegment'
+    ScenarioSegment:
+      type: object
+      additionalProperties: false
+      required:
+        - segment_id
+        - start_year
+        - end_year
+        - temperature_c
+        - charge_c_rate
+        - discharge_c_rate
+        - soc_lower_bound
+        - soc_upper_bound
+        - dod
+        - equivalent_full_cycles_per_year
+        - rest_duration_hours
+      properties:
+        segment_id: {type: string, minLength: 1, maxLength: 100}
+        start_year: {type: integer, minimum: 0, maximum: 24}
+        end_year: {type: integer, minimum: 1, maximum: 25}
+        temperature_c: {type: number}
+        charge_c_rate: {type: number, exclusiveMinimum: 0}
+        discharge_c_rate: {type: number, exclusiveMinimum: 0}
+        soc_lower_bound: {type: number, minimum: 0, exclusiveMaximum: 1}
+        soc_upper_bound: {type: number, exclusiveMinimum: 0, maximum: 1}
+        dod:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 1
+          description: Must equal soc_upper_bound minus soc_lower_bound.
+        equivalent_full_cycles_per_year: {type: number, minimum: 0}
+        rest_duration_hours: {type: number, minimum: 0}
+    ScenarioStateReference:
+      type: object
+      additionalProperties: false
+      required: [result_id, json_path]
+      properties:
+        result_id: {type: string, format: uuid}
+        json_path:
+          type: string
+          pattern: '^values\.'
+    ScenarioContextState:
+      type: object
+      additionalProperties: false
+      required:
+        - scenario_context_id
+        - task_type
+        - data_batch_id
+        - input_sha256
+        - created_at
+      properties:
+        scenario_context_id:
+          $ref: '#/components/schemas/SafeReference'
+        task_type:
+          type: string
+          enum: [compare_operation_scenarios, project_storage_lifetime]
+        data_batch_id:
+          $ref: '#/components/schemas/SafeReference'
+        input_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        created_at: {type: string, format: date-time}
+    CellFormat:
+      type: string
+      enum: [cylindrical, prismatic]
+    SafeReference:
+      type: string
+      minLength: 1
+      maxLength: 200
+      pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$'
     AgentRunState:
       type: object
       description: Existing quanxin_life.core.AgentRunState contract.
@@ -138,7 +322,9 @@ components:
         updated_at: {type: string, format: date-time}
     ToolResult:
       type: object
-      description: Existing quanxin_life.core.ToolResult contract resolved from the audit ledger.
+      description: >-
+        Existing quanxin_life.core.ToolResult resolved from the audit ledger.
+        Business numbers are returned only inside this registered contract.
       required:
         - result_id
         - tool_name

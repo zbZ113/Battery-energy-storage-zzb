@@ -1,0 +1,94 @@
+{
+  "schema_version": "blast-reference-scenario-suite-v1",
+  "suite_version": "blast-reference-scenarios-v1.0.0",
+  "route_id": "blast-lite-lfp-gr-250ah-prismatic-2019-v1",
+  "horizon_years": 25,
+  "eol_threshold": 0.8,
+  "scenarios": [
+    {
+      "scenario_id": "baseline",
+      "scenario_version": "baseline-v1",
+      "segments": [
+        {"segment_id": "all-years", "start_year": 0, "end_year": 25, "temperature_c": 25.0, "charge_c_rate": 0.5, "discharge_c_rate": 0.5, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0}
+      ]
+    },
+    {
+      "scenario_id": "temperature_20c",
+      "scenario_version": "temperature-20c-v1",
+      "segments": [
+        {"segment_id": "all-years", "start_year": 0, "end_year": 25, "temperature_c": 20.0, "charge_c_rate": 0.5, "discharge_c_rate": 0.5, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0}
+      ]
+    },
+    {
+      "scenario_id": "temperature_35c",
+      "scenario_version": "temperature-35c-v1",
+      "segments": [
+        {"segment_id": "all-years", "start_year": 0, "end_year": 25, "temperature_c": 35.0, "charge_c_rate": 0.5, "discharge_c_rate": 0.5, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0}
+      ]
+    },
+    {
+      "scenario_id": "temperature_45c",
+      "scenario_version": "temperature-45c-v1",
+      "segments": [
+        {"segment_id": "all-years", "start_year": 0, "end_year": 25, "temperature_c": 45.0, "charge_c_rate": 0.5, "discharge_c_rate": 0.5, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0}
+      ]
+    },
+    {
+      "scenario_id": "dod_90",
+      "scenario_version": "dod-90-v1",
+      "segments": [
+        {"segment_id": "all-years", "start_year": 0, "end_year": 25, "temperature_c": 25.0, "charge_c_rate": 0.5, "discharge_c_rate": 0.5, "soc_lower_bound": 0.05, "soc_upper_bound": 0.95, "dod": 0.9, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0}
+      ]
+    },
+    {
+      "scenario_id": "dod_100",
+      "scenario_version": "dod-100-v1",
+      "segments": [
+        {"segment_id": "all-years", "start_year": 0, "end_year": 25, "temperature_c": 25.0, "charge_c_rate": 0.5, "discharge_c_rate": 0.5, "soc_lower_bound": 0.0, "soc_upper_bound": 1.0, "dod": 1.0, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0}
+      ]
+    },
+    {
+      "scenario_id": "rate_low",
+      "scenario_version": "rate-low-v1",
+      "segments": [
+        {"segment_id": "all-years", "start_year": 0, "end_year": 25, "temperature_c": 25.0, "charge_c_rate": 0.25, "discharge_c_rate": 0.25, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0}
+      ]
+    },
+    {
+      "scenario_id": "rate_high_supported",
+      "scenario_version": "rate-high-supported-v1",
+      "segments": [
+        {"segment_id": "all-years", "start_year": 0, "end_year": 25, "temperature_c": 25.0, "charge_c_rate": 0.65, "discharge_c_rate": 1.0, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0}
+      ]
+    },
+    {
+      "scenario_id": "high_frequency",
+      "scenario_version": "high-frequency-v1",
+      "segments": [
+        {"segment_id": "all-years", "start_year": 0, "end_year": 25, "temperature_c": 25.0, "charge_c_rate": 0.5, "discharge_c_rate": 0.5, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 400.0, "rest_duration_hours": 1.0}
+      ]
+    },
+    {
+      "scenario_id": "staged_supported",
+      "scenario_version": "staged-supported-v1",
+      "segments": [
+        {"segment_id": "years-1-5", "start_year": 0, "end_year": 5, "temperature_c": 25.0, "charge_c_rate": 0.5, "discharge_c_rate": 0.5, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0},
+        {"segment_id": "years-6-10", "start_year": 5, "end_year": 10, "temperature_c": 30.0, "charge_c_rate": 0.5, "discharge_c_rate": 1.0, "soc_lower_bound": 0.05, "soc_upper_bound": 0.95, "dod": 0.9, "equivalent_full_cycles_per_year": 330.0, "rest_duration_hours": 1.0},
+        {"segment_id": "years-11-15", "start_year": 10, "end_year": 15, "temperature_c": 35.0, "charge_c_rate": 0.25, "discharge_c_rate": 0.5, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 280.0, "rest_duration_hours": 1.0},
+        {"segment_id": "years-16-25", "start_year": 15, "end_year": 25, "temperature_c": 25.0, "charge_c_rate": 0.5, "discharge_c_rate": 0.5, "soc_lower_bound": 0.1, "soc_upper_bound": 0.9, "dod": 0.8, "equivalent_full_cycles_per_year": 300.0, "rest_duration_hours": 1.0}
+      ]
+    }
+  ],
+  "figure_sets": {
+    "temperature": ["temperature_20c", "baseline", "temperature_35c", "temperature_45c"],
+    "dod": ["baseline", "dod_90", "dod_100"],
+    "rate": ["rate_low", "baseline", "rate_high_supported"],
+    "comparison": ["baseline", "temperature_35c", "dod_100", "high_frequency"]
+  },
+  "warnings": [
+    "CANDIDATE_ROUTE_RESEARCH_USE_ONLY",
+    "DETERMINISTIC_SCENARIO_NOT_CONFIDENCE_INTERVAL",
+    "REFERENCE_MODEL_NOT_PRODUCT_SPECIFIC",
+    "TEMPERATURE_RESPONSE_MUST_BE_READ_FROM_MODEL_OUTPUT_NOT_ASSUMED_MONOTONIC"
+  ]
+}

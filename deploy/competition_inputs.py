@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -14,6 +16,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from quanxin_life.application.advanced_calibration_evidence import (
     AdvancedCalibrationSourceRegistration,
 )
+from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
 from quanxin_life.core.schemas import ContractModel, Sha256
 
 _MAX_CONFIG_BYTES = 1_048_576
@@ -75,6 +78,40 @@ class _CalibrationSourceRegistry(ContractModel):
         return self
 
 
+class _FeishuCsvRegistrationEntry(ContractModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    payload_sha256: Sha256
+    registration: CanonicalCsvBatchRegistration
+
+    @model_validator(mode="after")
+    def registration_is_bound_to_payload(self) -> _FeishuCsvRegistrationEntry:
+        if self.registration.metadata.source_sha256 != self.payload_sha256:
+            raise ValueError("Feishu CSV registration metadata SHA-256 does not match payload")
+        observed_hashes = {
+            item.sha256
+            for item in self.registration.provenance
+            if item.source_kind.value == "OBSERVED"
+        }
+        if self.payload_sha256 not in observed_hashes:
+            raise ValueError("Feishu CSV registration provenance SHA-256 does not match payload")
+        return self
+
+
+class _FeishuCsvRegistrationRegistry(ContractModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["feishu-canonical-csv-registration-registry-v1"]
+    registrations: tuple[_FeishuCsvRegistrationEntry, ...]
+
+    @model_validator(mode="after")
+    def payload_hashes_are_unique(self) -> _FeishuCsvRegistrationRegistry:
+        identities = tuple(item.payload_sha256 for item in self.registrations)
+        if len(identities) != len(set(identities)):
+            raise ValueError("Feishu CSV registration payload SHA-256 values must be unique")
+        return self
+
+
 def load_advanced_agent_policy(path: Path) -> LoadedAdvancedAgentPolicy:
     """Load one strict policy file and retain its byte identity."""
 
@@ -115,6 +152,26 @@ def load_calibration_source_registrations(
         )
         for entry in registry.sources
     )
+
+
+def load_feishu_csv_registrations(
+    path: Path,
+) -> Mapping[str, CanonicalCsvBatchRegistration]:
+    """Load exact-content Feishu CSV registrations from one strict operator file."""
+
+    payload = _read_config(path, "Feishu CSV registration registry")
+    parsed = _strict_json(payload)
+    try:
+        registry = _FeishuCsvRegistrationRegistry.model_validate(parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Feishu CSV registration registry is invalid: {exc}") from None
+    registrations = {
+        entry.payload_sha256: CanonicalCsvBatchRegistration.model_validate(
+            entry.registration.model_dump(mode="json")
+        )
+        for entry in registry.registrations
+    }
+    return MappingProxyType(registrations)
 
 
 def _read_config(path: Path, label: str) -> bytes:
@@ -178,4 +235,5 @@ __all__ = [
     "LoadedAdvancedAgentPolicy",
     "load_advanced_agent_policy",
     "load_calibration_source_registrations",
+    "load_feishu_csv_registrations",
 ]

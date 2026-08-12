@@ -2,9 +2,11 @@
 
 ## 状态与范围
 
-本文件描述第一阶段接入。交互层是飞书机器人、飞书卡片、多维表格、受审计报告和 Aily；独立 Web 前端不在本阶段范围。第一阶段不训练模型，不修改 PBT/MAGNet 任务，不修改数据预处理主线，也不改变任何模型 activation 状态。
+本文件描述第一阶段接入及其 BLAST-Lite 情景扩展。交互层是飞书机器人、飞书卡片、多维表格、受审计报告和 Aily；独立 Web 前端不在本阶段范围。本阶段不训练模型，不运行 PBT/MAGNet，也不自动改变任何模型 activation 状态。
 
 当前 Advanced 路由仍受服务器端路由、制品清单、SHA-256、支持域和人工审批约束。`CONDITIONAL` 或 `NOT_ACTIVATED` 路由不能展示预测数值。PBT 与 MAGNet 完成训练、独立评估、制品核验和人工晋级前，不会出现在可执行路由中。
+
+BLAST-Lite 数值路由独立于上述深度学习 activation。当前两个参考路由均为 `REGISTERED_CANDIDATE`，证据等级为 `PHYSICS_REFERENCE`；只有显式启用候选情景执行与候选结果展示时，才允许在 manifest 支持范围内生成和展示 ToolResult。它们不是海辰产品模型，也不构成 15～25 年真实寿命验证。
 
 第一阶段附件仅接受当前数据层已审查的 canonical CSV。Parquet、XLSX、ZIP、pickle、joblib、`.pt`、`.pth` 和可执行文件均拒绝。后续格式只能在数据层契约、内容检查和测试完整后启用。
 
@@ -29,12 +31,21 @@
 | `validate_battery_data` | 可用；所有预测的硬前置门禁 |
 | `predict_cycle_life` | 仅在服务器端存在已激活、域内且经人工批准的路由时可用 |
 | `predict_soh_trajectory` | 仅在服务器端存在已激活、域内且经人工批准的路由时可用 |
-| `compare_operation_scenarios` | 明确不可用，等待 MAGNet 完整评估和人工晋级 |
+| `compare_operation_scenarios` | 受支持范围约束的 BLAST 参考情景；候选执行与展示默认关闭 |
+| `project_storage_lifetime` | 1～25 年自然时间参考情景；候选执行与展示默认关闭 |
 | `ingest_observed_soh` | 映射现有观测 SOH 接入契约 |
 | `update_trajectory` | 映射现有在线更新契约 |
 | `generate_audited_report` | 仅消费账本中有效的 `result_id` 和字段路径 |
 
 模型选择只发生在服务器端。CyclePatch、Hybrid、PBT、MAGNet 等内部名称不进入飞书卡片、Aily 工具名或多维表格业务流程。
+
+## BLAST-Lite 情景边界
+
+受控 vendor 来源固定为上游 commit `b093495b47dc40dd96dba865d91f553619501e94`，许可证和来源见 `THIRD_PARTY_NOTICES.md` 与 wheel 内的 vendor LICENSE。`Lfp_Gr_SonyMurata3Ah_Battery` 只用于 Naumann LFP/石墨数据的一致性和工况方向核验，不能缩放为大型方形电芯。`Lfp_Gr_250AhPrismatic` 是大型方形 LFP 储能电芯参考模型，不得称为海辰 280Ah 专属模型。
+
+场景支持范围来自版本化 route manifest 和验证数据 manifest，不在 Aily、卡片或提示词中手写。温度、SOC、DoD、充放电倍率、每年 EFC、静置时间、1～25 年 horizon 和连续 `ScenarioSegment` 都在工具入口校验。域内允许情景计算，边界附近保留警告；超界、非 LFP、格式不匹配、3Ah/250Ah 误路由、缺字段、时间空洞或冲突均拒绝。
+
+长期曲线是时间、SOC、温度和循环序列驱动的确定性物理参考情景。15/20/25 年 milestone 只在 ToolResult 中对应时间点存在时展示。当前不把 sensitivity envelope、scenario range 或 model disagreement 称为统计置信区间，也不支持任意当前 SOH 状态注入 BLAST 内部状态。
 
 ## 飞书应用
 
@@ -75,6 +86,21 @@ https://YOUR_REVIEWED_HOST/v1/integrations/feishu/events
 
 缺测、无 `cell_id`、单位不明、域外、循环范围不足或数据验证失败时明确拒绝。不会静默填补。数据集训练和评估仍必须按 `cell_id` 分割。
 
+生产装配还要求运维预先登记每一份获准 canonical CSV。复制
+`deploy/feishu-csv-registrations.example.json` 为
+`feishu-csv-registrations.json`，计算文件实际 SHA-256，并在一条 registration 中保持
+以下三处完全相同：
+
+1. 顶层 entry 的 `payload_sha256`；
+2. `registration.metadata.source_sha256`（即 `metadata.source_sha256`）；
+3. 至少一条 `registration.provenance` 中 `source_kind=OBSERVED` 记录的 `sha256`。
+
+登记还必须包含已核验的 `cell_id`、LFP chemistry、标称容量、来源 URI、数据/切分版本和
+早期循环特征配置。Worker 按下载后字节的精确 SHA 查找登记；空注册表、unknown payload、
+三处哈希不一致或没有 `OBSERVED` 来源都会拒绝，不从文件名、群聊文本或 Aily 提示中补写。
+正式 runtime 通过 `QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE` 读取该只读文件，Compose
+override 固定为 `/srv/quanxin/config/feishu-csv-registrations.json`。
+
 ## 卡片与审计
 
 状态卡片支持 received、data-check、queued、running、success、rejected/degraded 和 report-ready。状态卡片只含机器引用。
@@ -99,6 +125,9 @@ result_id#values.approved.path
 | `data_batch_id` | 文本 | RecordBatch 引用 |
 | `input_file_sha256` | 文本 | 输入文件 SHA-256 |
 | `cell_reference` | 文本 | cell 或批次引用，不写大数组 |
+| `scenario_context_id` | 文本 | 受控场景输入引用 |
+| `scenario_id` | 文本 | 基准或主场景标识 |
+| `scenario_version` | 文本 | 场景版本 |
 | `primary_result_id` | 文本 | 主要 ToolResult 引用 |
 | `model_route` | 文本 | 服务器端路由引用 |
 | `model_version` | 文本 | 模型版本 |
@@ -126,7 +155,7 @@ Aily 通过受保护 HTTP façade 接入，不直接调用模型，也不连接�
 docs/integrations/aily-connector-openapi.yaml
 ```
 
-稳定操作为：创建分析任务、查询任务状态、读取 run-bound ToolResult、下载 run-bound 审计报告。所有请求使用：
+稳定操作为：创建受控场景上下文、创建分析任务、查询任务状态、读取 run-bound ToolResult、下载 run-bound 审计报告。情景请求先提交 `OperationScenario`，服务端从已验证 batch 解析 chemistry、capacity、数据版本和来源并返回 `scenario_context_id`；随后创建任务时只能提交该引用，不能再附带业务结果数字。所有请求使用：
 
 ```http
 Authorization: Bearer ${FEISHU_CONNECTOR_API_KEY}
@@ -140,11 +169,72 @@ Aily 系统提示词位于：
 docs/integrations/aily-system-prompt.md
 ```
 
-提示词要求只调用工具、逐项引用 ToolResult、不得补写数值、不得改写拒绝原因、不得把循环寿命自动换算为自然年。
+提示词要求只调用工具、逐项引用 ToolResult、不得补写数值、不得改写拒绝原因、不得把循环寿命自动换算为自然年，并在温度、倍率、DoD、SOC、EFC、静置时间、阶段或 horizon 缺失时向用户补问。
 
 ## 环境变量
 
-只在秘密管理器或部署环境设置真实值：
+### 正式 competition runtime
+
+正式 API/Worker 使用 `deploy.competition_api:app` 与 `deploy.competition_worker:app`，
+基础 `deploy/competition.compose.yaml` 默认不挂载任何 Feishu/Aily secret。只有显式合并
+`deploy/competition.feishu-aily.override.yaml` 才会统一装配 migrate、API 与 Worker。先执行
+Alembic migration 到唯一 head `0021`，再启动 API 与 Worker。启用时设置以下非秘密身份：
+
+```text
+FEISHU_APP_ID
+FEISHU_BITABLE_APP_TOKEN
+FEISHU_BITABLE_TABLE_ID
+EXTERNAL_HTTPS_BASE_URL
+ALLOW_CANDIDATE_SCENARIO_EXECUTION=true|false
+ALLOW_CANDIDATE_SCENARIO_RESULTS=true|false
+```
+
+四个秘密只通过容器 secret file 读取：
+
+```text
+feishu_app_secret
+feishu_verification_token
+feishu_encrypt_key
+aily_connector_api_key
+```
+
+它们在容器内分别映射为 `QUANXIN_FEISHU_APP_SECRET_FILE`、
+`QUANXIN_FEISHU_VERIFICATION_TOKEN_FILE`、`QUANXIN_FEISHU_ENCRYPT_KEY_FILE` 和
+`QUANXIN_AILY_CONNECTOR_API_KEY_FILE`。override 还将
+`ALLOW_CANDIDATE_SCENARIO_EXECUTION` 和 `ALLOW_CANDIDATE_SCENARIO_RESULTS` 映射为
+`QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION` 与
+`QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS`。两个 candidate 开关必须独立审批：第一个
+只允许 `REGISTERED_CANDIDATE` 路由执行，第二个才允许卡片、Aily 报告和 Bitable 发布
+该结果。任一开关关闭都不能被另一开关绕过。
+
+同一 override 还要求 `${CONFIG_ROOT}/feishu-csv-registrations.json` 已由
+`deploy/feishu-csv-registrations.example.json` 创建并填入经审查的精确 SHA 登记；未登记
+附件不会进入 validation-first workflow。
+
+启动命令：
+
+```bash
+docker compose \
+  --env-file competition.env \
+  -f competition.compose.yaml \
+  -f competition.feishu-aily.override.yaml \
+  up -d
+```
+
+生产装配挂载：
+
+```text
+POST /v1/integrations/feishu/events
+POST /v1/aily/scenario-contexts
+POST /v1/aily/analysis-tasks
+GET  /v1/aily/analysis-tasks/{run_id}
+GET  /v1/aily/analysis-tasks/{run_id}/results/{result_id}
+GET  /v1/aily/analysis-tasks/{run_id}/reports/{report_result_id}
+```
+
+### 本地 callback runner
+
+以下变量只用于独立本地 callback runner 与 preflight，不代替 production secret files：
 
 ```text
 FEISHU_APP_ID
@@ -160,6 +250,15 @@ QUANXIN_EXTERNAL_HTTPS_BASE_URL
 
 `QUANXIN_EXTERNAL_HTTPS_BASE_URL` 是经批准的对外 HTTPS 基础地址。生产 preflight 只返回已配置/缺失的变量名和错误码，不回显值。
 
+## 当前验证边界
+
+自动化 Fake Feishu scenario E2E 已验证真实 BLAST 数值、ToolResult、曲线卡片、报告和
+scalar-only Bitable。Fake Aily scenario E2E 已通过生产 assembly 创建受控场景、持久化
+任务、运行共享 Worker、读取 run-bound ToolResult/报告并写入 scalar-only Bitable，且
+没有飞书聊天或文件副作用。本轮由于断网，没有重新执行目标租户的真实飞书/Aily/Bitable
+纵向验证；这不改变 2026-08-08 旧 callback receipt 与 metadata-only Bitable smoke 的历史
+证据，也不能把 Fake E2E 描述为真实租户验证。
+
 ## 本地运行
 
 ### 本地真实回调 runner
@@ -172,11 +271,9 @@ GET  /health
 POST /v1/integrations/feishu/events
 ```
 
-它复用现有 `FeishuEventProcessor`、`create_feishu_http_adapter` 和
-`SqlAlchemyFeishuReceiptStore`。receipt 默认写入本地 SQLite；事件路由只把
-`FeishuEventReference` 放入进程内队列，不保存完整消息正文，也不运行模型或业务工作流。
-因此这个入口适合验证 URL verification、签名、verification token、防重和 sanitized
-事件路由，不是生产任务执行器。
+它复用现有 `FeishuEventProcessor`、`create_feishu_http_adapter`、
+`SqlAlchemyFeishuReceiptStore`、`SqlAlchemyFeishuJobStore` 和
+`SqlAlchemyFeishuJobRouter`。receipt 与 sanitized durable job 默认写入本地 SQLite；只有已经持久化的 job UUID 进入进程内 identity-only 队列。完整消息正文不落库，callback 不运行模型或业务 worker。因此这个入口适合验证 URL verification、签名、verification token、防重、durable job 入队和快速 ACK，不是完整生产任务执行器。
 
 本地 runner 已装配经审查的 Feishu AES-CBC decryptor，健康检查会显示
 `LOCAL_ENCRYPTED`。本地隧道联调可以保留飞书事件加密；runner 会使用
@@ -186,7 +283,8 @@ POST /v1/integrations/feishu/events
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_feishu_callback.py `
     --host 127.0.0.1 `
-    --port 8787
+    --port 8787 `
+    --default-file-task predict_cycle_life
 ```
 
 另开一个 PowerShell 做健康检查：
@@ -230,7 +328,7 @@ https://实际返回的临时主机名/v1/integrations/feishu/events
 隧道 URL 每次可能变化。隧道关闭后应视为失效；不要把临时主机名当作生产地址。配置 URL
 verification 前确认 `FEISHU_ENCRYPT_KEY` 和 `FEISHU_VERIFICATION_TOKEN` 与当前应用一致；本地 runner 支持加密 URL verification，不要求关闭飞书事件加密。
 
-2026-08-08 已使用 Cloudflare Quick Tunnel 与目标企业飞书应用完成受控真实回调验证：加密 URL verification、群聊文本消息和 CSV 文件消息均到达 `/v1/integrations/feishu/events` 并返回 HTTP 200。事件订阅为 `im.message.receive_v1`。本地 runner 只保留 sanitized `FeishuEventReference` 并快速 ACK；它不下载附件、不运行模型、不生成业务数值，也不发送机器人回复。临时隧道主机名不构成生产部署证据。
+2026-08-08 已使用 Cloudflare Quick Tunnel 与目标企业飞书应用完成旧 callback receipt 链的受控验证：加密 URL verification、群聊文本消息和 CSV 文件消息均到达 `/v1/integrations/feishu/events` 并返回 HTTP 200。新增 durable job、场景卡片、BLAST 计算、曲线、报告与 Bitable 链已经通过 Fake Feishu scenario E2E 自动化测试，但尚未在目标企业重新执行真实端到端验证。临时隧道主机名不构成生产部署证据。
 
 ### 真实 Bitable metadata smoke
 
@@ -262,14 +360,17 @@ Sandbox token 固定为本地协议测试用途，只能绑定 loopback，不得
 运行本次接入测试：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\unit\integrations\feishu tests\integration\api\test_feishu_api.py tests\integration\api\test_aily_api.py tests\integration\test_fake_feishu_sandbox.py -q
+.\.venv\Scripts\python.exe -m pytest tests\unit\integrations\feishu tests\integration\api\test_feishu_api.py tests\integration\api\test_aily_api.py tests\integration\test_fake_feishu_sandbox.py tests\e2e\test_fake_feishu_scenario_delivery.py -q
 ```
+
+`Fake Feishu scenario E2E` 使用真实 validation-first workflow、BLAST 数值工具、ToolResult、审计报告工厂、PNG 曲线渲染、卡片、文件交付和 scalar-only Bitable metadata；测试不包含硬编码 SOH/EOL 输出。
 
 ## 正式部署检查
 
 - 回调公网地址具有有效 TLS 证书，反向代理保留签名头和原始请求体；
 - App ID/Secret、verification token、encrypt key 和 connector key 来自秘密管理器；
 - receipt、任务队列、Agent run、ToolResult、路由审批和报告制品使用持久化存储；
+- BLAST route 保持 `REGISTERED_CANDIDATE`，候选执行和候选展示分别由服务器端显式授权；
 - 附件对象存储具有租户/项目访问控制、保留期和 SHA 校验；
 - Advanced route 的 manifest、来源和 artifact SHA 均通过，activation ledger 有人工审批；
 - 多维表格 `run_id` 唯一性、写入频率和单写者策略已配置；
@@ -290,10 +391,14 @@ Sandbox token 固定为本地协议测试用途，只能绑定 loopback，不得
 
 训练结束后只能执行以下路由内步骤：验证训练结果与独立测试指标；构建安全部署制品和 manifest；核对来源与 SHA-256；注册 candidate route；完成人工晋级；在工具内部切换 route。
 
-PBT 只能作为 `predict_cycle_life` 的候选内部路由。MAGNet 只能在多工况评估、支持域与人工晋级完成后作为 `compare_operation_scenarios` 的候选内部路由。两者接入不得修改飞书事件、卡片、Bitable 字段、Aily 提示词或连接器 API。
+PBT 只能作为 `predict_cycle_life` 的候选内部路由。MAGNet 保持独立研究候选，不替代当前 manifest-bounded BLAST 情景工具，也不能绕过其支持范围和证据等级。两者接入不得修改飞书事件、卡片、Bitable 字段、Aily 提示词或连接器 API。
 
 ## 科学边界
 
-现有 MATR 结果是内部数据集和既定协议下的模型证据，不是目标工业电芯长期自然年寿命的精确验证。当前链路不支持把循环数直接描述为自然年，也不支持未经受审计情景转换工具的长期经营结论。PyBaMM 仅可用于短时滚动物理核验和敏感性参考，不能制造长期退化标签。
+现有 MATR 结果是内部数据集和既定协议下的深度学习模型证据，不是目标工业电芯长期自然年寿命的精确验证。Naumann 最新外部验证结果和逐测试点明细位于 `reports/experiments/blast_naumann_v1/validation-v2/`：其中 19 条温度、DoD、倍率 `leave-one-condition` 指标是固定上游参数的 held-condition 诊断，`parameter_refit=false`，不等于本项目训练或独立训练 holdout。280Ah 方形 LFP 的观测范围内尺度核验位于 `reports/experiments/blast_280ah_v1/validation-v1/`。约 700 循环范围内的核验不能外推成 25 年真实验证。最新长期图表和 CSV 源数据位于 `reports/experiments/blast_scenarios_v1/scenario-v3/`，只能称为物理参考情景。
 
-因此，本阶段交付的是可追溯、安全拒绝的工具链，不是目标工业场景长期寿命结论。真实飞书联调仍需要有效凭证；PBT/MAGNet 路由仍需要训练结束后的独立评估、制品核验和人工晋级。
+`LFP_FIELD_160AH` 当前只建立了系统级来源索引和 `no_health_target` 现场监测视图，时间戳语义仍是 `LOCAL_TIME_TIMEZONE_UNRESOLVED`。它可以支持自然时间跨度、遥测异常和弱单体偏离检查，但没有受审查的 SOH/RUL 标签，因此当前不能生成 SOH 精度、无偏总体寿命分布或 15～25 年真实验证结论。
+
+当前链路不支持把循环数直接描述为自然年，也不支持未经受审计情景工具的长期经营结论。PyBaMM 仅可用于短时滚动物理核验和敏感性参考，不能制造长期退化标签。
+
+因此，本阶段交付的是可追溯、安全拒绝的情景工具链，不是海辰电芯 15～25 年真实寿命结论。真实场景飞书/Aily 联调仍需要有效凭证、目标租户卡片配置与人工候选授权；PBT/MAGNet activation 状态没有改变。

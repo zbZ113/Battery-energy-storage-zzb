@@ -37,6 +37,7 @@ class ReportKind(StrEnum):
     """Controlled report titles; callers cannot render arbitrary titles."""
 
     LIFETIME_DECISION = "lifetime_decision"
+    STORAGE_LIFETIME_SCENARIO = "storage_lifetime_scenario"
 
 
 class ReportClaimKind(StrEnum):
@@ -44,10 +45,12 @@ class ReportClaimKind(StrEnum):
 
     LIFETIME_PREDICTION = "lifetime_prediction"
     DECISION_POLICY = "decision_policy"
+    SCENARIO_PROJECTION = "scenario_projection"
 
 
 _REPORT_TITLES: dict[ReportKind, str] = {
     ReportKind.LIFETIME_DECISION: "储能电芯寿命决策审计报告",
+    ReportKind.STORAGE_LIFETIME_SCENARIO: "Storage lifetime scenario audit report",
 }
 _CLAIM_NARRATIVES: dict[ReportClaimKind, str] = {
     ReportClaimKind.LIFETIME_PREDICTION: "下列数值仅由已登记工具结果中的证据路径解析并渲染。",
@@ -55,9 +58,14 @@ _CLAIM_NARRATIVES: dict[ReportClaimKind, str] = {
 _CLAIM_NARRATIVES[ReportClaimKind.DECISION_POLICY] = (
     "Decision policy thresholds are resolved from a registered, human-approved policy result."
 )
+_CLAIM_NARRATIVES[ReportClaimKind.SCENARIO_PROJECTION] = (
+    "Values are deterministic outputs from a candidate BLAST reference scenario. "
+    "They are not a confidence interval, product-specific validation, or a lifetime promise."
+)
 _CLAIM_EVIDENCE_LEVELS: dict[ReportClaimKind, EvidenceLevel] = {
     ReportClaimKind.LIFETIME_PREDICTION: EvidenceLevel.MODEL_INFERENCE,
     ReportClaimKind.DECISION_POLICY: EvidenceLevel.DOMAIN_KNOWLEDGE,
+    ReportClaimKind.SCENARIO_PROJECTION: EvidenceLevel.PHYSICS_REFERENCE,
 }
 
 

@@ -1,5 +1,8 @@
 """Safe, dependency-injected building blocks for Feishu event integration."""
 
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 from .bitable import (
     BITABLE_RUN_FIELD_NAMES,
     BitableConflictError,
@@ -40,6 +43,26 @@ from .routing import (
     FeishuInboundEventKind,
     parse_feishu_event_reference,
 )
+from .scenario_authorization import (
+    AuditedScenarioResultAuthorizer,
+    BlastScenarioResultAuthorizer,
+    ScenarioAwareAuditedResultAuthorizer,
+)
+from .scenario_contexts import (
+    FeishuScenarioContextRecord,
+    ScenarioAnalysisInput,
+    SqlAlchemyFeishuScenarioContextStore,
+)
+from .scenario_plot import (
+    SCENARIO_PLOT_VERSION,
+    FeishuScenarioPlotArtifact,
+    FeishuScenarioPlotError,
+    FeishuScenarioPlotter,
+)
+from .scenario_reports import (
+    FeishuScenarioReportJob,
+    FeishuScenarioReportResultFactory,
+)
 from .security import (
     FeishuSignatureError,
     FeishuWebhookSecrets,
@@ -50,17 +73,60 @@ from .sqlalchemy_receipts import (
     SqlAlchemyFeishuReceiptStore,
 )
 
+if TYPE_CHECKING:
+    from .aily_scenarios import (
+        AilyScenarioReferenceUseAuthorizer,
+        RejectingAilyScenarioReferenceUseAuthorizer,
+        SqlAlchemyAilyScenarioContextGateway,
+    )
+    from .aily_tasks import (
+        AilyAnalysisJobDelivery,
+        AilyBitableWriter,
+        SqlAlchemyAilyAnalysisTaskGateway,
+    )
+
+_AILY_SCENARIO_EXPORTS = frozenset(
+    {
+        "AilyScenarioReferenceUseAuthorizer",
+        "RejectingAilyScenarioReferenceUseAuthorizer",
+        "SqlAlchemyAilyScenarioContextGateway",
+    }
+)
+_AILY_TASK_EXPORTS = frozenset(
+    {
+        "AilyAnalysisJobDelivery",
+        "AilyBitableWriter",
+        "SqlAlchemyAilyAnalysisTaskGateway",
+    }
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _AILY_TASK_EXPORTS:
+        module = import_module(".aily_tasks", __name__)
+        return getattr(module, name)
+    if name in _AILY_SCENARIO_EXPORTS:
+        module = import_module(".aily_scenarios", __name__)
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 __all__ = [
     "BITABLE_RUN_FIELD_NAMES",
+    "SCENARIO_PLOT_VERSION",
+    "AilyAnalysisJobDelivery",
+    "AilyBitableWriter",
+    "AilyScenarioReferenceUseAuthorizer",
     "AuditedCardBuilder",
     "AuditedCardError",
     "AuditedResultAuthorization",
+    "AuditedScenarioResultAuthorizer",
     "BitableConflictError",
     "BitableProtocolError",
     "BitableValidationError",
     "BitableWriteAction",
     "BitableWriteResult",
     "BitableWriterError",
+    "BlastScenarioResultAuthorizer",
     "FeishuAesCbcDecryptor",
     "FeishuBitableWriter",
     "FeishuCardStatus",
@@ -80,10 +146,22 @@ __all__ = [
     "FeishuReportDelivery",
     "FeishuReportDeliveryError",
     "FeishuReportDeliveryReceipt",
+    "FeishuScenarioContextRecord",
+    "FeishuScenarioPlotArtifact",
+    "FeishuScenarioPlotError",
+    "FeishuScenarioPlotter",
+    "FeishuScenarioReportJob",
+    "FeishuScenarioReportResultFactory",
     "FeishuSignatureError",
     "FeishuWebhookSecrets",
     "FeishuWebhookVerifier",
+    "RejectingAilyScenarioReferenceUseAuthorizer",
+    "ScenarioAnalysisInput",
+    "ScenarioAwareAuditedResultAuthorizer",
+    "SqlAlchemyAilyAnalysisTaskGateway",
+    "SqlAlchemyAilyScenarioContextGateway",
     "SqlAlchemyFeishuReceiptStore",
+    "SqlAlchemyFeishuScenarioContextStore",
     "build_run_reference_card",
     "build_status_card",
     "parse_feishu_event_reference",

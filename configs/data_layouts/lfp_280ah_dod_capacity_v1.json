@@ -1,0 +1,76 @@
+{
+  "schema_version": "lfp-280ah-dod-capacity-layout-v1",
+  "layout_version": "lfp-280ah-dod-capacity-zenodo-14576042-v1",
+  "nominal_capacity_ah": 280.0,
+  "selected_dod_fraction": 1.0,
+  "c_rate": 0.5,
+  "csv_encoding": "gb18030",
+  "normalization": "FIRST_VALID_CYCLE_CAPACITY",
+  "temperature_optional_csv_members": [
+    "04QCB76718400JB630001092-0.5C-100%DOD-1.csv",
+    "04QCB76718400JB630001859-0.5C-100%DOD-1.csv",
+    "04QCB76716600JB630005726-0.5C-100%DOD-1.csv"
+  ],
+  "columns": {
+    "cycle_number": "循环号",
+    "discharge_capacity_ah": "放电容量(Ah)",
+    "absolute_time": "绝对时间",
+    "temperature_c": "temp1_1"
+  },
+  "archives": [
+    {
+      "outer_relative_path": "data/raw/LFP_280AH_DOD/v3/CATL.zip",
+      "archive": {
+        "layout_version": "lfp-280ah-dod-catl-outer-zenodo-14576042-v1",
+        "vendor": "CATL",
+        "archive_sha256": "ef6e01c06952f0d43c9ee02b9a84d34d286c40db799c6baced5e5879b55ea364",
+        "expected_members": [
+          "CATL/CATL-0.5C-100% Depth of Discharge/2763.zip",
+          "CATL/CATL-0.5C-100% Depth of Discharge/4296.zip",
+          "CATL/CATL-0.5C-100% Depth of Discharge/4870.zip",
+          "CATL/CATL-0.5C-20% Depth of Discharge/2899.zip",
+          "CATL/CATL-0.5C-20% Depth of Discharge/4693.zip",
+          "CATL/CATL-0.5C-20% Depth of Discharge/5535.zip",
+          "CATL/CATL-0.5C-60% Depth of Discharge/3821.zip",
+          "CATL/CATL-0.5C-60% Depth of Discharge/4699.zip",
+          "CATL/CATL-0.5C-60% Depth of Discharge/4966.zip"
+        ],
+        "task_role": "external_test"
+      },
+      "selected_members": [
+        "CATL/CATL-0.5C-100% Depth of Discharge/2763.zip",
+        "CATL/CATL-0.5C-100% Depth of Discharge/4296.zip",
+        "CATL/CATL-0.5C-100% Depth of Discharge/4870.zip"
+      ]
+    },
+    {
+      "outer_relative_path": "data/raw/LFP_280AH_DOD/v3/EVE.zip",
+      "archive": {
+        "layout_version": "lfp-280ah-dod-eve-outer-zenodo-14576042-v1",
+        "vendor": "EVE",
+        "archive_sha256": "6c9af32eeccd15c6bf7ef734e121695617f18bedf201ebf639a2d520b05aeaf0",
+        "expected_members": [
+          "EVE/EVE-0.5C-100% Depth of Discharge/1092.zip",
+          "EVE/EVE-0.5C-100% Depth of Discharge/1859.zip",
+          "EVE/EVE-0.5C-100% Depth of Discharge/5726.zip",
+          "EVE/EVE-0.5C-20% Depth of Discharge/2297.zip",
+          "EVE/EVE-0.5C-20% Depth of Discharge/4290.zip",
+          "EVE/EVE-0.5C-20% Depth of Discharge/5123.zip",
+          "EVE/EVE-0.5C-60% Depth of Discharge/0730.zip",
+          "EVE/EVE-0.5C-60% Depth of Discharge/3611.zip",
+          "EVE/EVE-0.5C-60% Depth of Discharge/3859.zip"
+        ],
+        "task_role": "external_test"
+      },
+      "selected_members": [
+        "EVE/EVE-0.5C-100% Depth of Discharge/1092.zip",
+        "EVE/EVE-0.5C-100% Depth of Discharge/1859.zip",
+        "EVE/EVE-0.5C-100% Depth of Discharge/5726.zip"
+      ]
+    }
+  ],
+  "max_nested_archive_bytes": 805306368,
+  "max_inner_csv_members": 64,
+  "max_inner_csv_bytes": 8589934592,
+  "max_inner_compression_ratio": 250.0
+}

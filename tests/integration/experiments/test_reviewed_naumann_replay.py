@@ -32,7 +32,7 @@ from quanxin_life.experiments.naumann_reviewed_run import (
 def test_reviewed_raw_matrix_runs_three_strategy_replay_without_fake_costs(
     tmp_path: Path,
 ) -> None:
-    source_path = tmp_path / "data" / "NAUMANN_CYCLE" / "reviewed.mat"
+    source_path = tmp_path / "data" / "raw" / "NAUMANN_CYCLE" / "v1" / "reviewed.mat"
     source_path.parent.mkdir(parents=True)
     x_axis = np.asarray([[0.0] * 4, [50.0] * 4, [100.0] * 4])
     y_axis = np.asarray(
@@ -66,6 +66,9 @@ def test_reviewed_raw_matrix_runs_three_strategy_replay_without_fake_costs(
                     "license_status": "CC BY 4.0",
                     "ingestion_mode": "matlab",
                     "expected_suffixes": [".mat"],
+                    "downloaded_at": "2026-08-07T00:00:00Z",
+                    "artifact_paths": ["data/raw/NAUMANN_CYCLE/v1/reviewed.mat"],
+                    "artifact_sha256": [source_sha],
                 }
             ]
         ),
@@ -82,7 +85,7 @@ def test_reviewed_raw_matrix_runs_three_strategy_replay_without_fake_costs(
             files=(
                 AuditedDatasetFile(
                     dataset_id="NAUMANN_CYCLE",
-                    relative_path="data/NAUMANN_CYCLE/reviewed.mat",
+                        relative_path="data/raw/NAUMANN_CYCLE/v1/reviewed.mat",
                     size_bytes=source_path.stat().st_size,
                     sha256=source_sha,
                 ),
@@ -128,7 +131,7 @@ def test_reviewed_raw_matrix_runs_three_strategy_replay_without_fake_costs(
         config_version="fixture-reviewed-run-v1",
         source_catalog_path="configs/data_sources.json",
         audit_manifest_path="configs/data_manifests/audit.json",
-        source_file_path="data/NAUMANN_CYCLE/reviewed.mat",
+        source_file_path="data/raw/NAUMANN_CYCLE/v1/reviewed.mat",
         layout_path="configs/data_layouts/layout.json",
         selection=ReviewedAxisSelection(
             selection_version="fixture-near-100-v1",

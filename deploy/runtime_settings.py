@@ -12,6 +12,37 @@ from pydantic import SecretStr
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_SECRET_BYTES = 8_192
+_FEISHU_AILY_ENABLED = "QUANXIN_FEISHU_AILY_ENABLED"
+_FEISHU_AILY_CONFIGURATION_KEYS = (
+    "QUANXIN_FEISHU_APP_ID",
+    "QUANXIN_FEISHU_APP_SECRET_FILE",
+    "QUANXIN_FEISHU_VERIFICATION_TOKEN_FILE",
+    "QUANXIN_FEISHU_ENCRYPT_KEY_FILE",
+    "QUANXIN_AILY_CONNECTOR_API_KEY_FILE",
+    "QUANXIN_FEISHU_BITABLE_APP_TOKEN",
+    "QUANXIN_FEISHU_BITABLE_TABLE_ID",
+    "QUANXIN_EXTERNAL_HTTPS_BASE_URL",
+    "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE",
+    "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
+    "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class FeishuAilyRuntimeSettings:
+    """Complete opt-in production identity for the audited integration bundle."""
+
+    app_id: str
+    app_secret: SecretStr
+    verification_token: SecretStr
+    encrypt_key: SecretStr
+    aily_connector_api_key: SecretStr
+    bitable_app_token: str
+    bitable_table_id: str
+    external_https_base_url: str
+    csv_registrations_file: Path
+    allow_candidate_scenario_execution: bool
+    allow_candidate_scenario_results: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +60,7 @@ class CompetitionRuntimeSettings:
     calibration_registrations_file: Path
     calibration_evidence_root: Path
     agent_policy_file: Path
+    feishu_aily: FeishuAilyRuntimeSettings | None = None
 
     @classmethod
     def from_environment(
@@ -77,6 +109,7 @@ class CompetitionRuntimeSettings:
         )
         if not agent_policy_file.is_relative_to(policy_root):
             raise ValueError("Agent policy file must remain inside QUANXIN_POLICY_ROOT")
+        feishu_aily = _feishu_aily_settings(environment)
         return cls(
             database_url=database_url,
             redis_url=redis_url,
@@ -89,6 +122,7 @@ class CompetitionRuntimeSettings:
             calibration_registrations_file=calibration_registrations_file,
             calibration_evidence_root=calibration_evidence_root,
             agent_policy_file=agent_policy_file,
+            feishu_aily=feishu_aily,
         )
 
 
@@ -146,6 +180,109 @@ def _secret_url(
     return SecretStr(value)
 
 
+def _secret_text(environment: Mapping[str, str], key: str, *, label: str) -> SecretStr:
+    path = _regular_file(environment, key)
+    if path.stat().st_size > _MAX_SECRET_BYTES:
+        raise ValueError(f"{label} secret file is too large")
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"{label} secret file cannot be read") from exc
+    value = raw.strip()
+    if not value or "\x00" in value or len(value.splitlines()) != 1:
+        raise ValueError(f"{label} secret file must contain one nonblank line")
+    return SecretStr(value)
+
+
+def _strict_boolean(environment: Mapping[str, str], key: str) -> bool:
+    value = _required(environment, key).casefold()
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ValueError(f"runtime setting must be a true/false boolean: {key}")
+
+
+def _optional_boolean(
+    environment: Mapping[str, str],
+    key: str,
+    *,
+    default: bool,
+) -> bool:
+    raw = environment.get(key, "")
+    normalized = raw.strip() if isinstance(raw, str) else ""
+    if not normalized:
+        return default
+    return _strict_boolean(environment, key)
+
+
+def _feishu_aily_settings(
+    environment: Mapping[str, str],
+) -> FeishuAilyRuntimeSettings | None:
+    enabled = _optional_boolean(
+        environment,
+        _FEISHU_AILY_ENABLED,
+        default=False,
+    )
+    configured = tuple(
+        key
+        for key in _FEISHU_AILY_CONFIGURATION_KEYS
+        if isinstance(environment.get(key), str) and environment[key].strip()
+    )
+    if not enabled:
+        if configured:
+            raise ValueError(
+                "Feishu/Aily integration is disabled but integration settings are configured"
+            )
+        return None
+    return FeishuAilyRuntimeSettings(
+        app_id=_required(environment, "QUANXIN_FEISHU_APP_ID"),
+        app_secret=_secret_text(
+            environment,
+            "QUANXIN_FEISHU_APP_SECRET_FILE",
+            label="Feishu app secret",
+        ),
+        verification_token=_secret_text(
+            environment,
+            "QUANXIN_FEISHU_VERIFICATION_TOKEN_FILE",
+            label="Feishu verification token",
+        ),
+        encrypt_key=_secret_text(
+            environment,
+            "QUANXIN_FEISHU_ENCRYPT_KEY_FILE",
+            label="Feishu encrypt key",
+        ),
+        aily_connector_api_key=_secret_text(
+            environment,
+            "QUANXIN_AILY_CONNECTOR_API_KEY_FILE",
+            label="Aily connector API key",
+        ),
+        bitable_app_token=_required(
+            environment,
+            "QUANXIN_FEISHU_BITABLE_APP_TOKEN",
+        ),
+        bitable_table_id=_required(
+            environment,
+            "QUANXIN_FEISHU_BITABLE_TABLE_ID",
+        ),
+        external_https_base_url=_https_base_url(
+            _required(environment, "QUANXIN_EXTERNAL_HTTPS_BASE_URL")
+        ),
+        csv_registrations_file=_regular_file(
+            environment,
+            "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE",
+        ),
+        allow_candidate_scenario_execution=_strict_boolean(
+            environment,
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
+        ),
+        allow_candidate_scenario_results=_strict_boolean(
+            environment,
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
+        ),
+    )
+
+
 def _trusted_origin(value: str) -> str:
     parsed = urlsplit(value)
     if parsed.scheme != "https":
@@ -162,4 +299,22 @@ def _trusted_origin(value: str) -> str:
     return value.removesuffix("/")
 
 
-__all__ = ["CompetitionRuntimeSettings"]
+def _https_base_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme != "https":
+        raise ValueError("external integration base URL must use HTTPS")
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            "external integration base URL must contain only scheme and authority"
+        )
+    return value.removesuffix("/")
+
+
+__all__ = ["CompetitionRuntimeSettings", "FeishuAilyRuntimeSettings"]

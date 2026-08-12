@@ -5,13 +5,21 @@ from __future__ import annotations
 import hmac
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Protocol
+from typing import Annotated, Literal, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 from quanxin_life.audit import AuditLedger
 from quanxin_life.core import AgentRunState, ToolResult
@@ -23,11 +31,21 @@ from quanxin_life.reporting.contracts import (
     AUDITED_REPORT_TOOL_NAME,
     AUDITED_REPORT_TOOL_VERSION,
 )
+from quanxin_life.scenarios import (
+    OperationScenario,
+    ScenarioStateReference,
+)
 
 _SAFE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}\Z")
 _SAFE_FILENAME = re.compile(r"[A-Za-z0-9_.-]{1,255}\Z")
 _AILY_BEARER = HTTPBearer(auto_error=False)
 _AILY_SECURITY_DEPENDENCY = Security(_AILY_BEARER)
+_SCENARIO_TASKS = frozenset(
+    {
+        FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+        FeishuAnalysisTask.PROJECT_STORAGE_LIFETIME,
+    }
+)
 
 
 class AilyConnectorConfig(BaseModel):
@@ -49,12 +67,87 @@ class AilyCreateAnalysisTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     task_type: FeishuAnalysisTask
+    data_batch_id: str | None = Field(default=None, min_length=1, max_length=200)
+    scenario_context_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+
+    @field_validator("data_batch_id", "scenario_context_id")
+    @classmethod
+    def task_reference_is_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _reference(value, field_name="analysis task reference")
+
+    @model_validator(mode="after")
+    def require_the_task_specific_reference(self) -> AilyCreateAnalysisTaskRequest:
+        if self.task_type in _SCENARIO_TASKS:
+            if self.scenario_context_id is None or self.data_batch_id is not None:
+                raise ValueError(
+                    "scenario analysis tasks require only scenario_context_id"
+                )
+        elif self.data_batch_id is None or self.scenario_context_id is not None:
+            raise ValueError("non-scenario analysis tasks require only data_batch_id")
+        return self
+
+
+class _AilyScenarioContextRequestBase(BaseModel):
+    """Reference-only scenario envelope; numerical outputs are not accepted."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     data_batch_id: str = Field(min_length=1, max_length=200)
+    cell_format: Literal["cylindrical", "prismatic"]
+    current_state_reference: ScenarioStateReference | None = None
 
     @field_validator("data_batch_id")
     @classmethod
     def data_batch_id_is_safe(cls, value: str) -> str:
         return _reference(value, field_name="data_batch_id")
+
+
+class AilyCompareScenarioContextRequest(_AilyScenarioContextRequestBase):
+    task_type: Literal[FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS]
+    baseline: OperationScenario
+    comparisons: tuple[OperationScenario, ...] = Field(min_length=1, max_length=8)
+
+
+class AilyProjectLifetimeScenarioContextRequest(_AilyScenarioContextRequestBase):
+    task_type: Literal[FeishuAnalysisTask.PROJECT_STORAGE_LIFETIME]
+    scenario: OperationScenario
+    new_observation_reference: ScenarioStateReference | None = None
+
+
+AilyCreateScenarioContextRequest = Annotated[
+    AilyCompareScenarioContextRequest | AilyProjectLifetimeScenarioContextRequest,
+    Field(discriminator="task_type"),
+]
+
+
+class AilyScenarioContextState(BaseModel):
+    """External context identity without internal route or model names."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scenario_context_id: str = Field(min_length=1, max_length=200)
+    task_type: FeishuAnalysisTask
+    data_batch_id: str = Field(min_length=1, max_length=200)
+    input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: datetime
+
+    @field_validator("scenario_context_id", "data_batch_id")
+    @classmethod
+    def references_are_safe(cls, value: str) -> str:
+        return _reference(value, field_name="scenario context reference")
+
+    @field_validator("created_at")
+    @classmethod
+    def created_at_is_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("scenario context timestamp must include a timezone")
+        return value.astimezone(UTC)
 
 
 class AilyAnalysisTaskGateway(Protocol):
@@ -63,6 +156,13 @@ class AilyAnalysisTaskGateway(Protocol):
     ) -> AgentRunState: ...
 
     def get_analysis_task(self, run_id: str) -> AgentRunState: ...
+
+
+class AilyScenarioContextGateway(Protocol):
+    def create_scenario_context(
+        self,
+        request: AilyCreateScenarioContextRequest,
+    ) -> AilyScenarioContextState: ...
 
 
 class AilyReportExporter(Protocol):
@@ -80,11 +180,12 @@ def create_aily_http_adapter(
     config: AilyConnectorConfig,
     *,
     gateway: AilyAnalysisTaskGateway,
+    scenario_context_gateway: AilyScenarioContextGateway,
     audit_ledger: AuditLedger,
     report_exporter: AilyReportExporter,
     result_authorizer: AuditedResultAuthorizer,
 ) -> AilyHttpAdapter:
-    """Expose four stable Aily operations without exposing model identities."""
+    """Expose stable Aily operations without accepting model-produced numbers."""
 
     def require_connector(
         credentials: HTTPAuthorizationCredentials | None = _AILY_SECURITY_DEPENDENCY,
@@ -107,6 +208,30 @@ def create_aily_http_adapter(
         tags=["aily-connector"],
         dependencies=authorized,
     )
+
+    @router.post(
+        "/scenario-contexts",
+        response_model=AilyScenarioContextState,
+        status_code=201,
+    )
+    def create_scenario_context(
+        request: AilyCreateScenarioContextRequest,
+    ) -> AilyScenarioContextState:
+        try:
+            state = scenario_context_gateway.create_scenario_context(request)
+            return AilyScenarioContextState.model_validate(
+                state.model_dump(mode="json")
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="aily_scenario_context_rejected",
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="aily_scenario_context_unavailable",
+            ) from exc
 
     @router.post(
         "/analysis-tasks",
@@ -258,9 +383,14 @@ def _reference(value: object, *, field_name: str) -> str:
 
 __all__ = [
     "AilyAnalysisTaskGateway",
+    "AilyCompareScenarioContextRequest",
     "AilyConnectorConfig",
     "AilyCreateAnalysisTaskRequest",
+    "AilyCreateScenarioContextRequest",
     "AilyHttpAdapter",
+    "AilyProjectLifetimeScenarioContextRequest",
     "AilyReportExporter",
+    "AilyScenarioContextGateway",
+    "AilyScenarioContextState",
     "create_aily_http_adapter",
 ]

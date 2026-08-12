@@ -20,6 +20,7 @@ EXPECTED_TABLES = {
     "agent_events",
     "tool_results",
     "provenance_records",
+    "global_tool_result_bindings",
     "model_artifacts",
     "model_manifests",
     "model_route_activation_events",
@@ -36,6 +37,7 @@ EXPECTED_TABLES = {
     "knowledge_chunks",
     "feishu_bindings",
     "feishu_event_receipts",
+    "feishu_scenario_contexts",
     "experiment_suites",
     "experiment_runs",
 }
@@ -86,6 +88,7 @@ def test_idempotency_and_evidence_constraints_are_declared() -> None:
     assert ("run_id", "step_id") in _unique_column_sets("approval_requests")
     assert ("approval_request_id",) in _unique_column_sets("approval_actions")
     assert ("event_id",) in _unique_column_sets("feishu_event_receipts")
+    assert ("job_request_sha256",) in _unique_column_sets("feishu_event_receipts")
     assert ("created_by_user_id", "idempotency_key_hash") in _unique_column_sets(
         "knowledge_documents"
     )
@@ -97,6 +100,18 @@ def test_idempotency_and_evidence_constraints_are_declared() -> None:
         "model_name",
         "seed",
     ) in _unique_column_sets("experiment_runs")
+
+
+def test_feishu_analysis_job_origin_matches_the_0021_migration_contract() -> None:
+    receipts = Base.metadata.tables["feishu_event_receipts"]
+    checks = _named_check_constraints("feishu_event_receipts")
+
+    assert receipts.c.job_origin.nullable is False
+    assert receipts.c.job_origin.server_default is not None
+    assert str(receipts.c.job_origin.server_default.arg) == "FEISHU"
+    assert checks["ck_feishu_event_receipt_job_origin"] == (
+        "job_origin IN ('FEISHU', 'AILY')"
+    )
 
 
 def test_model_route_activation_ledger_declares_stream_identity_and_indexes() -> None:

@@ -1,0 +1,15 @@
+{
+  "layout_version": "naumann-cycle-xsoc-capacity-fec-2021-v1",
+  "identity_level": "condition",
+  "cell_level_split_supported": false,
+  "x_axis_variable": "X_Axis_Data_Mat",
+  "y_axis_variable": "Y_Axis_Data_Mat",
+  "legend_variable": "Legend_Vec",
+  "observation_axis": "equivalent_full_cycles",
+  "metric_name": "relative_capacity_ratio",
+  "condition_columns": [
+    {"column_index": 0, "expected_legend": "Testpoint Cyclization_40°C_50%SOC_20%DOD_1C_1C_CC", "condition_id": "T40_SOC50_DOD20_C1_C1_CC", "temperature_c": 40.0, "mean_soc": 0.5, "dod": 0.2, "charge_c_rate": 1.0, "discharge_c_rate": 1.0},
+    {"column_index": 1, "expected_legend": "Testpoint Cyclization_40°C_75%SOC_20%DOD_1C_1C_CC", "condition_id": "T40_SOC75_DOD20_C1_C1_CC", "temperature_c": 40.0, "mean_soc": 0.75, "dod": 0.2, "charge_c_rate": 1.0, "discharge_c_rate": 1.0},
+    {"column_index": 2, "expected_legend": "Testpoint Cyclization_40°C_25%SOC_20%DOD_1C_1C_CC", "condition_id": "T40_SOC25_DOD20_C1_C1_CC", "temperature_c": 40.0, "mean_soc": 0.25, "dod": 0.2, "charge_c_rate": 1.0, "discharge_c_rate": 1.0}
+  ]
+}

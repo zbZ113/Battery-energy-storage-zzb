@@ -72,6 +72,38 @@ def test_runtime_services_use_secret_files_and_fail_closed_dependencies() -> Non
     assert "agent-runs,advanced-calibration,report-exports" in compose
 
 
+def test_feishu_aily_override_is_the_only_source_of_optional_secrets() -> None:
+    base = _read("deploy/competition.compose.yaml")
+    override = _read("deploy/competition.feishu-aily.override.yaml")
+
+    for secret in (
+        "feishu_app_secret",
+        "feishu_verification_token",
+        "feishu_encrypt_key",
+        "aily_connector_api_key",
+    ):
+        assert secret not in base
+        assert f"- {secret}" in override
+        assert re.search(rf"(?m)^  {secret}:\s*$", override)
+    for setting in (
+        'QUANXIN_FEISHU_AILY_ENABLED: "true"',
+        "QUANXIN_FEISHU_APP_ID: ${FEISHU_APP_ID}",
+        "QUANXIN_FEISHU_APP_SECRET_FILE: /run/secrets/feishu_app_secret",
+        "QUANXIN_FEISHU_VERIFICATION_TOKEN_FILE: /run/secrets/feishu_verification_token",
+        "QUANXIN_FEISHU_ENCRYPT_KEY_FILE: /run/secrets/feishu_encrypt_key",
+        "QUANXIN_AILY_CONNECTOR_API_KEY_FILE: /run/secrets/aily_connector_api_key",
+        "QUANXIN_FEISHU_BITABLE_APP_TOKEN: ${FEISHU_BITABLE_APP_TOKEN}",
+        "QUANXIN_FEISHU_BITABLE_TABLE_ID: ${FEISHU_BITABLE_TABLE_ID}",
+        "QUANXIN_EXTERNAL_HTTPS_BASE_URL: ${EXTERNAL_HTTPS_BASE_URL}",
+        "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE: /srv/quanxin/config/feishu-csv-registrations.json",
+        "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION: ${ALLOW_CANDIDATE_SCENARIO_EXECUTION}",
+        "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS: ${ALLOW_CANDIDATE_SCENARIO_RESULTS}",
+    ):
+        assert setting in override
+    for service in ("migrate", "api", "worker"):
+        assert re.search(rf"(?m)^  {service}:(?:\s+&[A-Za-z0-9_-]+)?\s*$", override)
+
+
 def test_competition_compose_mounts_certificates_and_evidence_with_safe_modes() -> None:
     compose = _read("deploy/competition.compose.yaml")
 
@@ -132,6 +164,12 @@ def test_deployment_environment_template_contains_identities_not_secrets() -> No
         "DEPLOYMENT_REGISTRY_ROOT",
         "CALIBRATION_EVIDENCE_ROOT",
         "QUANXIN_SECRETS_ROOT",
+        "FEISHU_APP_ID",
+        "FEISHU_BITABLE_APP_TOKEN",
+        "FEISHU_BITABLE_TABLE_ID",
+        "EXTERNAL_HTTPS_BASE_URL",
+        "ALLOW_CANDIDATE_SCENARIO_EXECUTION",
+        "ALLOW_CANDIDATE_SCENARIO_RESULTS",
     ):
         assert re.search(rf"(?m)^{name}=\s*$", template)
 

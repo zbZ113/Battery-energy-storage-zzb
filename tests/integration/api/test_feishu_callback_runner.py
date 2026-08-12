@@ -9,6 +9,8 @@ import pytest
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.pool import StaticPool
 
 from quanxin_life.api.feishu import FeishuEventRouteStatus
 from quanxin_life.api.feishu_runner import (
@@ -22,7 +24,17 @@ from quanxin_life.integrations.feishu import (
     FeishuReceiptClaimStatus,
     FeishuWebhookSecrets,
     FeishuWebhookVerifier,
+    SqlAlchemyFeishuReceiptStore,
 )
+from quanxin_life.integrations.feishu.jobs import (
+    FeishuAnalysisJobStatus,
+    FeishuJobDispatchReceipt,
+    SqlAlchemyFeishuJobRouter,
+    SqlAlchemyFeishuJobStore,
+)
+from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
+from quanxin_life.persistence import Base, create_session_factory
+from quanxin_life.persistence.models import FeishuEventReceipt
 from scripts.run_feishu_callback import build_local_app
 
 NOW = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
@@ -99,6 +111,15 @@ class _RecordingRouter:
         return FeishuEventRouteStatus.ENQUEUED
 
 
+class _PersistentQueue:
+    def __init__(self) -> None:
+        self.job_ids: list[str] = []
+
+    def enqueue(self, *, job_id: str) -> FeishuJobDispatchReceipt:
+        self.job_ids.append(job_id)
+        return FeishuJobDispatchReceipt(job_id=job_id, task_id="task-callback")
+
+
 def _event_body(*, event_id: str = "evt-runner-001", token: str = TOKEN) -> bytes:
     return json.dumps(
         {
@@ -129,6 +150,35 @@ def _file_event_body(*, event_id: str, token: str = TOKEN) -> bytes:
         {"file_key": "file-runner", "file_name": "runner.csv"}
     )
     return json.dumps(payload, separators=(",", ":")).encode()
+
+
+def _scenario_card_action_body(*, event_id: str, scenario_context_id: str) -> bytes:
+    return json.dumps(
+        {
+            "schema": "2.0",
+            "header": {
+                "event_id": event_id,
+                "event_type": "card.action.trigger",
+                "token": TOKEN,
+            },
+            "event": {
+                "operator": {"open_id": "ou-runner"},
+                "context": {
+                    "open_chat_id": "oc-runner",
+                    "open_message_id": "om-scenario-runner",
+                },
+                "action": {
+                    "value": {
+                        "task_type": (
+                            FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value
+                        ),
+                        "scenario_context_id": scenario_context_id,
+                    }
+                },
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
 
 
 def _headers(body: bytes) -> dict[str, str]:
@@ -208,6 +258,65 @@ def test_runner_preserves_url_verification_contract() -> None:
     assert response.json() == {"challenge": "runner-challenge"}
 
 
+def test_callback_persists_one_sanitized_job_and_acks_without_running_worker() -> None:
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session_factory = create_session_factory(engine)
+    receipts = SqlAlchemyFeishuReceiptStore(session_factory)
+    processor = FeishuEventProcessor(
+        verifier=FeishuWebhookVerifier(
+            FeishuWebhookSecrets(
+                verification_token=SecretStr(TOKEN),
+                encrypt_key=SecretStr(ENCRYPT_KEY),
+            )
+        ),
+        verification_token=SecretStr(TOKEN),
+        receipts=receipts,
+    )
+    queue = _PersistentQueue()
+    router = SqlAlchemyFeishuJobRouter(
+        SqlAlchemyFeishuJobStore(session_factory),
+        queue=queue,
+        task_resolver=lambda event: FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        clock=lambda: NOW,
+    )
+    app = create_feishu_callback_app(
+        processor,
+        router=router,
+        security_mode=FeishuCallbackSecurityMode.LOCAL_PLAINTEXT,
+        now_factory=lambda: NOW,
+    )
+    client = TestClient(app)
+    body = _file_event_body(event_id="evt-durable-job")
+
+    first = client.post(
+        "/v1/integrations/feishu/events", headers=_headers(body), content=body
+    )
+    duplicate = client.post(
+        "/v1/integrations/feishu/events", headers=_headers(body), content=body
+    )
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 200
+    assert len(queue.job_ids) == 1
+    with session_factory() as session:
+        assert session.scalar(select(func.count(FeishuEventReceipt.job_id))) == 1
+        row = session.scalar(
+            select(FeishuEventReceipt).where(
+                FeishuEventReceipt.event_id == "evt-durable-job"
+            )
+        )
+        assert row is not None
+        assert row.message_id == "om-runner"
+        assert row.file_key == "file-runner"
+        assert row.job_stage == "RECEIVED"
+        assert row.analysis_result_id is None
+
+
 def test_production_runner_rejects_plaintext_only_security_mode() -> None:
     with pytest.raises(ValueError, match="reviewed decryptor"):
         _app(mode=FeishuCallbackSecurityMode.PRODUCTION_REVIEWED)
@@ -235,7 +344,7 @@ def test_production_runner_rejects_a_declared_decryptor_when_processor_has_none(
         )
 
 
-def test_local_entrypoint_uses_sql_receipts_and_routes_one_sanitized_file_reference(
+def test_local_entrypoint_persists_and_dispatches_one_sanitized_file_job(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FEISHU_VERIFICATION_TOKEN", TOKEN)
@@ -263,13 +372,44 @@ def test_local_entrypoint_uses_sql_receipts_and_routes_one_sanitized_file_refere
     assert first.status_code == 200
     assert duplicate.status_code == 200
     assert wrong_token.status_code == 422
-    sink = app.state.reference_sink
-    assert sink.events.qsize() == 1
-    event = sink.events.get_nowait()
-    assert event.file_key == "file-runner"
-    assert event.file_name == "runner.csv"
-    assert event.message_id == "om-runner"
-    assert "must-not-enter-router" not in repr(event)
+    queue = app.state.job_queue
+    assert queue.job_ids.qsize() == 1
+    job = app.state.job_store.get(queue.job_ids.get_nowait())
+    assert job.job_status is FeishuAnalysisJobStatus.PENDING
+    assert job.task_type is FeishuAnalysisTask.PREDICT_CYCLE_LIFE
+    assert job.file_key == "file-runner"
+    assert job.file_name == "runner.csv"
+    assert job.message_id == "om-runner"
+    assert job.scenario_context_id is None
+    assert "must-not-enter-router" not in repr(job)
+
+
+def test_local_entrypoint_routes_scenario_card_by_context_reference(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FEISHU_VERIFICATION_TOKEN", TOKEN)
+    monkeypatch.setenv("FEISHU_ENCRYPT_KEY", ENCRYPT_KEY)
+    app = build_local_app(
+        f"sqlite:///{(tmp_path / 'scenario.sqlite3').as_posix()}",
+        now_factory=lambda: NOW,
+    )
+    context_id = "ea28ad37-d072-4d42-9d2a-fbc4ab5158db"
+    body = _scenario_card_action_body(
+        event_id="evt-runner-scenario-001",
+        scenario_context_id=context_id,
+    )
+
+    response = TestClient(app).post(
+        "/v1/integrations/feishu/events",
+        headers=_headers(body),
+        content=body,
+    )
+
+    assert response.status_code == 200
+    job = app.state.job_store.get(app.state.job_queue.job_ids.get_nowait())
+    assert job.task_type is FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS
+    assert job.scenario_context_id == context_id
+    assert job.file_key is None
 
 
 def test_local_entrypoint_creates_a_missing_sqlite_parent_directory(

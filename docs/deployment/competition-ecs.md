@@ -125,6 +125,7 @@ sudo install -d -o root -g quanxin -m 0750 /etc/quanxin/secrets
 
 ```text
 /srv/quanxin/deploy/competition.compose.yaml
+/srv/quanxin/deploy/competition.feishu-aily.override.yaml
 /srv/quanxin/deploy/competition.env.example
 ```
 
@@ -133,8 +134,12 @@ sudo install -d -o root -g quanxin -m 0750 /etc/quanxin/secrets
 ```bash
 install -m 0644 deploy/competition.compose.yaml \
   /srv/quanxin/deploy/competition.compose.yaml
+install -m 0644 deploy/competition.feishu-aily.override.yaml \
+  /srv/quanxin/deploy/competition.feishu-aily.override.yaml
 install -m 0644 deploy/competition.env.example \
   /srv/quanxin/deploy/competition.env.example
+install -m 0640 deploy/feishu-csv-registrations.example.json \
+  /srv/quanxin/config/feishu-csv-registrations.json
 ```
 
 Gateway 配置已经固化在不可变 `quanxin-nginx` 镜像中；Compose 只挂载证书和 ACME
@@ -160,6 +165,12 @@ ACR_REGISTRY=<ACR 公网或 VPC registry>
 ACR_NAMESPACE=quanxin-life
 RELEASE_TAG=<已发布不可变 tag>
 PUBLIC_ORIGIN=https://<公网 IP 或域名>
+FEISHU_APP_ID=<企业自建应用 App ID>
+FEISHU_BITABLE_APP_TOKEN=<多维表格 app token>
+FEISHU_BITABLE_TABLE_ID=<多维表格 table ID>
+EXTERNAL_HTTPS_BASE_URL=https://<经审查公网 Origin>
+ALLOW_CANDIDATE_SCENARIO_EXECUTION=false
+ALLOW_CANDIDATE_SCENARIO_RESULTS=false
 DEPLOYMENT_REGISTRY_ID=<64 位 registry SHA-256>
 DEPLOYMENT_REGISTRY_ROOT=/srv/quanxin/deployment-registry
 CALIBRATION_EVIDENCE_ROOT=/srv/quanxin/calibration-evidence
@@ -179,6 +190,18 @@ ACME_WEBROOT=/srv/quanxin/acme
 evidence 必须先在来源端生成 SHA-256 清单，再通过用户批准的传输通道带到 ECS，
 到达后重新计算哈希。
 
+启用飞书附件任务前，使用 `sha256sum <canonical.csv>` 计算每份获准 CSV 的实际哈希，
+编辑 `${CONFIG_ROOT}/feishu-csv-registrations.json`。每条记录的 `payload_sha256`、
+`metadata.source_sha256` 和一条 `source_kind=OBSERVED` provenance 的 `sha256` 必须完全
+一致；文件结构从 `deploy/feishu-csv-registrations.example.json` 复制。完成后设置
+`chmod 0640 ${CONFIG_ROOT}/feishu-csv-registrations.json`，并用同一发布环境运行配置解析。
+空表只允许启动时保持 fail closed，不能处理任何附件；unknown payload 会被拒绝。
+
+不启用飞书/Aily 时，不加载 `competition.feishu-aily.override.yaml`，并保持上述 6 个
+可选身份为空；不能保留部分配置。启用后两个 candidate 开关仍应先保持 `false`，只有
+完成候选路由人工审查后分别授权执行与结果展示。四个容器内 secret 路径由 override
+固定，运维只需在 `QUANXIN_SECRETS_ROOT` 下创建对应文件。
+
 ## 4. 登录 ACR 并解析 Compose
 
 ACR 密码只在 ECS 交互输入：
@@ -195,6 +218,12 @@ docker compose \
   --env-file competition.env \
   -f competition.compose.yaml \
   config --quiet
+```
+
+启用飞书/Aily 时，解析命令必须再加：
+
+```bash
+-f competition.feishu-aily.override.yaml
 ```
 
 解析失败时不得继续启动。
@@ -238,11 +267,13 @@ API 和 Worker：
 docker compose \
   --env-file competition.env \
   -f competition.compose.yaml \
+  -f competition.feishu-aily.override.yaml \
   up -d
 
 docker compose \
   --env-file competition.env \
   -f competition.compose.yaml \
+  -f competition.feishu-aily.override.yaml \
   ps
 ```
 
@@ -252,6 +283,7 @@ docker compose \
 docker compose \
   --env-file competition.env \
   -f competition.compose.yaml \
+  -f competition.feishu-aily.override.yaml \
   logs --no-color migrate
 ```
 
@@ -260,6 +292,10 @@ docker compose \
 ```text
 DATABASE_MIGRATIONS_OK
 ```
+
+随后检查数据库 `alembic_version` 为 `0021`。API、Worker 和 migrate 使用同一组 strict
+settings；若 Feishu/Aily 已启用但任一 secret file 或非秘密身份缺失，三个入口都会
+fail closed，不应通过临时删除设置绕过。
 
 ## 7. 初始化 ADMIN
 

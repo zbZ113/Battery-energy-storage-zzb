@@ -1,0 +1,9 @@
+{
+  "policy_version": "naumann-cycle-temperature-reviewed-read-v1",
+  "columns": [
+    {
+      "column_index": 3,
+      "exclusion_reason": "SOURCE_COLUMN_CONTAINS_NO_FINITE_OBSERVATIONS"
+    }
+  ]
+}

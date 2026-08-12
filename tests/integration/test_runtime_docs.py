@@ -25,6 +25,151 @@ def test_mcp_extra_pins_the_verified_sdk_release() -> None:
     assert pyproject["project"]["optional-dependencies"]["mcp"] == ["mcp==1.28.1"]
 
 
+def test_scenarios_extra_contains_every_runtime_and_plot_dependency() -> None:
+    pyproject = tomllib.loads(_read("pyproject.toml"))
+
+    assert pyproject["project"]["optional-dependencies"]["scenarios"] == [
+        "matplotlib>=3.9,<4",
+        "numpy>=2.1,<3",
+        "pandas>=2.2,<3",
+        "scipy>=1.14,<2",
+    ]
+
+
+def test_feishu_aily_docs_cover_the_audited_blast_scenario_flow() -> None:
+    openapi = _read("docs/integrations/aily-connector-openapi.yaml")
+    prompt = _read("docs/integrations/aily-system-prompt.md")
+    guide = _read("docs/integrations/feishu-aily-model-tools.md")
+    readme = _read("README.md")
+
+    for marker in (
+        "/v1/aily/scenario-contexts",
+        "CreateScenarioContextRequest",
+        "OperationScenario",
+        "ScenarioSegment",
+        "scenario_context_id",
+        "project_storage_lifetime",
+    ):
+        assert marker in openapi
+
+    for marker in (
+        "compare_operation_scenarios",
+        "project_storage_lifetime",
+        "scenario_context_id",
+        "PHYSICS_REFERENCE",
+        "15/20/25",
+    ):
+        assert marker in prompt
+
+    for marker in (
+        "REGISTERED_CANDIDATE",
+        "PHYSICS_REFERENCE",
+        "Lfp_Gr_250AhPrismatic",
+        "scenario_context_id",
+        "durable job",
+        "Fake Feishu scenario E2E",
+        "deploy.competition_api:app",
+        "0021",
+        "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
+        "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
+        "feishu_app_secret",
+        "aily_connector_api_key",
+        "断网",
+    ):
+        assert marker in guide
+
+    assert ".[scenarios]" in readme
+    assert "project_storage_lifetime" in readme
+    assert "REGISTERED_CANDIDATE" in readme
+    assert "deploy.competition_api:app" in readme
+    assert "0021" in readme
+    assert "Fake Aily scenario E2E" in readme
+
+
+def test_feishu_csv_registration_docs_require_exact_observed_sha_binding() -> None:
+    documents = {
+        "README.md": _read("README.md"),
+        "docs/integrations/feishu-aily-model-tools.md": _read(
+            "docs/integrations/feishu-aily-model-tools.md"
+        ),
+        "docs/deployment/competition-ecs.md": _read(
+            "docs/deployment/competition-ecs.md"
+        ),
+        "docs/deployment/security-and-secrets.md": _read(
+            "docs/deployment/security-and-secrets.md"
+        ),
+    }
+    common_markers = (
+        "feishu-csv-registrations.example.json",
+        "feishu-csv-registrations.json",
+        "payload_sha256",
+        "metadata.source_sha256",
+        "OBSERVED",
+    )
+
+    for path, document in documents.items():
+        for marker in common_markers:
+            assert marker in document, f"{path} must document {marker}"
+
+    guide = documents["docs/integrations/feishu-aily-model-tools.md"]
+    assert "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE" in guide
+    assert "unknown payload" in guide
+
+    ecs = documents["docs/deployment/competition-ecs.md"]
+    assert "${CONFIG_ROOT}/feishu-csv-registrations.json" in ecs
+    assert "sha256sum" in ecs
+
+
+def test_public_docs_bind_the_latest_blast_evidence_and_field_limits() -> None:
+    readme = _read("README.md")
+    guide = _read("docs/integrations/feishu-aily-model-tools.md")
+
+    for document in (readme, guide):
+        for marker in (
+            "blast_naumann_v1/validation-v2",
+            "blast_scenarios_v1/scenario-v3",
+            "19",
+            "leave-one-condition",
+            "parameter_refit=false",
+            "LFP_FIELD_160AH",
+            "no_health_target",
+            "LOCAL_TIME_TIMEZONE_UNRESOLVED",
+        ):
+            assert marker in document
+
+    assert "不是独立训练 holdout" in readme
+    assert "不能生成 SOH 精度" in guide
+
+
+def test_aily_openapi_matches_the_production_scenario_only_facade() -> None:
+    openapi = _read("docs/integrations/aily-connector-openapi.yaml")
+    scenario_context_path = openapi.split(
+        "  /v1/aily/scenario-contexts:\n",
+        maxsplit=1,
+    )[1].split("  /v1/aily/analysis-tasks:\n", maxsplit=1)[0]
+    analysis_task_path = openapi.split(
+        "  /v1/aily/analysis-tasks:\n",
+        maxsplit=1,
+    )[1].split("  /v1/aily/analysis-tasks/{run_id}:\n", maxsplit=1)[0]
+    create_request_schema = openapi.split(
+        "    CreateAnalysisTaskRequest:\n",
+        maxsplit=1,
+    )[1].split("    CreateScenarioContextRequest:\n", maxsplit=1)[0]
+
+    assert "        '201':" in scenario_context_path
+    assert "        '200':" not in scenario_context_path
+    assert "        '202':" in analysis_task_path
+    assert "ScenarioAnalysisTaskRequest" in create_request_schema
+    assert "BatchAnalysisTaskRequest" not in create_request_schema
+    for unsupported in (
+        "predict_cycle_life",
+        "predict_soh_trajectory",
+        "ingest_observed_soh",
+        "update_trajectory",
+    ):
+        assert unsupported not in create_request_schema
+
+
 def test_readme_is_user_facing_and_only_documents_real_entry_points() -> None:
     readme = _read("README.md")
 

@@ -1,0 +1,9 @@
+{
+  "policy_version": "naumann-cycle-xcyc-reviewed-read-v1",
+  "columns": [
+    {
+      "column_index": 5,
+      "allow_duplicate_axis": true
+    }
+  ]
+}

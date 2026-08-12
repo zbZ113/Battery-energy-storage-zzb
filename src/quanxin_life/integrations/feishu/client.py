@@ -308,7 +308,22 @@ class FeishuClient:
         file_key: str,
         resource_type: str,
     ) -> bytes:
-        response = self._request(
+        return self.download_message_resource_response(
+            message_id=message_id,
+            file_key=file_key,
+            resource_type=resource_type,
+        ).body
+
+    def download_message_resource_response(
+        self,
+        *,
+        message_id: str,
+        file_key: str,
+        resource_type: str,
+    ) -> FeishuHttpResponse:
+        """Return exact bytes plus response metadata for attachment policy checks."""
+
+        return self._request(
             "GET",
             (
                 f"/im/v1/messages/{_identifier(message_id, 'message_id')}"
@@ -317,7 +332,6 @@ class FeishuClient:
             params={"type": _identifier(resource_type, "resource_type")},
             expect_json=False,
         )
-        return response.body
 
     def search_bitable_records(
         self,

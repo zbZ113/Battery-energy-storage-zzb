@@ -375,3 +375,31 @@ def test_message_upload_download_and_bitable_request_shapes_are_deterministic() 
         "view_id": None,
         "automatic_fields": False,
     }
+
+
+def test_download_resource_response_preserves_verified_http_metadata() -> None:
+    transport = FakeFeishuTransport(
+        responses=[
+            _token_response(),
+            FeishuHttpResponse(
+                status_code=200,
+                headers={
+                    "content-type": "text/csv; charset=utf-8",
+                    "content-length": "14",
+                },
+                body=b"verified-bytes",
+            ),
+        ]
+    )
+    client = _client(transport)
+
+    response = client.download_message_resource_response(
+        message_id="om_source",
+        file_key="file_source",
+        resource_type="file",
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/csv; charset=utf-8"
+    assert response.headers["content-length"] == "14"
+    assert response.body == b"verified-bytes"

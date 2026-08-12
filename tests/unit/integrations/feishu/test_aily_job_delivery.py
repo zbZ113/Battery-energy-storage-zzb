@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from uuid import uuid4
+
+from quanxin_life.core import EvidenceLevel, ProvenanceRecord, SourceKind, ToolResult
+from quanxin_life.integrations.feishu.aily_tasks import AilyAnalysisJobDelivery
+from quanxin_life.integrations.feishu.bitable import (
+    BitableWriteAction,
+    BitableWriteResult,
+)
+from quanxin_life.integrations.feishu.cards import AuditedResultAuthorization
+from quanxin_life.integrations.feishu.jobs import (
+    FeishuAnalysisJobOrigin,
+    FeishuAnalysisJobRecord,
+    FeishuAnalysisJobStatus,
+)
+from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
+
+NOW = datetime(2026, 8, 12, 11, 0, tzinfo=UTC)
+
+
+class _Bitable:
+    def __init__(self) -> None:
+        self.fields: list[dict[str, object]] = []
+
+    def upsert(self, fields: dict[str, object]) -> BitableWriteResult:
+        self.fields.append(dict(fields))
+        return BitableWriteResult(
+            run_id=str(fields["run_id"]),
+            record_id="rec-aily",
+            action=BitableWriteAction.CREATED,
+        )
+
+
+class _Authorizer:
+    def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
+        assert result.tool_name == "compare_operation_scenarios"
+        return AuditedResultAuthorization(
+            allowed=True,
+            route_id="blast-lite-lfp-gr-250ah-prismatic-2019-v1",
+            activation_status="REGISTERED_CANDIDATE",
+            evidence_level=EvidenceLevel.PHYSICS_REFERENCE,
+            supported_domain="manifest-bounded-reference-scenario",
+        )
+
+
+def _job() -> FeishuAnalysisJobRecord:
+    job_id = str(uuid4())
+    return FeishuAnalysisJobRecord(
+        job_id=job_id,
+        run_id=job_id,
+        event_id="aily:" + "1" * 64,
+        task_type=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+        job_status=FeishuAnalysisJobStatus.RUNNING,
+        job_stage="DELIVERING_RESULT",
+        message_id=None,
+        file_key=None,
+        file_name=None,
+        chat_id=None,
+        sender_id=None,
+        receive_id_type=None,
+        event_time=NOW,
+        scenario_context_id=str(uuid4()),
+        record_batch_id="canonical-csv-" + "2" * 64,
+        cell_reference="cell-250ah",
+        input_file_sha256="2" * 64,
+        validation_result_id=str(uuid4()),
+        analysis_result_id=str(uuid4()),
+        report_result_id=str(uuid4()),
+        scenario_image_key=None,
+        result_card_message_id=None,
+        report_file_key=None,
+        report_message_id=None,
+        report_card_message_id=None,
+        bitable_record_id=None,
+        job_last_error_code=None,
+        job_attempt_count=1,
+        job_created_at=NOW,
+        job_updated_at=NOW,
+        job_completed_at=None,
+        job_origin=FeishuAnalysisJobOrigin.AILY,
+        job_request_sha256="3" * 64,
+    )
+
+
+def _result(job: FeishuAnalysisJobRecord) -> ToolResult:
+    assert job.analysis_result_id is not None
+    return ToolResult(
+        result_id=job.analysis_result_id,
+        tool_name="compare_operation_scenarios",
+        tool_version="compare-operation-scenarios-tool-v1",
+        model_version="blast-lite-lfp-gr-250ah-prismatic-2019-v1",
+        data_version="scenario-data-v1",
+        feature_version="operation-scenario-contract-v1",
+        input_hash="4" * 64,
+        values={
+            "artifact": {
+                "status": "COMPLETED",
+                "route_id": "blast-lite-lfp-gr-250ah-prismatic-2019-v1",
+                "baseline": {
+                    "scenario_id": "baseline",
+                    "scenario_version": "baseline-v1",
+                    "natural_years": [0.0, 1.0],
+                    "soh": [1.0, 0.99],
+                },
+                "comparisons": [],
+            }
+        },
+        warnings=["CANDIDATE_ROUTE_RESEARCH_USE_ONLY"],
+        provenance=[
+            ProvenanceRecord(
+                source_id="blast-route",
+                source_kind=SourceKind.SIMULATED,
+                uri="package://blast-route",
+                sha256="5" * 64,
+                description="Pinned candidate reference route.",
+                created_at=NOW,
+            )
+        ],
+        created_at=NOW,
+    )
+
+
+def _report(job: FeishuAnalysisJobRecord) -> ToolResult:
+    assert job.report_result_id is not None
+    return ToolResult(
+        result_id=job.report_result_id,
+        tool_name="generate_audited_report",
+        tool_version="audited-report-tool-v1",
+        model_version="audited-markdown-v1",
+        data_version="scenario-data-v1",
+        feature_version="operation-scenario-contract-v1",
+        input_hash="6" * 64,
+        values={"report_kind": "storage_lifetime_scenario"},
+        warnings=[],
+        provenance=[
+            ProvenanceRecord(
+                source_id="analysis-result",
+                source_kind=SourceKind.SIMULATED,
+                uri=f"tool-result:{job.analysis_result_id}",
+                sha256="7" * 64,
+                description="Audited scenario result reference.",
+                created_at=NOW,
+            )
+        ],
+        created_at=NOW,
+    )
+
+
+def test_aily_success_delivery_writes_only_scalar_metadata_and_report_link() -> None:
+    bitable = _Bitable()
+    delivery = AilyAnalysisJobDelivery(
+        bitable_writer=bitable,
+        result_authorizer=_Authorizer(),
+        report_link_factory=lambda job, report: (
+            f"https://api.example.invalid/v1/aily/analysis-tasks/{job.run_id}"
+            f"/reports/{report.result_id}"
+        ),
+    )
+    job = _job()
+
+    receipt = delivery.deliver_success(
+        job=job,
+        analysis_result=_result(job),
+        report_result=_report(job),
+        checkpoint=lambda _progress: None,
+    )
+
+    assert receipt.bitable_record_id == "rec-aily"
+    assert receipt.report_file_key is None
+    fields = bitable.fields[0]
+    assert fields["task_status"] == "SUCCEEDED"
+    assert fields["scenario_id"] == "baseline"
+    assert fields["scenario_version"] == "baseline-v1"
+    assert fields["evidence_level"] == EvidenceLevel.PHYSICS_REFERENCE.value
+    assert fields["report_link"] == (
+        f"https://api.example.invalid/v1/aily/analysis-tasks/{job.run_id}"
+        f"/reports/{job.report_result_id}"
+    )
+    assert all(not isinstance(value, list | dict) for value in fields.values())
+    rendered = repr(fields).casefold()
+    assert "natural_years" not in rendered
+    assert "soh" not in rendered
+
+
+def test_aily_rejection_delivery_needs_no_chat_target() -> None:
+    bitable = _Bitable()
+    delivery = AilyAnalysisJobDelivery(
+        bitable_writer=bitable,
+        result_authorizer=_Authorizer(),
+    )
+    job = _job()
+
+    receipt = delivery.deliver_rejection(
+        job=job,
+        reason_code="SCENARIO_CONTEXT_REJECTED",
+        primary_result_id=job.validation_result_id,
+        checkpoint=lambda _progress: None,
+    )
+
+    assert receipt.report_file_key is None
+    assert bitable.fields[0]["task_status"] == "REJECTED"
+    assert bitable.fields[0]["warnings"] == "SCENARIO_CONTEXT_REJECTED"

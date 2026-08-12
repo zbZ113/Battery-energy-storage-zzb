@@ -432,6 +432,30 @@ class ProvenanceRecordRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class GlobalToolResultBindingRecord(Base):
+    __tablename__ = "global_tool_result_bindings"
+    __table_args__ = (
+        CheckConstraint(
+            "binding_schema_version = 'global-tool-result-binding-v1'",
+            name="ck_global_tool_result_binding_schema_version",
+        ),
+        CheckConstraint(
+            "length(result_sha256) = 64 AND length(binding_sha256) = 64",
+            name="ck_global_tool_result_binding_hash_lengths",
+        ),
+    )
+
+    result_id: Mapped[str] = mapped_column(
+        ForeignKey("tool_results.id", ondelete="CASCADE"), primary_key=True
+    )
+    binding_schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    result_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    binding_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
 class ProjectToolResultBindingRecord(Base):
     __tablename__ = "project_tool_result_bindings"
     __table_args__ = (
@@ -1205,7 +1229,22 @@ class FeishuEventReceipt(Base):
     __tablename__ = "feishu_event_receipts"
     __table_args__ = (
         UniqueConstraint("event_id", name="uq_feishu_event_receipt_event_id"),
+        UniqueConstraint("job_id", name="uq_feishu_event_receipt_job_id"),
+        UniqueConstraint(
+            "job_request_sha256",
+            name="uq_feishu_event_receipt_job_request_sha256",
+        ),
+        CheckConstraint(
+            "job_origin IN ('FEISHU', 'AILY')",
+            name="ck_feishu_event_receipt_job_origin",
+        ),
+        CheckConstraint(
+            "job_request_sha256 IS NULL OR length(job_request_sha256) = 64",
+            name="ck_feishu_event_receipt_job_request_sha256_length",
+        ),
         Index("ix_feishu_receipts_received_at", "received_at"),
+        Index("ix_feishu_receipts_job_status_updated", "job_status", "job_updated_at"),
+        Index("ix_feishu_receipts_scenario_context_id", "scenario_context_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -1221,6 +1260,63 @@ class FeishuEventReceipt(Base):
     )
     processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     failed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    job_id: Mapped[str | None] = mapped_column(String(64))
+    job_origin: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        server_default="FEISHU",
+    )
+    job_request_sha256: Mapped[str | None] = mapped_column(String(64))
+    job_status: Mapped[str | None] = mapped_column(String(32))
+    job_stage: Mapped[str | None] = mapped_column(String(32))
+    task_type: Mapped[str | None] = mapped_column(String(100))
+    run_id: Mapped[str | None] = mapped_column(String(64))
+    message_id: Mapped[str | None] = mapped_column(String(200))
+    file_key: Mapped[str | None] = mapped_column(String(200))
+    file_name: Mapped[str | None] = mapped_column(String(255))
+    chat_id: Mapped[str | None] = mapped_column(String(200))
+    sender_id: Mapped[str | None] = mapped_column(String(200))
+    receive_id_type: Mapped[str | None] = mapped_column(String(32))
+    event_time: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    scenario_context_id: Mapped[str | None] = mapped_column(String(64))
+    job_claim_token: Mapped[str | None] = mapped_column(String(64))
+    job_attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    job_lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    job_task_id: Mapped[str | None] = mapped_column(String(200))
+    job_last_error_code: Mapped[str | None] = mapped_column(String(100))
+    record_batch_id: Mapped[str | None] = mapped_column(String(100))
+    cell_reference: Mapped[str | None] = mapped_column(String(200))
+    input_file_sha256: Mapped[str | None] = mapped_column(String(64))
+    validation_result_id: Mapped[str | None] = mapped_column(String(64))
+    analysis_result_id: Mapped[str | None] = mapped_column(String(64))
+    report_result_id: Mapped[str | None] = mapped_column(String(64))
+    scenario_image_key: Mapped[str | None] = mapped_column(String(200))
+    result_card_message_id: Mapped[str | None] = mapped_column(String(200))
+    report_file_key: Mapped[str | None] = mapped_column(String(200))
+    report_message_id: Mapped[str | None] = mapped_column(String(200))
+    report_card_message_id: Mapped[str | None] = mapped_column(String(200))
+    bitable_record_id: Mapped[str | None] = mapped_column(String(200))
+    job_created_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    job_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    job_completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class FeishuScenarioContextRow(Base):
+    __tablename__ = "feishu_scenario_contexts"
+    __table_args__ = (
+        Index("ix_feishu_scenario_contexts_task_created", "task_type", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    data_batch_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    route_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    verified_context_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    analysis_input_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by_reference: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 __all__ = ["Base", "User", "utc_now"]

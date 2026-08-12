@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import PurePath
 from typing import Any
@@ -36,10 +37,18 @@ class FeishuEventReference(BaseModel):
     message_id: str | None = None
     file_key: str | None = None
     file_name: str | None = None
+    receive_id_type: str = "chat_id"
+    event_time: datetime | None = None
     action_value: dict[str, str] = Field(default_factory=dict, max_length=16)
 
     @field_validator(
-        "event_id", "event_type", "chat_id", "user_id", "message_id", "file_key"
+        "event_id",
+        "event_type",
+        "chat_id",
+        "user_id",
+        "message_id",
+        "file_key",
+        "receive_id_type",
     )
     @classmethod
     def references_are_safe(cls, value: str | None) -> str | None:
@@ -49,6 +58,15 @@ class FeishuEventReference(BaseModel):
     @classmethod
     def filename_is_safe(cls, value: str | None) -> str | None:
         return _optional_filename(value)
+
+    @field_validator("event_time")
+    @classmethod
+    def event_time_is_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Feishu event_time must include a timezone")
+        return value.astimezone(UTC)
 
     @field_validator("action_value")
     @classmethod
@@ -71,9 +89,19 @@ def parse_feishu_event_reference(payload: dict[str, object]) -> FeishuEventRefer
     event_type = _reference(header.get("event_type"), field_name="event_type")
     event = _mapping(payload.get("event"), field_name="event")
     if event_type == "im.message.receive_v1":
-        return _parse_message(event_id=event_id, event_type=event_type, event=event)
+        return _parse_message(
+            event_id=event_id,
+            event_type=event_type,
+            event=event,
+            header_event_time=header.get("create_time"),
+        )
     if event_type == "card.action.trigger":
-        return _parse_card_action(event_id=event_id, event_type=event_type, event=event)
+        return _parse_card_action(
+            event_id=event_id,
+            event_type=event_type,
+            event=event,
+            header_event_time=header.get("create_time"),
+        )
     raise FeishuEventReferenceError("Feishu event type is not supported")
 
 
@@ -82,6 +110,7 @@ def _parse_message(
     event_id: str,
     event_type: str,
     event: dict[str, object],
+    header_event_time: object,
 ) -> FeishuEventReference:
     message = _mapping(event.get("message"), field_name="event.message")
     sender = _optional_mapping(event.get("sender"))
@@ -98,6 +127,8 @@ def _parse_message(
         "chat_id": _optional_reference(message.get("chat_id")),
         "user_id": _optional_reference(sender_id.get("open_id")),
         "message_id": _reference(message.get("message_id"), field_name="message_id"),
+        "receive_id_type": "chat_id",
+        "event_time": _event_time(header_value=header_event_time, message=message),
     }
     if message_type == "text":
         return FeishuEventReference(kind=FeishuInboundEventKind.MESSAGE, **common)
@@ -124,6 +155,7 @@ def _parse_card_action(
     event_id: str,
     event_type: str,
     event: dict[str, object],
+    header_event_time: object,
 ) -> FeishuEventReference:
     operator = _mapping(event.get("operator"), field_name="event.operator")
     context = _mapping(event.get("context"), field_name="event.context")
@@ -145,7 +177,26 @@ def _parse_card_action(
             context.get("open_message_id"), field_name="message_id"
         ),
         action_value=action_value,
+        receive_id_type="chat_id",
+        event_time=_event_time(header_value=header_event_time, message={}),
     )
+
+
+def _event_time(
+    *,
+    header_value: object,
+    message: dict[str, object],
+) -> datetime | None:
+    raw = message.get("create_time", header_value)
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.isdigit():
+        raise FeishuEventReferenceError("Feishu event time is invalid")
+    milliseconds = int(raw)
+    try:
+        return datetime.fromtimestamp(milliseconds / 1000, tz=UTC)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise FeishuEventReferenceError("Feishu event time is invalid") from exc
 
 
 def _mapping(value: object, *, field_name: str) -> dict[str, object]:

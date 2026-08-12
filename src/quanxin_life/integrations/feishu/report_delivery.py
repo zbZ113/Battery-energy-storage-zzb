@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Protocol
@@ -79,6 +80,10 @@ class FeishuReportDelivery:
         result_id: str,
         chat_id: str,
         format: ReportArtifactFormat = ReportArtifactFormat.MARKDOWN,
+        existing_file_key: str | None = None,
+        existing_message_id: str | None = None,
+        on_uploaded: Callable[[str], None] | None = None,
+        on_sent: Callable[[str], None] | None = None,
     ) -> FeishuReportDeliveryReceipt:
         checked_result_id = _reference(result_id, field_name="result_id")
         checked_chat_id = _reference(chat_id, field_name="chat_id")
@@ -114,19 +119,33 @@ class FeishuReportDelivery:
             raise FeishuReportDeliveryError(
                 "audited report artifact SHA-256 verification failed"
             )
-        uploaded = self._client.upload_file(
-            filename=artifact.filename,
-            content_type=artifact.media_type,
-            payload=artifact.payload,
-        )
-        file_key = _response_reference(uploaded, "file_key")
-        sent = self._client.send_message(
-            receive_id=checked_chat_id,
-            receive_id_type="chat_id",
-            msg_type="file",
-            content={"file_key": file_key},
-        )
-        message_id = _response_reference(sent, "message_id")
+        if existing_message_id is not None and existing_file_key is None:
+            raise FeishuReportDeliveryError(
+                "checkpointed report message requires its uploaded file key"
+            )
+        if existing_file_key is None:
+            uploaded = self._client.upload_file(
+                filename=artifact.filename,
+                content_type=artifact.media_type,
+                payload=artifact.payload,
+            )
+            file_key = _response_reference(uploaded, "file_key")
+            if on_uploaded is not None:
+                on_uploaded(file_key)
+        else:
+            file_key = _reference(existing_file_key, field_name="file_key")
+        if existing_message_id is None:
+            sent = self._client.send_message(
+                receive_id=checked_chat_id,
+                receive_id_type="chat_id",
+                msg_type="file",
+                content={"file_key": file_key},
+            )
+            message_id = _response_reference(sent, "message_id")
+            if on_sent is not None:
+                on_sent(message_id)
+        else:
+            message_id = _reference(existing_message_id, field_name="message_id")
         return FeishuReportDeliveryReceipt(
             source_result_id=checked_result_id,
             format=artifact.format,

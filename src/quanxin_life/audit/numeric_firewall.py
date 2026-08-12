@@ -153,7 +153,18 @@ class AuditLedger:
 def _resolve_mapping_path(mapping: Mapping[str, Any], json_path: str) -> Any:
     value: Any = mapping
     for segment in json_path.split("."):
-        if not isinstance(value, Mapping) or segment not in value:
-            raise ValueError(f"ToolResult path does not exist: {json_path}")
-        value = value[segment]
+        if isinstance(value, Mapping) and segment in value:
+            value = value[segment]
+            continue
+        if (
+            isinstance(value, list)
+            and segment.isascii()
+            and segment.isdecimal()
+            and (segment == "0" or not segment.startswith("0"))
+        ):
+            index = int(segment)
+            if index < len(value):
+                value = value[index]
+                continue
+        raise ValueError(f"ToolResult path does not exist: {json_path}")
     return value

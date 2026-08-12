@@ -55,6 +55,37 @@ def test_numeric_evidence_must_exactly_match_a_registered_tool_result_value() ->
     assert resolved == 333.0
 
 
+def test_numeric_firewall_resolves_only_explicit_nonnegative_list_indices() -> None:
+    from quanxin_life.audit.numeric_firewall import AuditLedger
+
+    result = _result(
+        values={
+            "artifact": {
+                "comparisons": [
+                    {"final_soh": 0.91},
+                    {"final_soh": 0.87},
+                ]
+            }
+        }
+    )
+    ledger = AuditLedger((result,))
+
+    assert (
+        ledger.resolve_numeric_value(
+            result.result_id,
+            "values.artifact.comparisons.1.final_soh",
+        )
+        == 0.87
+    )
+    for path in (
+        "values.artifact.comparisons.-1.final_soh",
+        "values.artifact.comparisons.one.final_soh",
+        "values.artifact.comparisons.2.final_soh",
+    ):
+        with pytest.raises(ValueError, match="does not exist"):
+            ledger.resolve_numeric_value(result.result_id, path)
+
+
 def test_audit_ledger_resolves_only_registered_results_as_detached_contract_values() -> None:
     from quanxin_life.audit.numeric_firewall import AuditLedger
 

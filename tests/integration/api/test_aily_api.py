@@ -9,8 +9,10 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from quanxin_life.api.aily import (
+    AilyCompareScenarioContextRequest,
     AilyConnectorConfig,
     AilyCreateAnalysisTaskRequest,
+    AilyScenarioContextState,
     create_aily_http_adapter,
 )
 from quanxin_life.audit import AuditLedger
@@ -30,6 +32,7 @@ from quanxin_life.reporting.contracts import (
     AUDITED_REPORT_TOOL_NAME,
     AUDITED_REPORT_TOOL_VERSION,
 )
+from quanxin_life.scenarios import OperationScenario, ScenarioSegment
 
 NOW = datetime(2026, 8, 7, 10, 0, tzinfo=UTC)
 
@@ -48,6 +51,25 @@ class _Gateway:
     def get_analysis_task(self, run_id: str) -> AgentRunState:
         if run_id != self.state.run_id:
             raise LookupError("unknown run")
+        return self.state
+
+
+class _ScenarioGateway:
+    def __init__(self) -> None:
+        self.create_calls: list[AilyCompareScenarioContextRequest] = []
+        self.state = AilyScenarioContextState(
+            scenario_context_id=str(uuid4()),
+            task_type=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+            data_batch_id="batch-safe",
+            input_sha256="9" * 64,
+            created_at=NOW,
+        )
+
+    def create_scenario_context(
+        self,
+        request: AilyCompareScenarioContextRequest,
+    ) -> AilyScenarioContextState:
+        self.create_calls.append(request)
         return self.state
 
 
@@ -142,7 +164,7 @@ def _report_result(result_id: str) -> ToolResult:
 
 def _client(
     *, result_warnings: list[str] | None = None
-) -> tuple[TestClient, _Gateway, ToolResult, str, _Exporter]:
+) -> tuple[TestClient, _Gateway, _ScenarioGateway, ToolResult, str, _Exporter]:
     result = _result(str(uuid4()), warnings=result_warnings)
     report_result_id = str(uuid4())
     report_result = _report_result(report_result_id)
@@ -156,17 +178,26 @@ def _client(
         updated_at=NOW,
     )
     gateway = _Gateway(state)
+    scenario_gateway = _ScenarioGateway()
     exporter = _Exporter(report_result_id)
     adapter = create_aily_http_adapter(
         AilyConnectorConfig(api_key=SecretStr("connector-secret")),
         gateway=gateway,
+        scenario_context_gateway=scenario_gateway,
         audit_ledger=AuditLedger((result, report_result)),
         report_exporter=exporter,
         result_authorizer=_Authorizer(),
     )
     app = FastAPI()
     app.include_router(adapter.router)
-    return TestClient(app), gateway, result, report_result_id, exporter
+    return (
+        TestClient(app),
+        gateway,
+        scenario_gateway,
+        result,
+        report_result_id,
+        exporter,
+    )
 
 
 def _headers() -> dict[str, str]:
@@ -174,7 +205,7 @@ def _headers() -> dict[str, str]:
 
 
 def test_aily_requires_the_configured_bearer_token() -> None:
-    client, gateway, _, _, _ = _client()
+    client, gateway, _, _, _, _ = _client()
     body = {
         "task_type": FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value,
         "data_batch_id": "batch-safe",
@@ -193,7 +224,7 @@ def test_aily_requires_the_configured_bearer_token() -> None:
 
 
 def test_aily_creates_and_reads_an_existing_agent_run_state() -> None:
-    client, gateway, _, _, _ = _client()
+    client, gateway, _, _, _, _ = _client()
 
     created = client.post(
         "/v1/aily/analysis-tasks",
@@ -214,7 +245,7 @@ def test_aily_creates_and_reads_an_existing_agent_run_state() -> None:
 
 
 def test_aily_returns_only_a_run_bound_ledger_tool_result() -> None:
-    client, gateway, result, _, _ = _client()
+    client, gateway, _, result, _, _ = _client()
 
     response = client.get(
         f"/v1/aily/analysis-tasks/{gateway.state.run_id}/results/{result.result_id}",
@@ -231,7 +262,7 @@ def test_aily_returns_only_a_run_bound_ledger_tool_result() -> None:
 
 
 def test_aily_does_not_return_values_for_an_inactive_model_result() -> None:
-    client, gateway, result, _, _ = _client(
+    client, gateway, _, result, _, _ = _client(
         result_warnings=["MODEL_ROUTE_NOT_ACTIVATED"]
     )
 
@@ -249,7 +280,7 @@ def test_aily_does_not_return_values_for_an_inactive_model_result() -> None:
 
 
 def test_aily_downloads_only_a_run_bound_audited_report_artifact() -> None:
-    client, gateway, _, report_result_id, _ = _client()
+    client, gateway, _, _, report_result_id, _ = _client()
 
     response = client.get(
         f"/v1/aily/analysis-tasks/{gateway.state.run_id}"
@@ -264,7 +295,7 @@ def test_aily_downloads_only_a_run_bound_audited_report_artifact() -> None:
 
 
 def test_aily_rejects_a_run_bound_non_report_result_before_export() -> None:
-    client, gateway, result, _, exporter = _client()
+    client, gateway, _, result, _, exporter = _client()
 
     response = client.get(
         f"/v1/aily/analysis-tasks/{gateway.state.run_id}"
@@ -275,3 +306,98 @@ def test_aily_rejects_a_run_bound_non_report_result_before_export() -> None:
     assert response.status_code == 404
     assert response.json()["detail"] == "aily_audited_report_not_found"
     assert exporter.calls == []
+
+
+def _scenario(*, scenario_id: str) -> dict[str, object]:
+    return OperationScenario(
+        scenario_id=scenario_id,
+        scenario_version=f"{scenario_id}-v1",
+        horizon_years=20,
+        eol_threshold=0.8,
+        segments=(
+            ScenarioSegment(
+                segment_id="years-1-20",
+                start_year=0,
+                end_year=20,
+                temperature_c=25.0,
+                charge_c_rate=0.5,
+                discharge_c_rate=0.5,
+                soc_lower_bound=0.1,
+                soc_upper_bound=0.9,
+                dod=0.8,
+                equivalent_full_cycles_per_year=300.0,
+                rest_duration_hours=1.0,
+            ),
+        ),
+    ).model_dump(mode="json")
+
+
+def test_aily_creates_reference_only_scenario_contexts_from_public_contracts() -> None:
+    client, _, scenario_gateway, _, _, _ = _client()
+
+    response = client.post(
+        "/v1/aily/scenario-contexts",
+        json={
+            "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "data_batch_id": "batch-safe",
+            "cell_format": "prismatic",
+            "baseline": _scenario(scenario_id="baseline"),
+            "comparisons": [_scenario(scenario_id="warmer")],
+        },
+        headers=_headers(),
+    )
+
+    assert response.status_code == 201
+    assert response.json() == scenario_gateway.state.model_dump(mode="json")
+    assert "route_id" not in response.json()
+    assert "model_class" not in response.json()
+    request = scenario_gateway.create_calls[0]
+    assert request.baseline.scenario_id == "baseline"
+    assert request.comparisons[0].segments[0].temperature_c == 25.0
+
+
+def test_aily_rejects_caller_generated_scenario_outputs_before_the_gateway() -> None:
+    client, _, scenario_gateway, _, _, _ = _client()
+
+    response = client.post(
+        "/v1/aily/scenario-contexts",
+        json={
+            "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "data_batch_id": "batch-safe",
+            "cell_format": "prismatic",
+            "baseline": _scenario(scenario_id="baseline"),
+            "comparisons": [_scenario(scenario_id="warmer")],
+            "final_soh": 0.9,
+        },
+        headers=_headers(),
+    )
+
+    assert response.status_code == 422
+    assert scenario_gateway.create_calls == []
+
+
+def test_aily_scenario_tasks_require_a_persisted_context_reference() -> None:
+    client, gateway, scenario_gateway, _, _, _ = _client()
+
+    accepted = client.post(
+        "/v1/aily/analysis-tasks",
+        json={
+            "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "scenario_context_id": scenario_gateway.state.scenario_context_id,
+        },
+        headers=_headers(),
+    )
+    rejected = client.post(
+        "/v1/aily/analysis-tasks",
+        json={
+            "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "data_batch_id": "batch-safe",
+        },
+        headers=_headers(),
+    )
+
+    assert accepted.status_code == 202
+    assert rejected.status_code == 422
+    assert gateway.create_calls[-1].scenario_context_id == (
+        scenario_gateway.state.scenario_context_id
+    )

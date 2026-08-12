@@ -1,0 +1,69 @@
+{
+  "schema_version": "blast-lite-route-catalog-v1",
+  "upstream_repository": "https://github.com/NREL/BLAST-Lite.git",
+  "upstream_commit": "b093495b47dc40dd96dba865d91f553619501e94",
+  "upstream_version": "1.1.0",
+  "license_spdx": "BSD-3-Clause",
+  "packaged_license_resource": "quanxin_life/_vendor/blast_lite/LICENSE",
+  "packaged_notice_resource": "quanxin_life/_vendor/blast_lite/NOTICE",
+  "routes": [
+    {
+      "route_id": "blast-lite-lfp-gr-sony-murata-3ah-2018-v1",
+      "route_version": "blast-lite-b093495-sony-murata-3ah-v1",
+      "task_types": ["compare_operation_scenarios", "project_storage_lifetime"],
+      "model_class": "Lfp_Gr_SonyMurata3Ah_Battery",
+      "chemistry_aliases": ["LFP/graphite", "LFP-Gr"],
+      "cell_format": "cylindrical",
+      "nominal_capacity_reference_ah": 3.0,
+      "capacity_policy": "EXACT_REFERENCE_ONLY",
+      "experimental_range": {
+        "cycling_temperature_c": [20.0, 40.0],
+        "dod": [0.8, 1.0],
+        "soc": [0.0, 1.0],
+        "max_rate_charge": 1.0,
+        "max_rate_discharge": 2.0
+      },
+      "upstream_model_source_sha256": "862f3920d786cfb3e541df2a7f2d548146f763bab0fc0effdb94482c6e4745f7",
+      "data_sources": [
+        "https://doi.org/10.1016/j.est.2018.01.019",
+        "https://doi.org/10.1016/j.jpowsour.2019.227666",
+        "https://doi.org/10.1149/1945-7111/ac86a8"
+      ],
+      "lifecycle_status": "REGISTERED_CANDIDATE",
+      "activation_status": "NOT_ACTIVATED",
+      "evidence_level": "PHYSICS_REFERENCE",
+      "warnings": [
+        "REFERENCE_MODEL_NOT_CELL_SPECIFIC",
+        "UPSTREAM_CYCLING_TEMPERATURE_METADATA_MUST_CONTROL_SUPPORT",
+        "LONG_HORIZON_IS_SCENARIO_NOT_EXPERIMENTAL_VALIDATION"
+      ]
+    },
+    {
+      "route_id": "blast-lite-lfp-gr-250ah-prismatic-2019-v1",
+      "route_version": "blast-lite-b093495-250ah-prismatic-v1",
+      "task_types": ["compare_operation_scenarios", "project_storage_lifetime"],
+      "model_class": "Lfp_Gr_250AhPrismatic",
+      "chemistry_aliases": ["LFP/graphite", "LFP-Gr"],
+      "cell_format": "prismatic",
+      "nominal_capacity_reference_ah": 250.0,
+      "capacity_policy": "TRUSTED_REFERENCE_USE_ONLY",
+      "experimental_range": {
+        "cycling_temperature_c": [10.0, 45.0],
+        "dod": [0.8, 1.0],
+        "soc": [0.0, 1.0],
+        "max_rate_charge": 0.65,
+        "max_rate_discharge": 1.0
+      },
+      "upstream_model_source_sha256": "f2dd504eb4411feb6854ef30a60d68df5e0ef9719aa9748d725ac9102a40807c",
+      "data_sources": ["https://doi.org/10.1016/j.est.2023.109042"],
+      "lifecycle_status": "REGISTERED_CANDIDATE",
+      "activation_status": "NOT_ACTIVATED",
+      "evidence_level": "PHYSICS_REFERENCE",
+      "warnings": [
+        "REFERENCE_MODEL_NOT_CELL_SPECIFIC",
+        "HIGH_RATE_DEGRADATION_NOT_SUPPORTED",
+        "LONG_HORIZON_IS_SCENARIO_NOT_EXPERIMENTAL_VALIDATION"
+      ]
+    }
+  ]
+}

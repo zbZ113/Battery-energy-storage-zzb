@@ -7,7 +7,9 @@ from scipy.io import savemat
 
 from quanxin_life.data.adapters.naumann_cycle_mat import (
     CycleConditionColumn,
+    CycleMatrixColumnReadPolicy,
     NaumannCycleMatrixLayout,
+    NaumannCycleReadPolicy,
     ReviewedAxisSelection,
     load_naumann_cycle_layout,
     load_naumann_cycle_matrix,
@@ -136,6 +138,52 @@ def test_rejects_nonmonotonic_axis_without_reordering_matrix_rows(tmp_path: Path
 
     with pytest.raises(ValueError, match="observation axis must strictly increase"):
         load_naumann_cycle_matrix(path, _manifest(path), _source(), layout=_layout())
+
+
+def test_explicit_read_policy_preserves_duplicate_axis_and_excludes_empty_column(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "capacity_by_condition.mat"
+    savemat(
+        path,
+        {
+            "X_Axis_Data_Mat": np.asarray(
+                [[0.0, np.nan], [50.0, np.nan], [50.0, np.nan]],
+                dtype=float,
+            ),
+            "Y_Axis_Data_Mat": np.asarray(
+                [[1.0, np.nan], [0.95, np.nan], [0.90, np.nan]],
+                dtype=float,
+            ),
+            "Legend_Vec": np.asarray(["T25_SOC50", "T40_SOC75"], dtype=object),
+        },
+        do_compression=False,
+    )
+    policy = NaumannCycleReadPolicy(
+        policy_version="reviewed-duplicate-and-empty-v1",
+        columns=(
+            CycleMatrixColumnReadPolicy(
+                column_index=0,
+                allow_duplicate_axis=True,
+            ),
+            CycleMatrixColumnReadPolicy(
+                column_index=1,
+                exclusion_reason="SOURCE_COLUMN_CONTAINS_NO_FINITE_OBSERVATIONS",
+            ),
+        ),
+    )
+
+    observations = load_naumann_cycle_matrix(
+        path,
+        _manifest(path),
+        _source(),
+        layout=_layout().model_copy(update={"metric_name": "relative_capacity_ratio"}),
+        read_policy=policy,
+    )
+
+    assert [item.observation_value for item in observations] == [0.0, 50.0, 50.0]
+    assert [item.metric_value for item in observations] == [1.0, 0.95, 0.90]
+    assert {item.condition_id for item in observations} == {"T25_SOC50"}
 
 
 def test_rejects_catalog_mismatch_before_loading_matlab_payload(tmp_path: Path) -> None:

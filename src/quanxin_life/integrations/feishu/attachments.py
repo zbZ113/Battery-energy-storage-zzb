@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import re
 from dataclasses import dataclass, field
 from pathlib import PurePath
 
-from quanxin_life.application.ingestion import MAX_CANONICAL_CSV_BYTES
+from quanxin_life.application.ingestion import (
+    CANONICAL_CYCLE_CSV_FIELDS,
+    MAX_CANONICAL_CSV_BYTES,
+)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _ALLOWED_CONTENT_TYPES = frozenset(
@@ -39,12 +44,26 @@ class VerifiedFeishuAttachment:
 
 
 class FeishuAttachmentPolicy:
-    def __init__(self, *, max_bytes: int = MAX_CANONICAL_CSV_BYTES) -> None:
+    def __init__(
+        self,
+        *,
+        max_bytes: int = MAX_CANONICAL_CSV_BYTES,
+        max_rows: int = 500_000,
+        max_cell_chars: int = 10_000,
+    ) -> None:
         if max_bytes < 1 or max_bytes > MAX_CANONICAL_CSV_BYTES:
             raise ValueError(
                 "attachment max_bytes must be between 1 and the canonical CSV limit"
             )
         self._max_bytes = max_bytes
+        if max_rows < 1 or max_rows > 1_000_000:
+            raise ValueError("attachment max_rows must be between 1 and 1000000")
+        if max_cell_chars < 1 or max_cell_chars > 100_000:
+            raise ValueError(
+                "attachment max_cell_chars must be between 1 and 100000"
+            )
+        self._max_rows = max_rows
+        self._max_cell_chars = max_cell_chars
 
     def verify(
         self,
@@ -65,9 +84,14 @@ class FeishuAttachmentPolicy:
         if payload.startswith(_DANGEROUS_PREFIXES) or b"\x00" in payload:
             raise FeishuAttachmentError("attachment content is not canonical CSV text")
         try:
-            payload.decode("utf-8-sig")
+            text = payload.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
             raise FeishuAttachmentError("attachment must be UTF-8 canonical CSV") from exc
+        _verify_canonical_csv_shape(
+            text,
+            max_rows=self._max_rows,
+            max_cell_chars=self._max_cell_chars,
+        )
         digest = hashlib.sha256(payload).hexdigest()
         if expected_sha256 is not None:
             checked_expected = expected_sha256.strip().lower()
@@ -106,6 +130,60 @@ def _csv_content_type(value: str) -> str:
     if normalized not in _ALLOWED_CONTENT_TYPES:
         raise FeishuAttachmentError("attachment content type is not allowed for CSV")
     return normalized
+
+
+def _verify_canonical_csv_shape(
+    text: str,
+    *,
+    max_rows: int,
+    max_cell_chars: int,
+) -> None:
+    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    try:
+        header = next(reader)
+    except (StopIteration, csv.Error) as exc:
+        raise FeishuAttachmentError("attachment has no canonical CSV header") from exc
+    if tuple(header) != CANONICAL_CYCLE_CSV_FIELDS:
+        raise FeishuAttachmentError("attachment canonical CSV header is invalid")
+    identifier_indexes = (
+        CANONICAL_CYCLE_CSV_FIELDS.index("dataset_id"),
+        CANONICAL_CYCLE_CSV_FIELDS.index("cell_id"),
+    )
+    row_count = 0
+    try:
+        for row_count, row in enumerate(reader, start=1):
+            if row_count > max_rows:
+                raise FeishuAttachmentError("attachment exceeds the CSV row limit")
+            if len(row) != len(CANONICAL_CYCLE_CSV_FIELDS):
+                raise FeishuAttachmentError(
+                    "attachment CSV row does not match the canonical column count"
+                )
+            if any(len(cell) > max_cell_chars for cell in row):
+                raise FeishuAttachmentError("attachment exceeds the CSV cell length limit")
+            for index in identifier_indexes:
+                if _looks_like_spreadsheet_formula(row[index]):
+                    raise FeishuAttachmentError(
+                        "attachment identifier contains spreadsheet formula content"
+                    )
+    except csv.Error as exc:
+        raise FeishuAttachmentError("attachment CSV structure is invalid") from exc
+    if row_count == 0:
+        raise FeishuAttachmentError("attachment canonical CSV has no data rows")
+
+
+def _looks_like_spreadsheet_formula(value: str) -> bool:
+    normalized = value.lstrip()
+    if not normalized:
+        return False
+    if normalized[0] in {"=", "+", "@"}:
+        return True
+    if not normalized.startswith("-"):
+        return False
+    try:
+        float(normalized)
+    except ValueError:
+        return True
+    return False
 
 
 __all__ = [

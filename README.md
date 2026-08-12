@@ -9,21 +9,22 @@
 
 当前仓库已经完成 MATR 三批正式 Advanced 训练与制品验收，并在测试环境贯通
 active route、calibration materialization、RUL/SOH/Conformal、Agent、报告和
-Next.js UI。个人比赛单机部署代码及 ECS/TLS 前置设施已经准备，但公网应用栈尚未
+Next.js UI。仓库还实现了 manifest-bounded BLAST-Lite 温度/倍率/DoD 情景工具、
+1～25 年自然时间参考推演，以及 Fake Feishu 受审计交付链。个人比赛单机部署代码及 ECS/TLS 前置设施已经准备，但公网应用栈尚未
 完成纵向验收。这不等于生产部署，也不构成跨数据集覆盖保证或工业寿命承诺。
 
 ## 当前状态
 
-状态更新时间：2026-08-09。
+状态更新时间：2026-08-12。
 
 | 状态 | 定义 | 当前结论 |
 | --- | --- | --- |
-| **Implemented** | 代码、契约、配置或 migration 已存在 | Advanced 产品链、竞赛 Compose、API、Worker、Next.js、Nginx、ADMIN bootstrap |
-| **Validated** | 有正式实验、测试、哈希或受控 E2E | 80 次 A100 Final、逐样本对账、Conformal、项目纵向 E2E、部署契约 |
+| **Implemented** | 代码、契约、配置或 migration 已存在 | Advanced 产品链、BLAST 情景工具、飞书/Aily 审计链、竞赛 Compose、API、Worker、Next.js、Nginx |
+| **Validated** | 有正式实验、测试、哈希或受控 E2E | 80 次 A100 Final、逐样本对账、Conformal、Naumann/280Ah 参考核验、Fake Feishu scenario E2E、部署契约 |
 | **Published** | 不可变镜像或发布包已进入目标 registry | **是**；`2026.07.28-1` 五个私有 ACR 镜像及 digest 已冻结 |
 | **Deployed** | 已在目标 ECS 启动并通过服务验收 | **否**；ECS、Docker、UFW、ACR、TLS 前置就绪，应用栈尚未启动 |
 | **Demonstrated** | 公网浏览器真实业务路径通过 | **否**；尚待完成 |
-| **Planned** | 仍需实现、实验或外部输入 | HUST、删失感知区间、企业 BMS/EMS、HA 与长期运维 |
+| **Planned** | 仍需实现、实验或外部输入 | 真实场景飞书/Aily E2E、候选路由人工晋级、HUST、删失感知区间、企业 BMS/EMS、HA 与长期运维 |
 
 完整矩阵见[项目状态](docs/status.md)，禁止性表述见
 [已知限制](docs/limitations.md)。本次镜像身份见
@@ -87,6 +88,19 @@ output_sha256=d201224870a28c655f66a810bc94f90ad28133e06f2fb4a7285195274c303d82
 #### 精度、稳定性、训练耗时与显存权衡
 
 ![模型综合权衡](docs/assets/benchmark/advanced-final-20260723/Figure_6_model_tradeoff.png)
+
+### BLAST-Lite 参考情景验证
+
+Naumann 固定上游参数 replay 保存了 1,260 个逐测试点预测；calendar/cycle/combined 的 MAE、RMSE 与分组诊断来自
+[`summary.json`](reports/experiments/blast_naumann_v1/validation-v2/summary.json)。其中 19 条温度、DoD 和倍率 `leave-one-condition` 记录只是在固定上游参数下汇总 held-condition 误差，`parameter_refit=false`，不是本项目重新训练结果，也不是独立训练 holdout。280Ah 方形 LFP 观测范围检查覆盖 6 个电芯、5,450 个观测点，整体 SOH MAE 为 0.0152873、RMSE 为 0.0184655，来源为
+[`summary.json`](reports/experiments/blast_280ah_v1/validation-v1/summary.json)。该结果使用 250Ah 参考模型、不做容量缩放或参数拟合，只能说明观测范围内的尺度参考，不能证明目标产品 15～25 年寿命。
+
+温度、DoD、倍率、自然年/EFC、EOL、支持范围、Naumann parity 与 280Ah 对比图及其 CSV 源数据位于
+[`reports/experiments/blast_scenarios_v1/scenario-v3/`](reports/experiments/blast_scenarios_v1/scenario-v3/)。长期曲线证据等级为 `PHYSICS_REFERENCE`，route 状态保持 `REGISTERED_CANDIDATE`。
+
+`LFP_FIELD_160AH` 当前模型视图是 `no_health_target`，时间语义为
+`LOCAL_TIME_TIMEZONE_UNRESOLVED`。它可用于现场遥测跨度、异常偏离和弱单体检查，但没有
+可据此评估的 SOH/RUL 标签；本阶段没有从该数据集生成 SOH 精度、总体寿命分布或 25 年验证结论。
 
 ## 核心技术路线
 
@@ -218,6 +232,7 @@ python -m pip install -e ".[data,dev,ml,api]"
 
 ```bash
 python -m pip install -e ".[agents,auth,infrastructure,persistence,reporting,training]"
+python -m pip install -e ".[scenarios]"
 python -m pip install -e ".[mcp]"
 ```
 
@@ -246,17 +261,33 @@ docker compose -f deploy/compose.yaml up --build
 `JsonlAuditLedger`；正式竞赛运行使用 PostgreSQL、Redis 和 strict competition
 composition root。
 
-### 飞书/Aily 第一阶段
+### 飞书/Aily 受审计情景链
 
 第一阶段已经把飞书回调、出站客户端、CSV 附件策略、固定工具工作流、受审计卡片、
 多维表格摘要、报告交付和 Aily Bearer façade 接到现有 `ToolRegistry`、`ToolResult`、
 审计账本和模型激活门。完整架构、环境变量、飞书权限、Bitable 字段与 Aily 配置见
 [飞书/Aily 模型工具联动指南](docs/integrations/feishu-aily-model-tools.md)。
 
+正式 competition composition root 已可选择性装配这条链：API 入口仍为
+`deploy.competition_api:app`，Worker 仍复用 `agent-runs` 队列，数据库迁移 head 为
+`0021`。基础 `deploy/competition.compose.yaml` 不装配飞书/Aily；只有显式合并
+`deploy/competition.feishu-aily.override.yaml` 才会启用，并让 API、Worker 和 migrate
+使用同一组 secret-file settings。候选情景执行与候选结果展示分别由两个独立开关
+控制，不能以“能计算”替代“获准展示”。
+
+稳定情景工具为 `compare_operation_scenarios` 与 `project_storage_lifetime`。Aily 先以已验证 batch 和完整 `OperationScenario` 创建 `scenario_context_id`，再提交只含该引用的分析任务。BLAST route 与结果展示均默认 fail-closed；当前 `REGISTERED_CANDIDATE` 只允许经服务器端显式授权的参考情景，不会自动成为生产 active route。
+
 安全边界保持不变：第一阶段上传只接受 canonical CSV；所有展示的业务数值必须来自有效
 `ToolResult`，并保留 `run_id`、`result_id`、JSON 路径和版本信息；LLM/Aily 不得生成、
 补全或改写 SOH、RUL、EOL、区间及其他业务数值。`CONDITIONAL` 或
 `NOT_ACTIVATED` 模型路由继续拒绝，循环寿命不得自动换算为工业自然年寿命。
+
+生产 Worker 不从飞书文件名或消息正文猜测电芯元数据。先复制
+`deploy/feishu-csv-registrations.example.json` 为受管的
+`feishu-csv-registrations.json`，再为每个获准 canonical CSV 登记实际
+`payload_sha256`。同一 SHA-256 必须同时写入 `metadata.source_sha256`，并出现在
+`source_kind=OBSERVED` 的 provenance 中；三者不一致、空注册表或未知附件哈希都会
+fail closed。详细字段与部署位置见飞书/Aily 指南和部署安全文档。
 
 Windows PowerShell 配置检查：
 
@@ -273,7 +304,7 @@ Windows PowerShell 配置检查：
 启动本地加密 callback runner：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_feishu_callback.py --host 127.0.0.1 --port 8787
+.\.venv\Scripts\python.exe scripts\run_feishu_callback.py --host 127.0.0.1 --port 8787 --default-file-task predict_cycle_life
 ```
 
 另开一个 PowerShell 检查：
@@ -282,11 +313,13 @@ Windows PowerShell 配置检查：
 Invoke-RestMethod http://127.0.0.1:8787/health
 ```
 
-这个 runner 只做验签、解密、verification token、防重、receipt claim、sanitized event
-路由和快速 ACK；它不下载附件、不运行模型、也不自动回复。进程内队列、本地 SQLite 和
+这个 runner 做验签、解密、verification token、防重、receipt claim，并在快速 ACK 前把 sanitized durable job 写入本地 SQLite；进程内队列只接收 job UUID。它不下载附件、不运行 worker、也不自动回复。进程内队列、本地 SQLite 和
 Cloudflare Quick Tunnel 只适合受控联调，不是完整生产 callback worker 或生产部署。
-真实 Aily 连接器仍需目标租户凭证与受保护网关验证；PBT/MAGNet 仍需训练完成、制品核验
-和人工晋级后才能作为内部候选路由。
+Fake Feishu scenario E2E 已覆盖真实 BLAST 计算、ToolResult、PNG、卡片、报告与
+scalar-only Bitable；Fake Aily scenario E2E 已覆盖生产 assembly、Aily HTTP、共享 SQL
+账本/Worker、run-bound ToolResult、受审计报告和 scalar-only Bitable，且不会发送飞书
+聊天或上传文件。本轮断网环境未重新执行真实场景飞书/Aily链；目标租户凭证、交互卡片、
+受保护网关和真实 Bitable 字段仍需人工复验。PBT/MAGNet activation 状态没有改变。
 
 ### Next.js 与 Streamlit
 

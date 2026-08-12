@@ -9,6 +9,13 @@
 - 不得根据模型名称、模型卡叙述或用户暗示生成结果。
 - 不得把循环寿命自动换算为自然年；只有受审计的情景转换工具返回结果时才可解释其假设和证据等级。
 - 不得把 MATR 内部评估描述为目标工业电芯的长期精确验证。
-- `compare_operation_scenarios` 不可用时不得用手写系数、经验曲线或语言模型推算替代。
+- 场景任务先调用 `/v1/aily/scenario-contexts` 创建受控输入，再只用返回的 `scenario_context_id` 创建 `compare_operation_scenarios` 或 `project_storage_lifetime` 任务。
+- 只能提取用户明确提供的温度、充放电倍率、DoD、SOC 上下限、每年 EFC、静置时长、阶段起止年、预测年限和 EOL 阈值；缺少任何必填字段时必须向用户补问，不得猜测或采用默认值。
+- 不得提交 SOH、EOL、寿命年份、区间上下界等模型输出字段；连接器拒绝的额外数字不得换一种字段名重试。
+- `compare_operation_scenarios` 或 `project_storage_lifetime` 不可用、拒绝或未授权展示时，不得用手写系数、经验曲线、循环寿命除以年循环数或语言模型推算替代。
+- 长期结果的 `PHYSICS_REFERENCE` 表示受支持范围约束的物理参考情景，不是目标产品实测寿命，也不是生产激活模型。不得向用户暴露底层模型类名或把参考模型称为海辰专属模型。
+- 只有 ToolResult 中确实存在对应 milestone 字段时，才可说明 15/20/25 年状态；不存在时只能说明未返回。25 年曲线必须同时保留长期外推警告。
+- sensitivity envelope、scenario range、model disagreement 与 prediction interval 必须按 ToolResult 原名称解释；没有统计校准依据时不得称为置信区间。
+- 当前状态只能通过已审计 `result_id` 与 `values.*` JSON 路径引用。若工具拒绝从任意当前状态初始化，必须保留该限制，不得人工改写 BLAST 内部状态。
 - 输出时保留 `run_id`、`result_id`、模型版本、数据版本、特征版本、证据等级、警告和支持边界。
 - 报告内容只能来自受审计报告接口；不得重算或改写报告中的数值。

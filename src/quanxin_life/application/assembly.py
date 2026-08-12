@@ -44,6 +44,12 @@ from quanxin_life.tools.battery_evidence import (
     VerifiedKnowledgeScopeResolver,
     register_retrieve_battery_evidence_tool,
 )
+from quanxin_life.tools.blast_scenarios import (
+    RejectingScenarioContextResolver,
+    ScenarioContextResolver,
+    register_compare_operation_scenarios_tool,
+    register_project_storage_lifetime_tool,
+)
 from quanxin_life.tools.conformal_calibration import (
     VerifiedNormalizedCalibrationCohortResolver,
     VerifiedPredictionDifficultyScaleResolver,
@@ -136,6 +142,8 @@ class CompetitionToolDependencies:
     knowledge_scope_resolver: VerifiedKnowledgeScopeResolver
     battery_evidence_backend: HybridBatteryEvidenceBackend
     model_artifact_registry: ModelArtifactRegistry | None = None
+    scenario_context_resolver: ScenarioContextResolver | None = None
+    allow_candidate_scenario_execution: bool = False
 
     def __post_init__(self) -> None:
         required = (
@@ -154,6 +162,8 @@ class CompetitionToolDependencies:
         )
         if any(dependency is None for dependency in required):
             raise TypeError("Required competition tool dependencies must not be None")
+        if not isinstance(self.allow_candidate_scenario_execution, bool):
+            raise TypeError("allow_candidate_scenario_execution must be a bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +323,20 @@ def create_competition_tool_registry(
         predictor=dependencies.cycle_life_predictor,
         audit_ledger=dependencies.audit_ledger,
         model_artifact_registry=dependencies.model_artifact_registry,
+    )
+    scenario_context_resolver = (
+        dependencies.scenario_context_resolver
+        or RejectingScenarioContextResolver()
+    )
+    register_compare_operation_scenarios_tool(
+        registry,
+        context_resolver=scenario_context_resolver,
+        allow_candidate_execution=dependencies.allow_candidate_scenario_execution,
+    )
+    register_project_storage_lifetime_tool(
+        registry,
+        context_resolver=scenario_context_resolver,
+        allow_candidate_execution=dependencies.allow_candidate_scenario_execution,
     )
     register_scenario_lifetime_tool(
         registry,

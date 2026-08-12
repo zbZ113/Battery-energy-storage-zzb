@@ -140,6 +140,26 @@ def test_upsert_creates_then_updates_one_run_record_with_utc_fields() -> None:
     assert stored["updated_at_utc"] == "2026-08-07T08:30:00+00:00"
 
 
+def test_upsert_accepts_only_scalar_scenario_references() -> None:
+    client = _FakeBitableClient()
+
+    _writer(client).upsert(
+        _fields(
+            task_type="project_storage_lifetime",
+            scenario_context_id="3a3c972b-a23e-42c3-af76-e39038806f13",
+            scenario_id="baseline",
+            scenario_version="baseline-v1",
+        )
+    )
+
+    stored = client.records["run-safe"]["fields"]
+    assert isinstance(stored, dict)
+    assert stored["scenario_context_id"] == "3a3c972b-a23e-42c3-af76-e39038806f13"
+    assert stored["scenario_id"] == "baseline"
+    assert stored["scenario_version"] == "baseline-v1"
+    assert all(not isinstance(value, list | dict) for value in stored.values())
+
+
 def test_upsert_rejects_duplicate_remote_run_records_without_writing() -> None:
     class DuplicateClient(_FakeBitableClient):
         def search_bitable_records(self, **kwargs: str) -> dict[str, object]:

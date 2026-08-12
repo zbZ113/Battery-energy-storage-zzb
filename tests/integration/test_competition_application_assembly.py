@@ -61,7 +61,7 @@ def test_competition_registry_discovers_every_standard_tool_once() -> None:
     schemas = registry.list_schemas()
     names = tuple(schema.tool_name for schema in schemas)
 
-    assert len(schemas) == len(StandardToolName) == 15
+    assert len(schemas) == len(StandardToolName) == 17
     assert len(set(names)) == len(names)
     assert set(names) == set(StandardToolName)
     assert all(schema.input_schema for schema in schemas)

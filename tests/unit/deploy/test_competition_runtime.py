@@ -1,17 +1,28 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import UTC, datetime
+from hashlib import sha256
 
+import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 import deploy.competition_runtime as competition_runtime_module
 from deploy.competition_runtime import create_competition_runtime
-from deploy.runtime_settings import CompetitionRuntimeSettings
+from deploy.runtime_settings import (
+    CompetitionRuntimeSettings,
+    FeishuAilyRuntimeSettings,
+)
+from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
+from quanxin_life.core import CellMetadata, ProvenanceRecord, SourceKind
+from quanxin_life.features import EarlyCycleFeatureConfig
 from quanxin_life.infrastructure.calibration_queue import (
     ADVANCED_CALIBRATION_TASK,
 )
 from quanxin_life.infrastructure.celery_queue import AGENT_RUN_TASK
+from quanxin_life.infrastructure.feishu_queue import FEISHU_ANALYSIS_TASK
 from quanxin_life.infrastructure.report_queue import PROJECT_REPORT_TASK
 
 
@@ -74,6 +85,70 @@ def _settings(tmp_path, *, trusted_origin: str) -> CompetitionRuntimeSettings:
     )
 
 
+def _enabled_settings(tmp_path) -> CompetitionRuntimeSettings:
+    settings = _settings(
+        tmp_path,
+        trusted_origin="https://runtime.example.test",
+    )
+    payload = b"operator-registered-canonical-csv"
+    payload_sha256 = sha256(payload).hexdigest()
+    registration = CanonicalCsvBatchRegistration(
+        metadata=CellMetadata(
+            dataset_id="UPLOAD",
+            cell_id="registered-cell",
+            chemistry="LFP/graphite",
+            nominal_capacity_ah=250.0,
+            source_uri="feishu://canonical/registered-cell.csv",
+            source_sha256=payload_sha256,
+            schema_version="cycle-record-v1",
+        ),
+        feature_config=EarlyCycleFeatureConfig(cutoff_cycle=20),
+        data_version="feishu-upload-v1",
+        split_version="operator-registration-v1",
+        provenance=(
+            ProvenanceRecord(
+                source_id="registered-feishu-upload",
+                source_kind=SourceKind.OBSERVED,
+                uri="feishu://canonical/registered-cell.csv",
+                sha256=payload_sha256,
+                description="Operator-approved canonical CSV registration.",
+                created_at=datetime(2026, 8, 12, tzinfo=UTC),
+            ),
+        ),
+    )
+    csv_registrations = tmp_path / "config" / "feishu-csv-registrations.json"
+    csv_registrations.write_text(
+        json.dumps(
+            {
+                "schema_version": "feishu-canonical-csv-registration-registry-v1",
+                "registrations": [
+                    {
+                        "payload_sha256": payload_sha256,
+                        "registration": registration.model_dump(mode="json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return replace(
+        settings,
+        feishu_aily=FeishuAilyRuntimeSettings(
+            app_id="cli_test_app",
+            app_secret=SecretStr("app-secret"),
+            verification_token=SecretStr("verification-token"),
+            encrypt_key=SecretStr("0123456789abcdef"),
+            aily_connector_api_key=SecretStr("aily-key"),
+            bitable_app_token="app-token",
+            bitable_table_id="table-id",
+            external_https_base_url="https://integration.example.test",
+            csv_registrations_file=csv_registrations,
+            allow_candidate_scenario_execution=True,
+            allow_candidate_scenario_results=True,
+        ),
+    )
+
+
 def test_competition_runtime_assembles_http_and_both_identity_only_workers(
     tmp_path,
 ) -> None:
@@ -102,11 +177,47 @@ def test_competition_runtime_assembles_http_and_both_identity_only_workers(
     assert AGENT_RUN_TASK in runtime.celery_app.tasks
     assert ADVANCED_CALIBRATION_TASK in runtime.celery_app.tasks
     assert PROJECT_REPORT_TASK in runtime.celery_app.tasks
+    assert FEISHU_ANALYSIS_TASK not in runtime.celery_app.tasks
+    assert "/v1/integrations/feishu/events" not in route_paths
+    assert "/v1/aily/scenario-contexts" not in route_paths
+    assert runtime.feishu_worker is None
     assert (
         "/v1/projects/{project_id}/agent/runs/{run_id}/reports/"
         "{report_result_id}/exports"
     ) in route_paths
     assert runtime.report_worker is not None
+
+
+def test_competition_runtime_opt_in_mounts_feishu_aily_and_shared_worker(
+    tmp_path,
+) -> None:
+    runtime = create_competition_runtime(_enabled_settings(tmp_path))
+
+    route_paths = set(runtime.http_app.openapi()["paths"])
+
+    assert "/v1/integrations/feishu/events" in route_paths
+    assert "/v1/aily/scenario-contexts" in route_paths
+    assert "/v1/aily/analysis-tasks" in route_paths
+    assert FEISHU_ANALYSIS_TASK in runtime.celery_app.tasks
+    assert runtime.feishu_worker is not None
+
+    resolver = runtime.feishu_worker._registration_resolver
+    registered = resolver(
+        object(),
+        type(
+            "Attachment",
+            (),
+            {"sha256": sha256(b"operator-registered-canonical-csv").hexdigest()},
+        )(),
+        datetime(2026, 8, 12, tzinfo=UTC),
+    )
+    assert registered.metadata.cell_id == "registered-cell"
+    with pytest.raises(ValueError, match="not registered"):
+        resolver(
+            object(),
+            type("Attachment", (), {"sha256": "f" * 64})(),
+            datetime(2026, 8, 12, tzinfo=UTC),
+        )
 
 
 def test_competition_runtime_defaults_to_production_cookie_and_requires_local_opt_in(
