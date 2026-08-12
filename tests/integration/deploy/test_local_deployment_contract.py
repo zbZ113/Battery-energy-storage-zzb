@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml  # type: ignore[import-untyped]
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -83,6 +85,15 @@ def test_local_compose_exposes_only_the_loopback_gateway() -> None:
     assert "condition: service_completed_successfully" in compose
     assert "deploy.local_migrate" in compose
     assert "agent-runs,advanced-calibration,report-exports" in compose
+
+
+def test_local_worker_has_outbound_network_without_published_ports() -> None:
+    compose = yaml.safe_load(_read("deploy/local.compose.yaml"))
+    worker = compose["services"]["worker"]
+
+    assert set(worker["networks"]) == {"backend", "edge"}
+    assert "ports" not in worker
+    assert compose["networks"]["backend"]["internal"] is True
 
 
 def test_local_compose_keeps_runtime_inputs_and_secrets_outside_the_repo() -> None:

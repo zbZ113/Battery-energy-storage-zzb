@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml  # type: ignore[import-untyped]
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -70,6 +72,15 @@ def test_runtime_services_use_secret_files_and_fail_closed_dependencies() -> Non
     assert "deploy.competition_api:app" in compose
     assert "deploy.competition_worker:app" in compose
     assert "agent-runs,advanced-calibration,report-exports" in compose
+
+
+def test_competition_worker_has_outbound_network_without_published_ports() -> None:
+    compose = yaml.safe_load(_read("deploy/competition.compose.yaml"))
+    worker = compose["services"]["worker"]
+
+    assert set(worker["networks"]) == {"backend", "edge"}
+    assert "ports" not in worker
+    assert compose["networks"]["backend"]["internal"] is True
 
 
 def test_feishu_aily_override_is_the_only_source_of_optional_secrets() -> None:

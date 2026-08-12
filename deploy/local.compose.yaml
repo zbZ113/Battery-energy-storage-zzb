@@ -179,6 +179,7 @@ services:
     volumes: *backend-volumes
     networks:
       - backend
+      - edge
     depends_on:
       migrate:
         condition: service_completed_successfully
