@@ -41,6 +41,8 @@ class VerifiedFeishuAttachment:
     payload: bytes = field(repr=False)
     sha256: str
     size_bytes: int
+    source_sha256: str | None = None
+    mapping_evidence: dict[str, object] | None = field(default=None, repr=False)
 
 
 class FeishuAttachmentPolicy:
@@ -73,6 +75,30 @@ class FeishuAttachmentPolicy:
         payload: bytes,
         expected_sha256: str | None = None,
     ) -> VerifiedFeishuAttachment:
+        verified = self.verify_csv_envelope(
+            filename=filename,
+            content_type=content_type,
+            payload=payload,
+            expected_sha256=expected_sha256,
+        )
+        text = verified.payload.decode("utf-8-sig")
+        _verify_canonical_csv_shape(
+            text,
+            max_rows=self._max_rows,
+            max_cell_chars=self._max_cell_chars,
+        )
+        return verified
+
+    def verify_csv_envelope(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        payload: bytes,
+        expected_sha256: str | None = None,
+    ) -> VerifiedFeishuAttachment:
+        """Verify a safe UTF-8 CSV carrier before reviewed field mapping."""
+
         checked_filename = _csv_filename(filename)
         checked_content_type = _csv_content_type(content_type)
         if not isinstance(payload, bytes):
@@ -87,7 +113,7 @@ class FeishuAttachmentPolicy:
             text = payload.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
             raise FeishuAttachmentError("attachment must be UTF-8 canonical CSV") from exc
-        _verify_canonical_csv_shape(
+        _verify_csv_envelope_shape(
             text,
             max_rows=self._max_rows,
             max_cell_chars=self._max_cell_chars,
@@ -169,6 +195,44 @@ def _verify_canonical_csv_shape(
         raise FeishuAttachmentError("attachment CSV structure is invalid") from exc
     if row_count == 0:
         raise FeishuAttachmentError("attachment canonical CSV has no data rows")
+
+
+def _verify_csv_envelope_shape(
+    text: str,
+    *,
+    max_rows: int,
+    max_cell_chars: int,
+) -> None:
+    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    try:
+        header = next(reader)
+    except (StopIteration, csv.Error) as exc:
+        raise FeishuAttachmentError("attachment has no CSV header") from exc
+    if not header or any(not value.strip() or value != value.strip() for value in header):
+        raise FeishuAttachmentError("attachment CSV header is invalid")
+    if len(header) != len(set(header)):
+        raise FeishuAttachmentError("attachment CSV header contains duplicate columns")
+    if any(len(value) > max_cell_chars for value in header):
+        raise FeishuAttachmentError("attachment exceeds the CSV cell length limit")
+    row_count = 0
+    try:
+        for row_count, row in enumerate(reader, start=1):
+            if row_count > max_rows:
+                raise FeishuAttachmentError("attachment exceeds the CSV row limit")
+            if len(row) != len(header):
+                raise FeishuAttachmentError(
+                    "attachment CSV row does not match the header column count"
+                )
+            if any(len(cell) > max_cell_chars for cell in row):
+                raise FeishuAttachmentError("attachment exceeds the CSV cell length limit")
+            if any(_looks_like_spreadsheet_formula(cell) for cell in row):
+                raise FeishuAttachmentError(
+                    "attachment contains spreadsheet formula content"
+                )
+    except csv.Error as exc:
+        raise FeishuAttachmentError("attachment CSV structure is invalid") from exc
+    if row_count == 0:
+        raise FeishuAttachmentError("attachment CSV has no data rows")
 
 
 def _looks_like_spreadsheet_formula(value: str) -> bool:

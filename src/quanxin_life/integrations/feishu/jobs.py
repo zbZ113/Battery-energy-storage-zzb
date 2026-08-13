@@ -11,10 +11,17 @@ from threading import Event, Thread
 from typing import Protocol
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from quanxin_life.api.feishu import FeishuEventRouteStatus
+from quanxin_life.application.battery_csv_mapping import (
+    BatteryCsvMappingError,
+    BatteryCsvMappingRejectionEvidence,
+    BatteryCsvMappingResult,
+    BatteryCsvMappingSuccessEvidence,
+)
 from quanxin_life.application.ingestion import (
     CanonicalCsvBatchRegistration,
     VerifiedEarlyCycleBatchStore,
@@ -148,6 +155,9 @@ class FeishuAnalysisJobRecord:
     record_batch_id: str | None
     cell_reference: str | None
     input_file_sha256: str | None
+    csv_mapping_status: str | None
+    csv_mapping_evidence: dict[str, object] | None
+    csv_mapping_evidence_sha256: str | None
     validation_result_id: str | None
     analysis_result_id: str | None
     report_result_id: str | None
@@ -220,6 +230,10 @@ class FeishuProjectModelExecutorPort(Protocol):
         job: FeishuAnalysisJobRecord,
         registration: CanonicalCsvBatchRegistration,
     ) -> FeishuProjectModelExecution: ...
+
+
+class BatteryCsvNormalizerPort(Protocol):
+    def normalize(self, payload: bytes) -> BatteryCsvMappingResult: ...
 
 
 class FeishuScenarioInputResolver(Protocol):
@@ -734,16 +748,70 @@ class SqlAlchemyFeishuJobStore:
         record_batch_id: str,
         cell_reference: str,
         input_file_sha256: str,
+        csv_mapping_evidence: Mapping[str, object] | None = None,
+        csv_mapping_evidence_sha256: str | None = None,
         updated_at: datetime,
     ) -> None:
+        values: dict[str, object] = {
+            "record_batch_id": record_batch_id,
+            "cell_reference": cell_reference,
+            "input_file_sha256": input_file_sha256,
+        }
+        if csv_mapping_evidence is not None or csv_mapping_evidence_sha256 is not None:
+            if csv_mapping_evidence is None or csv_mapping_evidence_sha256 is None:
+                raise ValueError("CSV mapping batch evidence is incomplete")
+            detached = BatteryCsvMappingSuccessEvidence.model_validate(
+                csv_mapping_evidence
+            ).model_dump(mode="json")
+            if sha256_canonical(detached) != csv_mapping_evidence_sha256:
+                raise ValueError("CSV mapping evidence SHA-256 does not match")
+            values.update(
+                {
+                    "csv_mapping_status": "MAPPED",
+                    "csv_mapping_evidence_json": detached,
+                    "csv_mapping_evidence_sha256": csv_mapping_evidence_sha256,
+                }
+            )
+        self._mutate_owned(
+            job_id=job_id,
+            claim_token=claim_token,
+            updated_at=updated_at,
+            values=values,
+        )
+
+    def checkpoint_csv_mapping(
+        self,
+        *,
+        job_id: str,
+        claim_token: str,
+        status: str,
+        evidence: Mapping[str, object],
+        evidence_sha256: str,
+        updated_at: datetime,
+    ) -> None:
+        if status not in {"MAPPED", "REJECTED"}:
+            raise ValueError("CSV mapping status is invalid")
+        try:
+            if status == "MAPPED":
+                detached = BatteryCsvMappingSuccessEvidence.model_validate(
+                    evidence
+                ).model_dump(mode="json")
+            else:
+                detached = BatteryCsvMappingRejectionEvidence.model_validate(
+                    evidence
+                ).model_dump(mode="json")
+        except (TypeError, ValueError, ValidationError) as exc:
+            raise ValueError("CSV mapping evidence contract is invalid") from exc
+        if sha256_canonical(detached) != evidence_sha256:
+            raise ValueError("CSV mapping evidence SHA-256 does not match")
         self._mutate_owned(
             job_id=job_id,
             claim_token=claim_token,
             updated_at=updated_at,
             values={
-                "record_batch_id": record_batch_id,
-                "cell_reference": cell_reference,
-                "input_file_sha256": input_file_sha256,
+                "csv_mapping_status": status,
+                "csv_mapping_evidence_json": detached,
+                "csv_mapping_evidence_sha256": evidence_sha256,
             },
         )
 
@@ -937,6 +1005,33 @@ class SqlAlchemyFeishuJobStore:
         assert row.event_time is not None
         assert row.job_created_at is not None
         assert row.job_updated_at is not None
+        mapping_fields = (
+            row.csv_mapping_status,
+            row.csv_mapping_evidence_json,
+            row.csv_mapping_evidence_sha256,
+        )
+        if any(item is not None for item in mapping_fields) and any(
+            item is None for item in mapping_fields
+        ):
+            raise ValueError("Feishu CSV mapping evidence is incomplete")
+        mapping_evidence = (
+            dict(row.csv_mapping_evidence_json)
+            if row.csv_mapping_evidence_json is not None
+            else None
+        )
+        if mapping_evidence is not None:
+            if row.csv_mapping_status not in {"MAPPED", "REJECTED"}:
+                raise ValueError("Feishu CSV mapping status is invalid")
+            evidence_model = (
+                BatteryCsvMappingSuccessEvidence
+                if row.csv_mapping_status == "MAPPED"
+                else BatteryCsvMappingRejectionEvidence
+            )
+            mapping_evidence = evidence_model.model_validate(
+                mapping_evidence
+            ).model_dump(mode="json")
+            if sha256_canonical(mapping_evidence) != row.csv_mapping_evidence_sha256:
+                raise ValueError("Feishu CSV mapping evidence SHA-256 does not match")
         return FeishuAnalysisJobRecord(
             job_id=row.job_id,
             run_id=row.run_id,
@@ -955,6 +1050,9 @@ class SqlAlchemyFeishuJobStore:
             record_batch_id=row.record_batch_id,
             cell_reference=row.cell_reference,
             input_file_sha256=row.input_file_sha256,
+            csv_mapping_status=row.csv_mapping_status,
+            csv_mapping_evidence=mapping_evidence,
+            csv_mapping_evidence_sha256=row.csv_mapping_evidence_sha256,
             validation_result_id=row.validation_result_id,
             analysis_result_id=row.analysis_result_id,
             report_result_id=row.report_result_id,
@@ -1436,6 +1534,7 @@ class FeishuAnalysisJobWorker:
         *,
         client: FeishuResourceClient,
         attachment_policy: FeishuAttachmentPolicy,
+        csv_normalizer: BatteryCsvNormalizerPort | None = None,
         batch_store: VerifiedEarlyCycleBatchStore,
         registration_resolver: Callable[
             [FeishuAnalysisJobRecord, VerifiedFeishuAttachment, datetime],
@@ -1464,6 +1563,7 @@ class FeishuAnalysisJobWorker:
         self._store = store
         self._client = client
         self._attachment_policy = attachment_policy
+        self._csv_normalizer = csv_normalizer
         self._batch_store = batch_store
         self._registration_resolver = registration_resolver
         self._analysis_input_factory = analysis_input_factory
@@ -1558,6 +1658,59 @@ class FeishuAnalysisJobWorker:
             )
             job = self._store.get(job_id)
         else:
+            if job.record_batch_id is not None:
+                self._store.update_stage(
+                    job_id=job_id,
+                    claim_token=claim_token,
+                    stage=FeishuAnalysisJobStage.VALIDATING_DATA,
+                    updated_at=self._now(),
+                )
+                try:
+                    batch = self._batch_store.resolve_verified_early_cycle_batch(
+                        job.record_batch_id
+                    )
+                    registration = CanonicalCsvBatchRegistration(
+                        metadata=batch.metadata,
+                        feature_config=batch.feature_config,
+                        data_version=batch.data_version,
+                        split_version=batch.split_version,
+                        provenance=batch.provenance,
+                    )
+                    validation_input = dict(self._analysis_input_factory(job, batch))
+                except (KeyError, TypeError, ValueError):
+                    return self._reject(
+                        job,
+                        claim_token,
+                        "REGISTERED_DATA_UNAVAILABLE",
+                        None,
+                    )
+                requested_analysis_input = validation_input
+                job = self._store.get(job_id)
+            else:
+                return self._execute_downloaded_file(
+                    job=job,
+                    claim_token=claim_token,
+                )
+
+        return self._execute_validated_job(
+            job=job,
+            claim_token=claim_token,
+            registration=registration,
+            validation_input=validation_input,
+            requested_analysis_input=requested_analysis_input,
+        )
+
+    def _execute_downloaded_file(
+        self,
+        *,
+        job: FeishuAnalysisJobRecord,
+        claim_token: str,
+    ) -> FeishuAnalysisJobStatus:
+        job_id = job.job_id
+        registration: CanonicalCsvBatchRegistration | None = None
+        mapping_evidence: dict[str, object] | None = None
+        mapping_evidence_sha256: str | None = None
+        try:
             if job.message_id is None or job.file_key is None or job.file_name is None:
                 return self._reject(job, claim_token, "UNSUPPORTED_INPUT", None)
             self._store.update_stage(
@@ -1598,11 +1751,93 @@ class FeishuAnalysisJobWorker:
             try:
                 content_type = _response_content_type(response)
                 _verify_content_length(response)
-                attachment = self._attachment_policy.verify(
-                    filename=job.file_name,
-                    content_type=content_type,
-                    payload=response.body,
-                )
+                if self._csv_normalizer is None:
+                    attachment = self._attachment_policy.verify(
+                        filename=job.file_name,
+                        content_type=content_type,
+                        payload=response.body,
+                    )
+                else:
+                    source_attachment = self._attachment_policy.verify_csv_envelope(
+                        filename=job.file_name,
+                        content_type=content_type,
+                        payload=response.body,
+                    )
+                    try:
+                        mapped = self._csv_normalizer.normalize(source_attachment.payload)
+                    except BatteryCsvMappingError as exc:
+                        evidence = BatteryCsvMappingRejectionEvidence(
+                            raw_sha256=source_attachment.sha256,
+                            reason_code=exc.reason_code,
+                            **exc.details.model_dump(mode="python"),
+                        ).model_dump(mode="json")
+                        self._store.checkpoint_csv_mapping(
+                            job_id=job_id,
+                            claim_token=claim_token,
+                            status="REJECTED",
+                            evidence=evidence,
+                            evidence_sha256=sha256_canonical(evidence),
+                            updated_at=self._now(),
+                        )
+                        return self._reject(
+                            job,
+                            claim_token,
+                            "CSV_MAPPING_REJECTED",
+                            None,
+                        )
+                    except (TypeError, ValueError):
+                        evidence = BatteryCsvMappingRejectionEvidence(
+                            raw_sha256=source_attachment.sha256,
+                            reason_code="INVALID_MAPPING_INPUT",
+                        ).model_dump(mode="json")
+                        self._store.checkpoint_csv_mapping(
+                            job_id=job_id,
+                            claim_token=claim_token,
+                            status="REJECTED",
+                            evidence=evidence,
+                            evidence_sha256=sha256_canonical(evidence),
+                            updated_at=self._now(),
+                        )
+                        return self._reject(
+                            job,
+                            claim_token,
+                            "CSV_MAPPING_REJECTED",
+                            None,
+                        )
+                    canonical_attachment = self._attachment_policy.verify(
+                        filename=job.file_name,
+                        content_type=content_type,
+                        payload=mapped.canonical_payload,
+                        expected_sha256=mapped.canonical_sha256,
+                    )
+                    mapping_evidence = BatteryCsvMappingSuccessEvidence(
+                        canonical_sha256=mapped.canonical_sha256,
+                        column_evidence=mapped.column_evidence,
+                        profile_id=mapped.profile_id,
+                        profile_sha256=mapped.profile_sha256,
+                        profile_version=mapped.profile_version,
+                        raw_sha256=mapped.raw_sha256,
+                    ).model_dump(mode="json")
+                    mapping_evidence_sha256 = sha256_canonical(mapping_evidence)
+                    attachment = VerifiedFeishuAttachment(
+                        filename=canonical_attachment.filename,
+                        content_type=canonical_attachment.content_type,
+                        payload=canonical_attachment.payload,
+                        sha256=canonical_attachment.sha256,
+                        size_bytes=canonical_attachment.size_bytes,
+                        source_sha256=source_attachment.sha256,
+                        mapping_evidence={
+                            "source_upload_sha256": mapped.raw_sha256,
+                            "canonical_payload_sha256": mapped.canonical_sha256,
+                            "mapping_profile_id": mapped.profile_id,
+                            "mapping_profile_version": mapped.profile_version,
+                            "mapping_profile_sha256": mapped.profile_sha256,
+                            "column_mapping_evidence": [
+                                item.model_dump(mode="json")
+                                for item in mapped.column_evidence
+                            ],
+                        },
+                    )
             except (FeishuAttachmentError, ValueError):
                 return self._reject(job, claim_token, "ATTACHMENT_REJECTED", None)
 
@@ -1637,7 +1872,9 @@ class FeishuAnalysisJobWorker:
                 claim_token=claim_token,
                 record_batch_id=record_batch_id,
                 cell_reference=batch.metadata.cell_id,
-                input_file_sha256=attachment.sha256,
+                input_file_sha256=attachment.source_sha256 or attachment.sha256,
+                csv_mapping_evidence=mapping_evidence,
+                csv_mapping_evidence_sha256=mapping_evidence_sha256,
                 updated_at=self._now(),
             )
             job = self._store.get(job_id)
@@ -1652,7 +1889,26 @@ class FeishuAnalysisJobWorker:
             except (TypeError, ValueError):
                 return self._reject(job, claim_token, "ANALYSIS_INPUT_REJECTED", None)
             requested_analysis_input = validation_input
+        except (FeishuJobOwnershipError, FeishuJobRetryableError):
+            raise
+        return self._execute_validated_job(
+            job=job,
+            claim_token=claim_token,
+            registration=registration,
+            validation_input=validation_input,
+            requested_analysis_input=requested_analysis_input,
+        )
 
+    def _execute_validated_job(
+        self,
+        *,
+        job: FeishuAnalysisJobRecord,
+        claim_token: str,
+        registration: CanonicalCsvBatchRegistration | None,
+        validation_input: Mapping[str, object],
+        requested_analysis_input: Mapping[str, object],
+    ) -> FeishuAnalysisJobStatus:
+        job_id = job.job_id
         if (
             self._project_model_executor is not None
             and registration is not None
@@ -1800,14 +2056,6 @@ class FeishuAnalysisJobWorker:
                 "PROJECT_MODEL_EXECUTION_REJECTED",
                 validation.result_id,
             )
-        self._store.checkpoint_batch(
-            job_id=job.job_id,
-            claim_token=claim_token,
-            record_batch_id=execution.record_batch_id,
-            cell_reference=registration.metadata.cell_id,
-            input_file_sha256=registration.metadata.source_sha256,
-            updated_at=self._now(),
-        )
         self._store.checkpoint_results(
             job_id=job.job_id,
             claim_token=claim_token,

@@ -53,6 +53,9 @@ from quanxin_life.application.assembly import (
     create_advanced_calibration_components,
     create_project_prediction_tool_invocation_service,
 )
+from quanxin_life.application.battery_csv_mapping import (
+    load_battery_csv_mapping_profile,
+)
 from quanxin_life.application.datasets import DatasetService
 from quanxin_life.application.feishu_aily_assembly import (
     FeishuAilyAssemblyConfig,
@@ -305,6 +308,11 @@ def create_competition_runtime(
                 context_service=context_service,
                 project_ledger=ledger,
                 project_tool_service=tool_service,
+            ),
+            csv_mapping_profiles=(
+                load_battery_csv_mapping_profile(
+                    "configs/data_layouts/feishu_battery_csv_v1.json"
+                ),
             ),
         )
         register_feishu_analysis_task(

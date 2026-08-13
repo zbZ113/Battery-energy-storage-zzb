@@ -137,6 +137,46 @@ def test_attachment_rejects_noncanonical_csv_structure_before_registration() -> 
         )
 
 
+def test_safe_noncanonical_csv_envelope_can_reach_reviewed_mapping() -> None:
+    payload = b"Cell,Cycle,Time_ms\nMATR_b3c34,1,1000\n"
+
+    verified = FeishuAttachmentPolicy().verify_csv_envelope(
+        filename="reviewed-layout.csv",
+        content_type="text/csv; charset=utf-8",
+        payload=payload,
+    )
+
+    assert verified.payload == payload
+    assert verified.sha256 == hashlib.sha256(payload).hexdigest()
+    assert verified.filename == "reviewed-layout.csv"
+
+
+def test_csv_envelope_rejects_duplicate_or_empty_headers() -> None:
+    policy = FeishuAttachmentPolicy()
+
+    with pytest.raises(FeishuAttachmentError, match="duplicate"):
+        policy.verify_csv_envelope(
+            filename="duplicate.csv",
+            content_type="text/csv",
+            payload=b"Cell,Cell\na,b\n",
+        )
+    with pytest.raises(FeishuAttachmentError, match="header"):
+        policy.verify_csv_envelope(
+            filename="empty-header.csv",
+            content_type="text/csv",
+            payload=b"Cell,\na,b\n",
+        )
+
+
+def test_csv_envelope_rejects_formula_content_in_any_source_column() -> None:
+    with pytest.raises(FeishuAttachmentError, match="formula"):
+        FeishuAttachmentPolicy().verify_csv_envelope(
+            filename="formula.csv",
+            content_type="text/csv",
+            payload=b"Cell,Comment\nMATR_b3c34,=HYPERLINK(1)\n",
+        )
+
+
 def test_attachment_rejects_row_and_cell_boundaries() -> None:
     header, row = _csv_payload().splitlines()
     payload = b"\n".join((header, row, row)) + b"\n"

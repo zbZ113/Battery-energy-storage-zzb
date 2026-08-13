@@ -8,7 +8,7 @@
 
 BLAST-Lite 数值路由独立于上述深度学习 activation。当前两个参考路由均为 `REGISTERED_CANDIDATE`，证据等级为 `PHYSICS_REFERENCE`；只有显式启用候选情景执行与候选结果展示时，才允许在 manifest 支持范围内生成和展示 ToolResult。它们不是海辰产品模型，也不构成 15～25 年真实寿命验证。
 
-第一阶段附件仅接受当前数据层已审查的 canonical CSV。Parquet、XLSX、ZIP、pickle、joblib、`.pt`、`.pth` 和可执行文件均拒绝。后续格式只能在数据层契约、内容检查和测试完整后启用。
+附件仍只接受 CSV，不接受 Parquet、XLSX、ZIP、pickle、joblib、`.pt`、`.pth` 或可执行文件。CSV 可以已经符合 canonical 契约，也可以精确命中服务器端已审核、已版本化的字段映射 profile；未知字段、缺失必要字段、单位或电流符号不明确、多个 profile 同时命中时全部拒绝。Aily/LLM 不读取或改写数值单元格，也不能猜测映射、单位或缺失元数据。
 
 ## 架构
 
@@ -102,6 +102,10 @@ https://YOUR_REVIEWED_HOST/v1/integrations/feishu/events
 正式 runtime 通过 `QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE` 读取该只读文件，Compose
 override 固定为 `/srv/quanxin/config/feishu-csv-registrations.json`。
 
+非 canonical CSV 先通过通用文件安全边界，再由审核 profile 确定性生成 canonical bytes。durable job 只保存原始上传 SHA-256、canonical SHA-256、profile ID/version/SHA 和逐列转换规则，不保存原始数据行或聊天正文。映射成功只证明格式可解析，不会绕过可信元数据、精确 registration、FROZEN RecordBatch、MATR 支持域或模型 activation gate；未知新电芯仍会在这些边界明确拒绝。
+
+飞书下载或投递遇到断网、限流和临时服务错误时，已经快速 ACK 的 durable job 保留为可重试状态；网络恢复后由 Worker 按租约继续，不在 HTTP callback 内同步下载或循环重试，也不静默丢弃任务。
+
 ## 卡片与审计
 
 状态卡片支持 received、data-check、queued、running、success、rejected/degraded 和 report-ready。状态卡片只含机器引用。
@@ -179,7 +183,7 @@ docs/integrations/aily-system-prompt.md
 正式 API/Worker 使用 `deploy.competition_api:app` 与 `deploy.competition_worker:app`，
 基础 `deploy/competition.compose.yaml` 默认不挂载任何 Feishu/Aily secret。只有显式合并
 `deploy/competition.feishu-aily.override.yaml` 才会统一装配 migrate、API 与 Worker。先执行
-Alembic migration 到唯一 head `0022`，再启动 API 与 Worker。启用时设置以下非秘密身份：
+Alembic migration 到唯一 head `0023`，再启动 API 与 Worker。启用时设置以下非秘密身份：
 
 ```text
 FEISHU_APP_ID

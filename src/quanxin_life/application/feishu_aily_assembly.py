@@ -24,6 +24,10 @@ from quanxin_life.api.aily import (
 )
 from quanxin_life.api.feishu import FeishuHttpAdapter, create_feishu_http_adapter
 from quanxin_life.api.service import ToolInvocationService
+from quanxin_life.application.battery_csv_mapping import (
+    BatteryCsvMappingProfile,
+    ReviewedBatteryCsvNormalizer,
+)
 from quanxin_life.application.feishu_project_models import (
     FeishuProjectModelExecutor,
     FeishuProjectRecordBatchResolver,
@@ -170,9 +174,20 @@ class RegisteredFeishuCsvRegistrationResolver:
         registration = self._registrations.get(attachment.sha256)
         if registration is None:
             raise ValueError("canonical CSV payload SHA-256 is not registered")
-        return CanonicalCsvBatchRegistration.model_validate(
+        resolved = CanonicalCsvBatchRegistration.model_validate(
             registration.model_dump(mode="json")
         )
+        mapping_evidence = getattr(attachment, "mapping_evidence", None)
+        if mapping_evidence is None:
+            return resolved
+        metadata_payload = resolved.metadata.model_dump(mode="json")
+        metadata_payload["ingestion_parameters"] = {
+            **resolved.metadata.ingestion_parameters,
+            **mapping_evidence,
+        }
+        payload = resolved.model_dump(mode="json")
+        payload["metadata"] = metadata_payload
+        return CanonicalCsvBatchRegistration.model_validate(payload)
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +295,7 @@ def create_feishu_aily_components(
         AilyScenarioReferenceUseAuthorizer | None
     ) = None,
     project_model_dependencies: FeishuProjectModelDependencies | None = None,
+    csv_mapping_profiles: tuple[BatteryCsvMappingProfile, ...] = (),
     clock: Clock | None = None,
 ) -> FeishuAilyComponents:
     """Assemble Feishu callbacks, Aily facade, worker, tools, and delivery ports."""
@@ -426,10 +442,16 @@ def create_feishu_aily_components(
         return scenario_report_factory(job, result)
 
     resolved_registration = registration_resolver or _rejecting_registration_resolver
+    csv_normalizer = (
+        ReviewedBatteryCsvNormalizer(csv_mapping_profiles)
+        if csv_mapping_profiles
+        else None
+    )
     worker = FeishuAnalysisJobWorker(
         job_store,
         client=client,
         attachment_policy=FeishuAttachmentPolicy(),
+        csv_normalizer=csv_normalizer,
         batch_store=batch_store,
         registration_resolver=resolved_registration,
         analysis_input_factory=lambda _job, batch: _validation_input(

@@ -1258,6 +1258,19 @@ class FeishuEventReceipt(Base):
             "job_request_sha256 IS NULL OR length(job_request_sha256) = 64",
             name="ck_feishu_event_receipt_job_request_sha256_length",
         ),
+        CheckConstraint(
+            "csv_mapping_status IS NULL OR "
+            "csv_mapping_status IN ('MAPPED', 'REJECTED')",
+            name="ck_feishu_event_receipt_csv_mapping_status",
+        ),
+        CheckConstraint(
+            "(csv_mapping_status IS NULL AND csv_mapping_evidence_json IS NULL AND "
+            "csv_mapping_evidence_sha256 IS NULL) OR "
+            "(csv_mapping_status IS NOT NULL AND csv_mapping_evidence_json IS NOT NULL "
+            "AND csv_mapping_evidence_sha256 IS NOT NULL "
+            "AND length(csv_mapping_evidence_sha256) = 64)",
+            name="ck_feishu_event_receipt_csv_mapping_evidence_contract",
+        ),
         Index("ix_feishu_receipts_received_at", "received_at"),
         Index("ix_feishu_receipts_job_status_updated", "job_status", "job_updated_at"),
         Index("ix_feishu_receipts_scenario_context_id", "scenario_context_id"),
@@ -1303,6 +1316,9 @@ class FeishuEventReceipt(Base):
     record_batch_id: Mapped[str | None] = mapped_column(String(100))
     cell_reference: Mapped[str | None] = mapped_column(String(200))
     input_file_sha256: Mapped[str | None] = mapped_column(String(64))
+    csv_mapping_status: Mapped[str | None] = mapped_column(String(32))
+    csv_mapping_evidence_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    csv_mapping_evidence_sha256: Mapped[str | None] = mapped_column(String(64))
     validation_result_id: Mapped[str | None] = mapped_column(String(64))
     analysis_result_id: Mapped[str | None] = mapped_column(String(64))
     report_result_id: Mapped[str | None] = mapped_column(String(64))

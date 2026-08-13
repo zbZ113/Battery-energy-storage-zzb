@@ -10,14 +10,28 @@ from sqlalchemy import create_engine
 
 from quanxin_life.api.feishu import FeishuEventRouteStatus
 from quanxin_life.api.service import ToolInvocationService
+from quanxin_life.application.battery_csv_mapping import (
+    ReviewedBatteryCsvNormalizer,
+    load_battery_csv_mapping_profile,
+)
 from quanxin_life.application.ingestion import (
+    CANONICAL_CYCLE_CSV_FIELDS,
     CanonicalCsvBatchRegistration,
     InMemoryVerifiedEarlyCycleBatchStore,
 )
 from quanxin_life.audit import AuditLedger
-from quanxin_life.core import CellMetadata, ProvenanceRecord, SourceKind, ToolResult
+from quanxin_life.core import (
+    CellMetadata,
+    ProvenanceRecord,
+    SourceKind,
+    ToolResult,
+    sha256_canonical,
+)
 from quanxin_life.features import EarlyCycleFeatureConfig
-from quanxin_life.integrations.feishu.attachments import FeishuAttachmentPolicy
+from quanxin_life.integrations.feishu.attachments import (
+    FeishuAttachmentPolicy,
+    VerifiedFeishuAttachment,
+)
 from quanxin_life.integrations.feishu.client import (
     FeishuApiError,
     FeishuErrorKind,
@@ -65,6 +79,12 @@ ROW_1 = b"feishu-data,cell-1,1,0,0.0,3.6,1.0,25.0,1.2,1.1,0.02,true,true\n"
 ROW_20 = b"feishu-data,cell-1,20,0,0.0,3.5,1.0,25.0,1.1,1.0,0.03,true,true\n"
 VALID_CSV = HEADER + ROW_1 + ROW_20
 DUPLICATE_CSV = HEADER + ROW_1 + ROW_1 + ROW_20
+REVIEWED_CSV = (
+    b"Dataset,Cell,Cycle,Sample,Time_ms,Voltage_mV,Current_mA,Temperature_C,"
+    b"Charge_mAh,Discharge_mAh,Resistance_mOhm,IsDiagnostic,IsValid\n"
+    b"feishu-data,cell-1,1,0,0,3600,1000,25,1200,1100,20,true,true\n"
+    b"feishu-data,cell-1,20,0,0,3500,1000,25,1100,1000,30,true,true\n"
+)
 
 
 class _Queue:
@@ -163,16 +183,22 @@ class _ProjectModelExecutor:
         ledger: AuditLedger,
         *,
         rejection_code: str | None = None,
+        registrations: list[CanonicalCsvBatchRegistration] | None = None,
+        crash_before_return: bool = False,
     ) -> None:
         self._ledger = ledger
         self._rejection_code = rejection_code
         self.calls: list[tuple[str, int]] = []
+        self._registrations = registrations
+        self._crash_before_return = crash_before_return
 
     def execute(
         self,
         job: object,
         registration: CanonicalCsvBatchRegistration,
     ) -> FeishuProjectModelExecution:
+        if self._registrations is not None:
+            self._registrations.append(registration)
         self.calls.append(
             (registration.metadata.cell_id, registration.feature_config.cutoff_cycle)
         )
@@ -226,6 +252,8 @@ class _ProjectModelExecutor:
         )
         for result in (prepared, analysis, report):
             self._ledger.register_result(result)
+        if self._crash_before_return:
+            raise RuntimeError("injected project executor crash")
         return FeishuProjectModelExecution(
             record_batch_id="project-batch-1",
             prepared_input_result_id=prepared.result_id,
@@ -274,7 +302,11 @@ def _job() -> tuple[SqlAlchemyFeishuJobStore, str]:
     return jobs, queue.job_id
 
 
-def _registration(job: object, payload_sha256: str) -> CanonicalCsvBatchRegistration:
+def _registration(
+    job: object,
+    attachment: VerifiedFeishuAttachment,
+) -> CanonicalCsvBatchRegistration:
+    payload_sha256 = attachment.sha256
     return CanonicalCsvBatchRegistration(
         metadata=CellMetadata(
             dataset_id="feishu-data",
@@ -287,6 +319,7 @@ def _registration(job: object, payload_sha256: str) -> CanonicalCsvBatchRegistra
             ),
             source_sha256=payload_sha256,
             schema_version="cycle-record-v1",
+            ingestion_parameters=attachment.mapping_evidence or {},
         ),
         feature_config=EarlyCycleFeatureConfig(cutoff_cycle=20),
         data_version="feishu-canonical-v1",
@@ -372,6 +405,10 @@ def _worker(
     max_attempts: int = 3,
     enable_project_model: bool = False,
     project_model_rejection_code: str | None = None,
+    csv_normalizer: ReviewedBatteryCsvNormalizer | None = None,
+    project_registrations: list[CanonicalCsvBatchRegistration] | None = None,
+    batch_store: InMemoryVerifiedEarlyCycleBatchStore | None = None,
+    project_model_crash_before_return: bool = False,
 ) -> FeishuAnalysisJobWorker:
     service, ledger = _tool_service(
         prediction_calls=prediction_calls,
@@ -386,6 +423,8 @@ def _worker(
         _ProjectModelExecutor(
             ledger,
             rejection_code=project_model_rejection_code,
+            registrations=project_registrations,
+            crash_before_return=project_model_crash_before_return,
         )
         if enable_project_model
         else None
@@ -425,10 +464,9 @@ def _worker(
         jobs,
         client=_Client(client_response),
         attachment_policy=FeishuAttachmentPolicy(),
-        batch_store=InMemoryVerifiedEarlyCycleBatchStore(),
-        registration_resolver=lambda job, attachment, now: _registration(
-            job, attachment.sha256
-        ),
+        csv_normalizer=csv_normalizer,
+        batch_store=batch_store or InMemoryVerifiedEarlyCycleBatchStore(),
+        registration_resolver=lambda job, attachment, now: _registration(job, attachment),
         analysis_input_factory=analysis_input,
         workflow=workflow,
         result_resolver=ledger,
@@ -438,6 +476,16 @@ def _worker(
         clock=lambda: NOW,
         heartbeat_interval_seconds=30,
         max_attempts=max_attempts,
+    )
+
+
+def _reviewed_normalizer() -> ReviewedBatteryCsvNormalizer:
+    return ReviewedBatteryCsvNormalizer(
+        (
+            load_battery_csv_mapping_profile(
+                "configs/data_layouts/feishu_battery_csv_v1.json"
+            ),
+        )
     )
 
 
@@ -459,13 +507,52 @@ def test_worker_uses_project_model_executor_after_global_validation() -> None:
     snapshot = jobs.get(job_id)
     assert status is FeishuAnalysisJobStatus.SUCCEEDED
     assert predictions == []
-    assert snapshot.record_batch_id == "project-batch-1"
+    assert snapshot.record_batch_id is not None
+    assert snapshot.record_batch_id.startswith("canonical-csv-")
+    assert snapshot.record_batch_id != "project-batch-1"
     assert snapshot.validation_result_id is not None
     assert snapshot.analysis_result_id is not None
     assert snapshot.report_result_id is not None
     assert delivery.successes == [
         (snapshot.run_id, snapshot.analysis_result_id, snapshot.report_result_id)
     ]
+
+
+def test_project_model_restart_keeps_canonical_batch_identity() -> None:
+    jobs, job_id = _job()
+    batch_store = InMemoryVerifiedEarlyCycleBatchStore()
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        batch_store=batch_store,
+        project_model_crash_before_return=True,
+    )
+
+    with pytest.raises(FeishuJobRetryableError, match="UNEXPECTED_WORKER_ERROR"):
+        worker.execute(job_id=job_id)
+    checkpoint = jobs.get(job_id)
+    assert checkpoint.record_batch_id is not None
+    assert checkpoint.record_batch_id.startswith("canonical-csv-")
+
+    worker = _worker(
+        jobs=jobs,
+        client_response=FeishuApiError(
+            kind=FeishuErrorKind.PERMANENT,
+            status_code=404,
+            api_code=234001,
+        ),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        batch_store=batch_store,
+    )
+
+    assert worker.execute(job_id=job_id) is FeishuAnalysisJobStatus.SUCCEEDED
 
 
 def test_worker_does_not_call_project_model_after_validation_rejection() -> None:
@@ -666,10 +753,11 @@ def test_worker_restart_resumes_checkpointed_results_without_rerunning_tool() ->
     predictions: list[str] = []
     worker = _worker(
         jobs=jobs,
-        client_response=_response(VALID_CSV),
+        client_response=_response(REVIEWED_CSV),
         route_active=True,
         prediction_calls=predictions,
         delivery=delivery,
+        csv_normalizer=_reviewed_normalizer(),
     )
 
     with pytest.raises(FeishuJobRetryableError, match="DELIVERY_RETRYABLE"):
@@ -678,6 +766,10 @@ def test_worker_restart_resumes_checkpointed_results_without_rerunning_tool() ->
     assert checkpoint.analysis_result_id is not None
     assert checkpoint.report_result_id is not None
     assert checkpoint.result_card_message_id == "om-checkpointed-result-card"
+    assert checkpoint.csv_mapping_status == "MAPPED"
+    assert checkpoint.csv_mapping_evidence_sha256 == sha256_canonical(
+        checkpoint.csv_mapping_evidence
+    )
 
     status = worker.execute(job_id=job_id)
 
@@ -687,6 +779,45 @@ def test_worker_restart_resumes_checkpointed_results_without_rerunning_tool() ->
         None,
         "om-checkpointed-result-card",
     ]
+
+
+def test_worker_restart_resumes_registered_batch_without_redownloading() -> None:
+    jobs, job_id = _job()
+    delivery = _Delivery()
+    predictions: list[str] = []
+    batch_store = InMemoryVerifiedEarlyCycleBatchStore()
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=True,
+        prediction_calls=predictions,
+        delivery=delivery,
+        analysis_input_error=RuntimeError("crash after batch checkpoint"),
+        batch_store=batch_store,
+    )
+
+    with pytest.raises(FeishuJobRetryableError, match="UNEXPECTED_WORKER_ERROR"):
+        worker.execute(job_id=job_id)
+    checkpoint = jobs.get(job_id)
+    assert checkpoint.record_batch_id is not None
+
+    worker = _worker(
+        jobs=jobs,
+        client_response=FeishuApiError(
+            kind=FeishuErrorKind.PERMANENT,
+            status_code=404,
+            api_code=234001,
+        ),
+        route_active=True,
+        prediction_calls=predictions,
+        delivery=delivery,
+        batch_store=batch_store,
+    )
+
+    status = worker.execute(job_id=job_id)
+
+    assert status is FeishuAnalysisJobStatus.SUCCEEDED
+    assert predictions == ["feishu-canonical-v1"]
 
 
 def test_worker_rejects_permanent_message_or_file_reference_error() -> None:
@@ -770,3 +901,85 @@ def test_worker_delivers_audited_analysis_rejection_without_success_report() -> 
     assert delivery.rejections == [
         (snapshot.run_id, "ROUTE_NOT_ACTIVATED", snapshot.analysis_result_id)
     ]
+
+
+def test_worker_maps_reviewed_csv_before_registration_and_preserves_raw_sha() -> None:
+    jobs, job_id = _job()
+    registrations: list[CanonicalCsvBatchRegistration] = []
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(REVIEWED_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        csv_normalizer=_reviewed_normalizer(),
+        project_registrations=registrations,
+    )
+
+    status = worker.execute(job_id=job_id)
+
+    snapshot = jobs.get(job_id)
+    assert status is FeishuAnalysisJobStatus.SUCCEEDED
+    assert snapshot.input_file_sha256 == sha256(REVIEWED_CSV).hexdigest()
+    assert snapshot.csv_mapping_status == "MAPPED"
+    assert snapshot.csv_mapping_evidence is not None
+    assert snapshot.csv_mapping_evidence["raw_sha256"] == sha256(
+        REVIEWED_CSV
+    ).hexdigest()
+    assert snapshot.csv_mapping_evidence["canonical_sha256"] != sha256(
+        REVIEWED_CSV
+    ).hexdigest()
+    assert snapshot.csv_mapping_evidence["profile_version"] == (
+        "feishu-reviewed-cycle-csv-v1"
+    )
+    assert snapshot.csv_mapping_evidence_sha256 == sha256_canonical(
+        snapshot.csv_mapping_evidence
+    )
+    assert len(registrations) == 1
+    parameters = registrations[0].metadata.ingestion_parameters
+    assert parameters["source_upload_sha256"] == sha256(REVIEWED_CSV).hexdigest()
+    assert parameters["mapping_profile_version"] == "feishu-reviewed-cycle-csv-v1"
+    assert len(parameters["mapping_profile_sha256"]) == 64
+    assert len(parameters["column_mapping_evidence"]) == 13
+
+
+def test_worker_rejects_unreviewed_csv_layout_before_registration_or_model() -> None:
+    jobs, job_id = _job()
+    registrations: list[CanonicalCsvBatchRegistration] = []
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(b"Cell Name,Cycle Number\ncell-1,1\n"),
+        route_active=True,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        csv_normalizer=_reviewed_normalizer(),
+        project_registrations=registrations,
+    )
+
+    status = worker.execute(job_id=job_id)
+
+    snapshot = jobs.get(job_id)
+    assert status is FeishuAnalysisJobStatus.REJECTED
+    assert registrations == []
+    assert snapshot.job_last_error_code == "CSV_MAPPING_REJECTED"
+    assert snapshot.csv_mapping_status == "REJECTED"
+    assert snapshot.csv_mapping_evidence is not None
+    assert snapshot.csv_mapping_evidence["raw_sha256"] == sha256(
+        b"Cell Name,Cycle Number\ncell-1,1\n"
+    ).hexdigest()
+    assert snapshot.csv_mapping_evidence["reason_code"] == "UNREVIEWED_LAYOUT"
+    assert snapshot.csv_mapping_evidence["unknown_fields"] == [
+        "Cell Name",
+        "Cycle Number",
+    ]
+    assert snapshot.csv_mapping_evidence["missing_fields"] == list(
+        CANONICAL_CYCLE_CSV_FIELDS
+    )
+    assert snapshot.csv_mapping_evidence["conflicts"] == []
+    assert snapshot.csv_mapping_evidence["unit_required"] == []
+    assert snapshot.csv_mapping_evidence_sha256 == sha256_canonical(
+        snapshot.csv_mapping_evidence
+    )
+    assert "cell-1" not in str(snapshot.csv_mapping_evidence)

@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import create_engine, select
 
 from quanxin_life.api.feishu import FeishuEventRouteStatus
+from quanxin_life.core import sha256_canonical
 from quanxin_life.integrations.feishu.events import FeishuReceiptClaimStatus
 from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobOrigin,
@@ -418,3 +419,147 @@ def test_replay_rejects_non_route_terminal_reason() -> None:
             source_job_id=source_job_id,
             replay_key="project-binding-activated-v1",
         )
+
+
+def _claimed_job() -> tuple[SqlAlchemyFeishuJobStore, str, str]:
+    receipts, jobs, _ = _fixture()
+    claim = receipts.claim(
+        event_id="evt-job-1",
+        event_type="im.message.receive_v1",
+        payload_sha256="a" * 64,
+        received_at=NOW,
+    )
+    assert claim.claim_token is not None
+    staged = jobs.stage(
+        event=_reference(),
+        claim_token=claim.claim_token,
+        task=FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        staged_at=NOW,
+    )
+    owned = jobs.claim(job_id=staged.job_id, claimed_at=NOW)
+    assert owned.claim_token is not None
+    return jobs, staged.job_id, owned.claim_token
+
+
+def test_live_worker_checkpoints_sanitized_csv_mapping_evidence() -> None:
+    jobs, job_id, claim_token = _claimed_job()
+    evidence = {
+        "conflicts": [],
+        "missing_fields": ["dataset_id", "cell_id"],
+        "raw_sha256": "c" * 64,
+        "reason_code": "UNREVIEWED_LAYOUT",
+        "unit_required": [],
+        "unknown_fields": ["Cell Name", "Cycle Number"],
+        "value_errors": [],
+    }
+
+    jobs.checkpoint_csv_mapping(
+        job_id=job_id,
+        claim_token=claim_token,
+        status="REJECTED",
+        evidence=evidence,
+        evidence_sha256=sha256_canonical(evidence),
+        updated_at=NOW,
+    )
+
+    snapshot = jobs.get(job_id)
+    assert snapshot.csv_mapping_status == "REJECTED"
+    assert snapshot.csv_mapping_evidence == evidence
+    assert snapshot.csv_mapping_evidence_sha256 == sha256_canonical(evidence)
+
+
+def test_csv_mapping_checkpoint_rejects_mismatched_evidence_hash() -> None:
+    jobs, job_id, claim_token = _claimed_job()
+    evidence = {
+        "conflicts": [],
+        "missing_fields": [],
+        "raw_sha256": "c" * 64,
+        "reason_code": "UNREVIEWED_LAYOUT",
+        "unit_required": [],
+        "unknown_fields": [],
+        "value_errors": [],
+    }
+
+    with pytest.raises(ValueError, match="evidence SHA-256"):
+        jobs.checkpoint_csv_mapping(
+            job_id=job_id,
+            claim_token=claim_token,
+            status="REJECTED",
+            evidence=evidence,
+            evidence_sha256="d" * 64,
+            updated_at=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    "unsafe_key",
+    ("rows", "message_text", "payload", "values"),
+)
+def test_csv_mapping_checkpoint_rejects_non_metadata_evidence(
+    unsafe_key: str,
+) -> None:
+    jobs, job_id, claim_token = _claimed_job()
+    evidence = {
+        "field_names": [],
+        "raw_sha256": "c" * 64,
+        "reason_code": "UNREVIEWED_LAYOUT",
+        unsafe_key: ["secret-cell-value"],
+    }
+
+    with pytest.raises(ValueError, match="mapping evidence contract"):
+        jobs.checkpoint_csv_mapping(
+            job_id=job_id,
+            claim_token=claim_token,
+            status="REJECTED",
+            evidence=evidence,
+            evidence_sha256=sha256_canonical(evidence),
+            updated_at=NOW,
+        )
+
+
+def test_job_read_rejects_tampered_csv_mapping_evidence_hash() -> None:
+    receipts, jobs, session_factory = _fixture()
+    claim = receipts.claim(
+        event_id="evt-job-1",
+        event_type="im.message.receive_v1",
+        payload_sha256="a" * 64,
+        received_at=NOW,
+    )
+    assert claim.claim_token is not None
+    staged = jobs.stage(
+        event=_reference(),
+        claim_token=claim.claim_token,
+        task=FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        staged_at=NOW,
+    )
+    owned = jobs.claim(job_id=staged.job_id, claimed_at=NOW)
+    assert owned.claim_token is not None
+    evidence = {
+        "conflicts": [],
+        "missing_fields": [],
+        "raw_sha256": "c" * 64,
+        "reason_code": "UNREVIEWED_LAYOUT",
+        "unit_required": [],
+        "unknown_fields": [],
+        "value_errors": [],
+    }
+    jobs.checkpoint_csv_mapping(
+        job_id=staged.job_id,
+        claim_token=owned.claim_token,
+        status="REJECTED",
+        evidence=evidence,
+        evidence_sha256=sha256_canonical(evidence),
+        updated_at=NOW,
+    )
+    with session_factory() as session:
+        row = session.scalar(
+            select(FeishuEventReceipt).where(
+                FeishuEventReceipt.job_id == staged.job_id
+            )
+        )
+        assert row is not None
+        row.csv_mapping_evidence_sha256 = "f" * 64
+        session.commit()
+
+    with pytest.raises(ValueError, match="evidence SHA-256"):
+        jobs.get(staged.job_id)

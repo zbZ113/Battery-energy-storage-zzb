@@ -1,0 +1,21 @@
+{
+  "defaults": [],
+  "mappings": [
+    {"canonical_unit": "text", "offset": "0", "scale": "1", "sign": 1, "source_header": "Dataset", "source_unit": "text", "target_field": "dataset_id"},
+    {"canonical_unit": "text", "offset": "0", "scale": "1", "sign": 1, "source_header": "Cell", "source_unit": "text", "target_field": "cell_id"},
+    {"canonical_unit": "count", "offset": "0", "scale": "1", "sign": 1, "source_header": "Cycle", "source_unit": "count", "target_field": "cycle_index"},
+    {"canonical_unit": "count", "offset": "0", "scale": "1", "sign": 1, "source_header": "Sample", "source_unit": "count", "target_field": "sample_index"},
+    {"canonical_unit": "s", "offset": "0", "scale": "0.001", "sign": 1, "source_header": "Time_ms", "source_unit": "ms", "target_field": "time_s"},
+    {"canonical_unit": "V", "offset": "0", "scale": "0.001", "sign": 1, "source_header": "Voltage_mV", "source_unit": "mV", "target_field": "voltage_v"},
+    {"canonical_unit": "A", "offset": "0", "scale": "0.001", "sign": 1, "source_header": "Current_mA", "source_unit": "mA", "target_field": "current_a"},
+    {"canonical_unit": "degC", "offset": "0", "scale": "1", "sign": 1, "source_header": "Temperature_C", "source_unit": "degC", "target_field": "temperature_c"},
+    {"canonical_unit": "Ah", "offset": "0", "scale": "0.001", "sign": 1, "source_header": "Charge_mAh", "source_unit": "mAh", "target_field": "charge_capacity_ah"},
+    {"canonical_unit": "Ah", "offset": "0", "scale": "0.001", "sign": 1, "source_header": "Discharge_mAh", "source_unit": "mAh", "target_field": "discharge_capacity_ah"},
+    {"canonical_unit": "ohm", "offset": "0", "scale": "0.001", "sign": 1, "source_header": "Resistance_mOhm", "source_unit": "mohm", "target_field": "internal_resistance_ohm"},
+    {"canonical_unit": "boolean", "offset": "0", "scale": "1", "sign": 1, "source_header": "IsDiagnostic", "source_unit": "boolean", "target_field": "diagnostic"},
+    {"canonical_unit": "boolean", "offset": "0", "scale": "1", "sign": 1, "source_header": "IsValid", "source_unit": "boolean", "target_field": "valid"}
+  ],
+  "profile_id": "feishu-reviewed-cycle-csv",
+  "review_status": "APPROVED",
+  "version": "feishu-reviewed-cycle-csv-v1"
+}
