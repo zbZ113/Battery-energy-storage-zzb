@@ -24,11 +24,18 @@ from quanxin_life.api.aily import (
 )
 from quanxin_life.api.feishu import FeishuHttpAdapter, create_feishu_http_adapter
 from quanxin_life.api.service import ToolInvocationService
+from quanxin_life.application.feishu_project_models import (
+    FeishuProjectModelExecutor,
+    FeishuProjectRecordBatchResolver,
+    FeishuProjectResultResolver,
+    ProjectToolInvocationPort,
+)
 from quanxin_life.application.ingestion import (
     CanonicalCsvBatchRegistration,
     FileSystemVerifiedEarlyCycleBatchStore,
 )
-from quanxin_life.audit import SqlAuditLedger
+from quanxin_life.application.invocation_context import ProjectInvocationContextService
+from quanxin_life.audit import ProjectResultLedger, SqlAuditLedger
 from quanxin_life.core import SourceKind, ToolResult
 from quanxin_life.infrastructure.feishu_queue import (
     CeleryApplication,
@@ -120,6 +127,10 @@ _SCENARIO_TASKS = frozenset(
 
 class _CeleryApplication(CeleryApplication, Protocol):
     """Structural queue port; task registration remains owned by the runtime."""
+
+
+class _RegisteredResultResolver(Protocol):
+    def resolve_registered_result(self, result_id: str) -> ToolResult: ...
 
 
 class RegisteredFeishuCsvRegistrationResolver:
@@ -219,6 +230,15 @@ class FeishuAilyComponents:
     registration_resolver: FeishuCsvRegistrationResolver
 
 
+@dataclass(frozen=True, slots=True)
+class FeishuProjectModelDependencies:
+    """Existing competition runtime services reused by the Feishu model path."""
+
+    context_service: ProjectInvocationContextService
+    project_ledger: ProjectResultLedger
+    project_tool_service: ProjectToolInvocationPort
+
+
 class _RejectingModelRouteAuthorizer:
     """Keep existing deep-model routes unavailable until their project grant exists."""
 
@@ -259,6 +279,7 @@ def create_feishu_aily_components(
     scenario_reference_use_authorizer: (
         AilyScenarioReferenceUseAuthorizer | None
     ) = None,
+    project_model_dependencies: FeishuProjectModelDependencies | None = None,
     clock: Clock | None = None,
 ) -> FeishuAilyComponents:
     """Assemble Feishu callbacks, Aily facade, worker, tools, and delivery ports."""
@@ -270,6 +291,22 @@ def create_feishu_aily_components(
     receipt_store = SqlAlchemyFeishuReceiptStore(session_factory)
     job_store = SqlAlchemyFeishuJobStore(session_factory)
     scenario_context_store = SqlAlchemyFeishuScenarioContextStore(session_factory)
+    result_resolver: _RegisteredResultResolver = audit_ledger
+    project_model_executor = None
+    if project_model_dependencies is not None:
+        result_resolver = FeishuProjectResultResolver(
+            session_factory=session_factory,
+            global_resolver=audit_ledger,
+            context_service=project_model_dependencies.context_service,
+            project_ledger=project_model_dependencies.project_ledger,
+        )
+        project_model_executor = FeishuProjectModelExecutor(
+            context_service=project_model_dependencies.context_service,
+            batch_resolver=FeishuProjectRecordBatchResolver(session_factory),
+            project_tool_service=project_model_dependencies.project_tool_service,
+            project_ledger=project_model_dependencies.project_ledger,
+            clock=now,
+        )
 
     registry = ToolRegistry()
     register_validate_battery_data_tool(registry)
@@ -342,10 +379,10 @@ def create_feishu_aily_components(
     )
 
     authorizer = AuditedScenarioResultAuthorizer(
-        result_resolver=audit_ledger,
+        result_resolver=result_resolver,
         allow_candidate_results=config.allow_candidate_scenario_results,
     )
-    artifact_exporter = AuditedReportArtifactExporter(audit_ledger)
+    artifact_exporter = AuditedReportArtifactExporter(result_resolver)
     bitable_writer = FeishuBitableWriter(
         client,
         app_token=config.bitable_app_token,
@@ -354,7 +391,7 @@ def create_feishu_aily_components(
     feishu_delivery = FeishuAnalysisJobDelivery(
         client=client,
         card_builder=AuditedCardBuilder(
-            audit_ledger,
+            result_resolver,
             authorizer=authorizer,
             binding_verifier=job_store,
         ),
@@ -362,7 +399,7 @@ def create_feishu_aily_components(
         report_delivery=FeishuReportDelivery(
             artifact_exporter,
             client,
-            result_resolver=audit_ledger,
+            result_resolver=result_resolver,
         ),
         result_authorizer=authorizer,
         scenario_plotter=FeishuScenarioPlotter(),
@@ -401,8 +438,9 @@ def create_feishu_aily_components(
         ),
         scenario_input_resolver=scenario_context_store,
         workflow=workflow,
-        result_resolver=audit_ledger,
+        result_resolver=result_resolver,
         report_result_factory=build_scenario_report,
+        project_model_executor=project_model_executor,
         delivery=OriginAwareAnalysisJobDelivery(
             feishu_delivery=feishu_delivery,
             aily_delivery=aily_delivery,
@@ -501,6 +539,7 @@ __all__ = [
     "FeishuAilyAssemblyConfig",
     "FeishuAilyComponents",
     "FeishuCsvRegistrationResolver",
+    "FeishuProjectModelDependencies",
     "RegisteredFeishuCsvRegistrationResolver",
     "create_feishu_aily_components",
 ]

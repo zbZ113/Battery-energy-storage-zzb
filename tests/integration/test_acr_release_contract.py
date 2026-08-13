@@ -105,6 +105,17 @@ def test_backend_image_installs_the_llm_runtime_extra() -> None:
     assert "llm" in installed_extras
 
 
+def test_backend_image_installs_the_scenario_plot_runtime_extra() -> None:
+    dockerfile = _read("deploy/Dockerfile.backend")
+    editable_install = re.search(r'"\.\[([^\]]+)\]"', dockerfile)
+
+    assert editable_install is not None
+    installed_extras = {
+        value.strip() for value in editable_install.group(1).split(",")
+    }
+    assert "scenarios" in installed_extras
+
+
 def test_backend_image_uses_resumable_cpu_only_torch_wheels() -> None:
     dockerfile = _read("deploy/Dockerfile.backend")
 

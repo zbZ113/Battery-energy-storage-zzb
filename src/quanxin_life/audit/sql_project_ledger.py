@@ -48,6 +48,7 @@ from quanxin_life.persistence.models import (
     AgentStep,
     ApprovalAction,
     ApprovalRequestRow,
+    FeishuBindingRow,
     ModelManifest,
     ModelRouteActivationEvent,
     ModelRouteActivationStreamHead,
@@ -71,6 +72,7 @@ if TYPE_CHECKING:
 
 PROJECT_RESULT_BINDING_SCHEMA_VERSION = "project-tool-result-binding-v1"
 AGENT_PROJECT_RESULT_BINDING_SCHEMA_VERSION = "project-tool-result-binding-v2"
+FEISHU_PROJECT_RESULT_BINDING_SCHEMA_VERSION = "project-tool-result-binding-v3"
 ADVANCED_CALIBRATION_SAMPLE_MANIFEST_SCHEMA_VERSION = (
     "advanced-calibration-sample-manifest-v1"
 )
@@ -1168,6 +1170,7 @@ class SqlProjectAuditLedger:
             actor_role=actor_role,
             invocation_source=invocation_source,
             agent_run_id=binding.agent_run_id,
+            feishu_binding_id=binding.feishu_binding_id,
             tool_name=binding.tool_name,
             input_hash=binding.input_hash,
             agent_step_id=binding.agent_step_id,
@@ -1206,14 +1209,30 @@ class SqlProjectAuditLedger:
                         )
                     ).all()
                 )
-                actor_session = session.get(SessionRecord, binding.actor_session_id)
-                if (
-                    actor_session is None
-                    or actor_session.user_id != binding.actor_user_id
-                ):
-                    raise AuditLedgerError(
-                        "project ToolResult binding integrity check failed"
+                if binding.invocation_source == "FEISHU":
+                    feishu_binding = session.get(
+                        FeishuBindingRow, binding.feishu_binding_id
                     )
+                    if (
+                        feishu_binding is None
+                        or feishu_binding.project_id != binding.project_id
+                        or feishu_binding.user_open_id_map_json.get(
+                            binding.actor_user_id
+                        )
+                        is None
+                    ):
+                        raise AuditLedgerError(
+                            "project ToolResult binding integrity check failed"
+                        )
+                else:
+                    actor_session = session.get(SessionRecord, binding.actor_session_id)
+                    if (
+                        actor_session is None
+                        or actor_session.user_id != binding.actor_user_id
+                    ):
+                        raise AuditLedgerError(
+                            "project ToolResult binding integrity check failed"
+                        )
                 if binding.invocation_source == "AGENT":
                     agent_run = session.get(AgentRun, binding.agent_run_id)
                     agent_step = session.get(AgentStep, binding.agent_step_id)
@@ -1304,6 +1323,8 @@ class SqlProjectAuditLedger:
         if binding.binding_schema_version == PROJECT_RESULT_BINDING_SCHEMA_VERSION:
             if (
                 invocation_source is not ProjectInvocationSource.HTTP
+                or binding.actor_session_id is None
+                or binding.feishu_binding_id is not None
                 or binding.agent_run_id is not None
                 or any(
                     value is not None
@@ -1345,6 +1366,8 @@ class SqlProjectAuditLedger:
         ):
             if (
                 invocation_source is not ProjectInvocationSource.AGENT
+                or binding.actor_session_id is None
+                or binding.feishu_binding_id is not None
                 or not binding.agent_run_id
                 or not binding.agent_step_id
                 or not binding.step_id
@@ -1384,6 +1407,47 @@ class SqlProjectAuditLedger:
                 result_sha256=binding.result_sha256,
                 created_at=binding.created_at,
             )
+        elif (
+            binding.binding_schema_version
+            == FEISHU_PROJECT_RESULT_BINDING_SCHEMA_VERSION
+        ):
+            if (
+                invocation_source is not ProjectInvocationSource.FEISHU
+                or binding.actor_session_id is not None
+                or not binding.feishu_binding_id
+                or binding.agent_run_id is not None
+                or any(
+                    value is not None
+                    for value in (
+                        binding.agent_step_id,
+                        binding.step_id,
+                        binding.plan_hash,
+                        binding.claim_token_sha256,
+                        binding.claim_attempt,
+                        binding.claim_lease_expires_at,
+                        binding.execution_snapshot_sha256,
+                        binding.dependency_evidence_sha256,
+                        binding.approval_required,
+                        binding.approval_request_id,
+                        binding.approval_action_id,
+                        binding.approval_evidence_sha256,
+                    )
+                )
+            ):
+                raise AuditLedgerError(
+                    "project ToolResult binding integrity check failed"
+                )
+            payload = cls._feishu_binding_hash_payload(
+                result_id=binding.result_id,
+                project_id=binding.project_id,
+                actor_user_id=binding.actor_user_id,
+                actor_role=actor_role.value,
+                feishu_binding_id=binding.feishu_binding_id,
+                tool_name=binding.tool_name,
+                input_hash=binding.input_hash,
+                result_sha256=binding.result_sha256,
+                created_at=binding.created_at,
+            )
         else:
             raise AuditLedgerError("project ToolResult binding integrity check failed")
         expected_hash = sha256_canonical(payload)
@@ -1400,11 +1464,14 @@ class SqlProjectAuditLedger:
         created_at: datetime,
     ) -> dict[str, object]:
         context = grant.project_context
+        actor_session_id = context.actor_session_id
+        if actor_session_id is None:  # pragma: no cover - Agent context invariant
+            raise AuditLedgerError("Agent project context requires a session")
         payload = cls._agent_binding_hash_payload(
             result_id=result.result_id,
             project_id=context.project_id,
             actor_user_id=context.actor_user_id,
-            actor_session_id=context.actor_session_id,
+            actor_session_id=actor_session_id,
             actor_role=context.actor_role.value,
             agent_run_id=grant.agent_run_id,
             agent_step_id=grant.agent_step_row_id,
@@ -1492,20 +1559,43 @@ class SqlProjectAuditLedger:
         result_sha256: str,
         created_at: datetime,
     ) -> dict[str, object]:
-        payload = cls._binding_hash_payload(
-            result_id=result.result_id,
-            project_id=context.project_id,
-            actor_user_id=context.actor_user_id,
-            actor_session_id=context.actor_session_id,
-            actor_role=context.actor_role.value,
-            invocation_source=context.invocation_source.value,
-            agent_run_id=context.agent_run_id,
-            tool_name=result.tool_name,
-            input_hash=result.input_hash,
-            result_sha256=result_sha256,
-            created_at=created_at,
+        from quanxin_life.application.invocation_context import ProjectInvocationSource
+
+        binding_schema_version = (
+            FEISHU_PROJECT_RESULT_BINDING_SCHEMA_VERSION
+            if context.invocation_source is ProjectInvocationSource.FEISHU
+            else PROJECT_RESULT_BINDING_SCHEMA_VERSION
         )
+        if context.invocation_source is ProjectInvocationSource.FEISHU:
+            if context.feishu_binding_id is None:  # pragma: no cover - context invariant
+                raise AuditLedgerError("Feishu project context requires a binding")
+            payload = cls._feishu_binding_hash_payload(
+                result_id=result.result_id,
+                project_id=context.project_id,
+                actor_user_id=context.actor_user_id,
+                actor_role=context.actor_role.value,
+                feishu_binding_id=context.feishu_binding_id,
+                tool_name=result.tool_name,
+                input_hash=result.input_hash,
+                result_sha256=result_sha256,
+                created_at=created_at,
+            )
+        else:
+            payload = cls._binding_hash_payload(
+                result_id=result.result_id,
+                project_id=context.project_id,
+                actor_user_id=context.actor_user_id,
+                actor_session_id=context.actor_session_id,
+                actor_role=context.actor_role.value,
+                invocation_source=context.invocation_source.value,
+                agent_run_id=context.agent_run_id,
+                tool_name=result.tool_name,
+                input_hash=result.input_hash,
+                result_sha256=result_sha256,
+                created_at=created_at,
+            )
         return payload | {
+            "binding_schema_version": binding_schema_version,
             "binding_sha256": sha256_canonical(payload),
             "created_at": created_at,
         }
@@ -1516,7 +1606,7 @@ class SqlProjectAuditLedger:
         result_id: str,
         project_id: str,
         actor_user_id: str,
-        actor_session_id: str,
+        actor_session_id: str | None,
         actor_role: str,
         invocation_source: str,
         agent_run_id: str | None,
@@ -1534,6 +1624,35 @@ class SqlProjectAuditLedger:
             "actor_role": actor_role,
             "invocation_source": invocation_source,
             "agent_run_id": agent_run_id,
+            "tool_name": tool_name,
+            "input_hash": input_hash,
+            "result_sha256": result_sha256,
+            "created_at": created_at.astimezone(UTC).isoformat(),
+        }
+
+    @staticmethod
+    def _feishu_binding_hash_payload(
+        *,
+        result_id: str,
+        project_id: str,
+        actor_user_id: str,
+        actor_role: str,
+        feishu_binding_id: str,
+        tool_name: str,
+        input_hash: str,
+        result_sha256: str,
+        created_at: datetime,
+    ) -> dict[str, object]:
+        return {
+            "result_id": result_id,
+            "binding_schema_version": FEISHU_PROJECT_RESULT_BINDING_SCHEMA_VERSION,
+            "project_id": project_id,
+            "actor_user_id": actor_user_id,
+            "actor_session_id": None,
+            "actor_role": actor_role,
+            "invocation_source": "FEISHU",
+            "feishu_binding_id": feishu_binding_id,
+            "agent_run_id": None,
             "tool_name": tool_name,
             "input_hash": input_hash,
             "result_sha256": result_sha256,
@@ -1624,4 +1743,8 @@ class SqlProjectAuditLedger:
         return value.astimezone(UTC)
 
 
-__all__ = ["PROJECT_RESULT_BINDING_SCHEMA_VERSION", "SqlProjectAuditLedger"]
+__all__ = [
+    "FEISHU_PROJECT_RESULT_BINDING_SCHEMA_VERSION",
+    "PROJECT_RESULT_BINDING_SCHEMA_VERSION",
+    "SqlProjectAuditLedger",
+]

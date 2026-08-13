@@ -17,6 +17,7 @@ from quanxin_life.integrations.feishu.cards import (
 )
 from quanxin_life.tools.blast_scenarios import (
     COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
+    SCENARIO_FEATURE_VERSION,
 )
 from quanxin_life.tools.data_quality import (
     ValidateBatteryDataToolInput,
@@ -77,6 +78,18 @@ class _ScenarioAuthorizer:
         )
 
 
+class _ModelAuthorizer:
+    def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
+        assert result.tool_name == "predict_cycle_life"
+        return AuditedResultAuthorization(
+            allowed=True,
+            route_id="matr-rul-active-route",
+            activation_status="ACTIVE",
+            evidence_level=EvidenceLevel.MODEL_INFERENCE,
+            supported_domain="activated project-bound MATR official cycle-life route",
+        )
+
+
 def _builder(
     ledger: AuditLedger,
     *,
@@ -102,6 +115,31 @@ def _validation_result() -> ToolResult:
     )
 
 
+def _cycle_life_result() -> ToolResult:
+    return ToolResult(
+        result_id=str(uuid4()),
+        tool_name="predict_cycle_life",
+        tool_version="advanced-rul-prediction-tool-v1",
+        model_version="matr-cyclepatch-direct-cutoff-50-seed-39",
+        data_version="matr-three-batch-v1",
+        feature_version="cyclepatch-multichannel-v1",
+        input_hash="b" * 64,
+        values={
+            "artifact_type": "quanxin_life.advanced_rul_prediction.v1",
+            "artifact": {
+                "cell_id": "MATR_b3c34",
+                "cutoff_cycle": 50,
+                "cycle_life_prediction": {"predicted_cycle": 1074.4998779296875},
+                "derived_remaining_cycles": 1024.4998779296875,
+            },
+        },
+        uncertainty=None,
+        warnings=[],
+        provenance=list(_provenance()),
+        created_at=NOW,
+    )
+
+
 def test_audited_card_reads_allowlisted_values_from_registered_tool_result() -> None:
     result = _validation_result()
     ledger = AuditLedger((result,))
@@ -112,14 +150,47 @@ def test_audited_card_reads_allowlisted_values_from_registered_tool_result() -> 
     )
     rendered = json.dumps(card, ensure_ascii=False)
 
-    assert result.result_id in rendered
-    assert "values.blocked" in rendered
-    assert "values.quality_score" in rendered
-    assert str(result.values["quality_score"]) in rendered
-    assert result.model_version in rendered
-    assert result.data_version in rendered
-    assert result.feature_version in rendered
-    assert EvidenceLevel.DATA_DIRECT.value in rendered
+    assert "数据质量检查" in rendered
+    assert "是否阻断" in rendered
+    assert "质量评分" in rendered
+    assert "**质量评分**\\n0" in rendered
+    assert result.result_id not in rendered
+    assert "values." not in rendered
+    assert result.model_version not in rendered
+    assert result.data_version not in rendered
+    assert result.feature_version not in rendered
+
+
+def test_cycle_life_card_is_a_chinese_engineering_analysis_sheet() -> None:
+    result = _cycle_life_result()
+    card = AuditedCardBuilder(
+        AuditLedger((result,)),
+        authorizer=_ModelAuthorizer(),
+        binding_verifier=_BindingVerifier(),
+    ).build_result_card(run_id="run-safe", result_id=result.result_id)
+
+    rendered = json.dumps(card, ensure_ascii=False)
+
+    assert "电芯寿命分析" in rendered
+    assert "MATR_b3c34" in rendered
+    assert "已观测循环" in rendered
+    assert "50" in rendered
+    assert "预测总循环寿命" in rendered
+    assert "1,074.5" in rendered
+    assert "剩余循环" in rendered
+    assert "1,024.5" in rendered
+    assert "已激活" in rendered
+    assert "模型推理" in rendered
+    assert "年份需基于明确工况单独推演" in rendered
+    assert "run-safe" not in rendered
+    assert result.result_id not in rendered
+    assert "values.artifact" not in rendered
+    assert result.model_version not in rendered
+    assert result.data_version not in rendered
+    assert result.feature_version not in rendered
+    assert "15 年" not in rendered
+    assert "20 年" not in rendered
+    assert "25 年" not in rendered
 
 
 def test_audited_card_public_api_rejects_caller_supplied_numeric_value() -> None:
@@ -171,7 +242,8 @@ def test_inactive_model_result_returns_rejection_card_before_reading_values() ->
     ).build_result_card(run_id="run-safe", result_id=result.result_id)
     rendered = json.dumps(card, ensure_ascii=False)
 
-    assert "MODEL_ROUTE_NOT_ACTIVATED" in rendered
+    assert "模型路线尚未激活" in rendered
+    assert "MODEL_ROUTE_NOT_ACTIVATED" not in rendered
     assert "untrusted_numeric_payload" not in rendered
 
 
@@ -182,7 +254,7 @@ def test_scenario_card_reads_only_fixed_scalar_summaries_and_embeds_curve() -> N
         tool_version=COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
         model_version="blast-lite-route-v1",
         data_version="scenario-data-v1",
-        feature_version="blast-scenario-v1",
+        feature_version=SCENARIO_FEATURE_VERSION,
         input_hash="b" * 64,
         values={
             "artifact": {
@@ -190,10 +262,10 @@ def test_scenario_card_reads_only_fixed_scalar_summaries_and_embeds_curve() -> N
                 "baseline": {
                     "scenario_id": "baseline",
                     "scenario_version": "baseline-v1",
-                    "final_natural_year": 20.0,
-                    "final_equivalent_full_cycles": 6000.0,
+                    "final_natural_year": 25.0,
+                    "final_equivalent_full_cycles": 7500.0,
                     "final_soh": 0.88,
-                    "milestone_soh": {"15": 0.91, "20": 0.88},
+                    "milestone_soh": {"15": 0.93, "20": 0.90, "25": 0.88},
                     "eol_threshold": 0.8,
                     "eol": {
                         "status": "NOT_REACHED",
@@ -201,17 +273,32 @@ def test_scenario_card_reads_only_fixed_scalar_summaries_and_embeds_curve() -> N
                         "equivalent_full_cycles": None,
                     },
                     "support": {"status": "SUPPORTED"},
-                    "natural_years": [0.0, 20.0],
+                    "operating_segments": [
+                        {
+                            "segment_id": "all-years",
+                            "start_year": 0,
+                            "end_year": 25,
+                            "temperature_c": 25.0,
+                            "charge_c_rate": 0.5,
+                            "discharge_c_rate": 0.5,
+                            "soc_lower_bound": 0.1,
+                            "soc_upper_bound": 0.9,
+                            "dod": 0.8,
+                            "equivalent_full_cycles_per_year": 300.0,
+                            "rest_duration_hours": 1.0,
+                        }
+                    ],
+                    "natural_years": [0.0, 25.0],
                     "soh": [1.0, 0.88],
                 },
                 "comparisons": [
                     {
                         "scenario_id": "warmer",
                         "scenario_version": "warmer-v1",
-                        "final_natural_year": 20.0,
-                        "final_equivalent_full_cycles": 6000.0,
+                        "final_natural_year": 25.0,
+                        "final_equivalent_full_cycles": 7500.0,
                         "final_soh": 0.81,
-                        "milestone_soh": {"15": 0.86, "20": 0.81},
+                        "milestone_soh": {"15": 0.86, "20": 0.82, "25": 0.81},
                         "eol_threshold": 0.8,
                         "eol": {
                             "status": "REACHED",
@@ -219,7 +306,22 @@ def test_scenario_card_reads_only_fixed_scalar_summaries_and_embeds_curve() -> N
                             "equivalent_full_cycles": 5760.0,
                         },
                         "support": {"status": "NEAR_BOUNDARY"},
-                        "natural_years": [0.0, 20.0],
+                        "operating_segments": [
+                            {
+                                "segment_id": "all-years",
+                                "start_year": 0,
+                                "end_year": 25,
+                                "temperature_c": 35.0,
+                                "charge_c_rate": 0.5,
+                                "discharge_c_rate": 1.0,
+                                "soc_lower_bound": 0.1,
+                                "soc_upper_bound": 0.9,
+                                "dod": 0.8,
+                                "equivalent_full_cycles_per_year": 300.0,
+                                "rest_duration_hours": 1.0,
+                            }
+                        ],
+                        "natural_years": [0.0, 25.0],
                         "soh": [1.0, 0.81],
                     }
                 ],
@@ -239,14 +341,38 @@ def test_scenario_card_reads_only_fixed_scalar_summaries_and_embeds_curve() -> N
     )
     rendered = json.dumps(card, ensure_ascii=False)
 
-    assert "values.artifact.baseline.final_soh" in rendered
-    assert "values.artifact.comparisons.0.final_soh" in rendered
-    assert "values.artifact.comparisons.0.eol.natural_year" in rendered
-    assert "PHYSICS_REFERENCE" in rendered
-    assert "CANDIDATE_ROUTE_RESEARCH_USE_ONLY" in rendered
+    assert "储能工况年份推演" in rendered
+    assert "基准工况" in rendered
+    assert "对比工况 1" in rendered
+    assert "推演终点" in rendered
+    assert "25 年" in rendered
+    assert "15 年 SOH" in rendered
+    assert "0.93" in rendered
+    assert "20 年 SOH" in rendered
+    assert "0.9" in rendered
+    assert "25 年 SOH" in rendered
+    assert "0.88" in rendered
+    assert "首次达到阈值年份" in rendered
+    assert "19.2 年" in rendered
+    assert "物理参考情景" in rendered
+    assert "支持范围内" in rendered
+    assert "接近支持边界" in rendered
+    assert "25°C" in rendered
+    assert "充电 0.5C / 放电 0.5C" in rendered
+    assert "SOC 10%-90%" in rendered
+    assert "DoD 80%" in rendered
+    assert "300 EFC/年" in rendered
+    assert "静置 1 小时" in rendered
+    assert "35°C" in rendered
+    assert "放电 1C" in rendered
+    assert "不是 MATR 电芯的自然年换算" in rendered
+    assert "values.artifact" not in rendered
+    assert "PHYSICS_REFERENCE" not in rendered
+    assert "CANDIDATE_ROUTE_RESEARCH_USE_ONLY" not in rendered
     assert "img-scenario-safe" in rendered
-    assert "values.artifact.baseline.soh" not in rendered
     assert "natural_years" not in rendered
+    assert "run-safe" not in rendered
+    assert result.result_id not in rendered
 
 
 def test_unbound_result_is_rejected_before_ledger_resolution() -> None:
@@ -261,14 +387,48 @@ def test_unbound_result_is_rejected_before_ledger_resolution() -> None:
     assert verifier.calls == [("run-safe", result.result_id)]
 
 
-@pytest.mark.parametrize("status", tuple(FeishuCardStatus))
-def test_status_cards_are_reference_only(status: FeishuCardStatus) -> None:
+@pytest.mark.parametrize(
+    ("status", "expected_title"),
+    (
+        (FeishuCardStatus.RECEIVED, "文件已接收"),
+        (FeishuCardStatus.DATA_CHECK, "正在检查数据"),
+        (FeishuCardStatus.QUEUED, "任务已排队"),
+        (FeishuCardStatus.RUNNING, "分析进行中"),
+        (FeishuCardStatus.SUCCESS, "分析已完成"),
+        (FeishuCardStatus.REJECTED, "分析未执行"),
+        (FeishuCardStatus.DEGRADED, "结果已降级"),
+        (FeishuCardStatus.REPORT_READY, "分析报告已生成"),
+    ),
+)
+def test_status_cards_are_chinese_and_hide_machine_references(
+    status: FeishuCardStatus,
+    expected_title: str,
+) -> None:
     rendered = json.dumps(
         build_status_card(status=status, run_id="run-safe", result_id=None),
         ensure_ascii=False,
     )
 
-    assert "run-safe" in rendered
+    assert expected_title in rendered
+    assert "run-safe" not in rendered
     assert "SOH" not in rendered
     assert "RUL" not in rendered
     assert "置信区间" not in rendered
+
+
+def test_rejection_status_card_translates_reviewed_reason_code() -> None:
+    rendered = json.dumps(
+        build_status_card(
+            status=FeishuCardStatus.REJECTED,
+            run_id="run-safe",
+            reason_code="MODEL_ROUTE_NOT_ACTIVATED",
+            task_type="predict_cycle_life",
+        ),
+        ensure_ascii=False,
+    )
+
+    assert "循环寿命预测" in rendered
+    assert "模型路线尚未激活" in rendered
+    assert "MODEL_ROUTE_NOT_ACTIVATED" not in rendered
+    assert "predict_cycle_life" not in rendered
+    assert "run-safe" not in rendered

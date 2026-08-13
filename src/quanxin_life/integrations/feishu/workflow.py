@@ -96,18 +96,11 @@ class FeishuAnalysisWorkflow:
         self._route_authorizer = route_authorizer
         self._input_binder = input_binder
 
-    def run(
+    def validate(
         self,
         *,
-        task: FeishuAnalysisTask,
         validation_input: Mapping[str, object],
-        analysis_input: Mapping[str, object],
-        before_analysis: Callable[[], None] | None = None,
-    ) -> FeishuWorkflowOutcome:
-        try:
-            tool_name = _TASK_TO_TOOL[task]
-        except KeyError as exc:  # pragma: no cover - exhaustive enum map
-            raise FeishuWorkflowRejected("ANALYSIS_TASK_NOT_SUPPORTED") from exc
+    ) -> ToolResult:
         validation_result = self._service.invoke_for_agent(
             ToolInvocation(
                 tool_name=StandardToolName.VALIDATE_BATTERY_DATA,
@@ -123,6 +116,21 @@ class FeishuAnalysisWorkflow:
                 "DATA_VALIDATION_BLOCKED",
                 validation_result=validation_result,
             )
+        return validation_result
+
+    def run(
+        self,
+        *,
+        task: FeishuAnalysisTask,
+        validation_input: Mapping[str, object],
+        analysis_input: Mapping[str, object],
+        before_analysis: Callable[[], None] | None = None,
+    ) -> FeishuWorkflowOutcome:
+        try:
+            tool_name = _TASK_TO_TOOL[task]
+        except KeyError as exc:  # pragma: no cover - exhaustive enum map
+            raise FeishuWorkflowRejected("ANALYSIS_TASK_NOT_SUPPORTED") from exc
+        validation_result = self.validate(validation_input=validation_input)
         if tool_name in _MODEL_TOOLS:
             try:
                 self._route_authorizer.authorize(

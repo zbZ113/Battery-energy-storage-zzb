@@ -4,11 +4,24 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Protocol, TypedDict
+from uuid import UUID
 
-from quanxin_life.core import EvidenceLevel, ToolResult
+from quanxin_life.core import (
+    AdvancedModelRouteRole,
+    AdvancedModelTask,
+    CycleLifePrediction,
+    EvidenceLevel,
+    PredictionTarget,
+    SourceKind,
+    ToolResult,
+)
 from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
 from quanxin_life.reporting.contracts import AUDITED_REPORT_TOOL_VERSION
 from quanxin_life.scenarios import BlastRouteManifest, load_packaged_blast_route_catalog
+from quanxin_life.tools.advanced_cycle_life_prediction import (
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_RUL_PREDICTION_TOOL_VERSION,
+)
 from quanxin_life.tools.blast_scenarios import (
     COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
     PROJECT_STORAGE_LIFETIME_TOOL_VERSION,
@@ -23,6 +36,16 @@ _SCENARIO_TOOL_VERSIONS = {
 _UNRESOLVED_ROUTE = "unresolved-scenario-route"
 _SUPPORTED_DOMAIN = (
     "manifest-bounded non-product-specific LFP reference scenario"
+)
+_ADVANCED_RUL_DOMAIN = "activated project-bound MATR official cycle-life route"
+_ADVANCED_RUL_UNRESOLVED_ROUTE = "unresolved-advanced-rul-route"
+_ADVANCED_RUL_SHA_FIELDS = (
+    "raw_sequence_input_sha256",
+    "transform_config_sha256",
+    "source_manifest_hash",
+    "normalization_statistics_sha256",
+    "artifact_manifest_sha256",
+    "ledger_head_sha256",
 )
 
 
@@ -105,7 +128,7 @@ class BlastScenarioResultAuthorizer:
 
 
 class AuditedScenarioResultAuthorizer:
-    """Authorize scenario results and reports through one candidate gate."""
+    """Authorize audited scenario and active Advanced RUL results."""
 
     def __init__(
         self,
@@ -123,6 +146,8 @@ class AuditedScenarioResultAuthorizer:
     def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
         if result.tool_name in _SCENARIO_TOOL_VERSIONS:
             return self._scenario_authorizer.authorize(result)
+        if result.tool_name == "predict_cycle_life":
+            return _authorize_advanced_rul(result)
         if (
             result.tool_name != "generate_audited_report"
             or result.tool_version != AUDITED_REPORT_TOOL_VERSION
@@ -144,7 +169,20 @@ class AuditedScenarioResultAuthorizer:
             )
         except (AttributeError, TypeError, ValueError):
             return _rejected("AUDITED_REPORT_UPSTREAM_INVALID")
-        authorization = self._scenario_authorizer.authorize(upstream)
+        if upstream.tool_name in _SCENARIO_TOOL_VERSIONS:
+            authorization = self._scenario_authorizer.authorize(upstream)
+        elif upstream.tool_name == "predict_cycle_life":
+            authorization = _authorize_advanced_rul(upstream)
+            if authorization.allowed and not _matches_advanced_rul_report(
+                result,
+                upstream,
+            ):
+                return _advanced_rul_rejected(
+                    "ADVANCED_RUL_REPORT_CONTRACT_MISMATCH",
+                    route_id=authorization.route_id,
+                )
+        else:
+            return _rejected("AUDITED_REPORT_UPSTREAM_INVALID")
         if not authorization.allowed:
             return authorization
         return AuditedResultAuthorization(
@@ -155,6 +193,145 @@ class AuditedScenarioResultAuthorizer:
             supported_domain=authorization.supported_domain,
             rejection_reason=None,
         )
+
+
+def _authorize_advanced_rul(result: ToolResult) -> AuditedResultAuthorization:
+    try:
+        checked = ToolResult.model_validate(result.model_dump(mode="json"))
+        artifact_value = checked.values.get("artifact")
+        if not isinstance(artifact_value, Mapping):
+            raise ValueError("Advanced RUL artifact is invalid")
+        artifact = artifact_value
+        prediction_value = artifact.get("cycle_life_prediction")
+        prediction = CycleLifePrediction.model_validate(prediction_value)
+        route_role_value = artifact.get("route_role")
+        task_value = artifact.get("task")
+        if not isinstance(route_role_value, str) or not isinstance(task_value, str):
+            raise ValueError("Advanced RUL route identity is invalid")
+        route_role = AdvancedModelRouteRole(route_role_value)
+        task = AdvancedModelTask(task_value)
+        artifact_id = _uuid(artifact.get("artifact_id"))
+        decision_event_id = _uuid(artifact.get("decision_event_id"))
+        _uuid(artifact.get("record_batch_id"))
+        _uuid(artifact.get("upstream_result_id"))
+    except (AttributeError, TypeError, ValueError):
+        return _advanced_rul_rejected("ADVANCED_RUL_RESULT_CONTRACT_MISMATCH")
+    if (
+        checked.tool_version != ADVANCED_RUL_PREDICTION_TOOL_VERSION
+        or checked.values.get("artifact_type")
+        != ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE
+        or prediction.target is not PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE
+        or not prediction.right_censored
+        or prediction.observed_cycle is not None
+        or task is not AdvancedModelTask.RUL
+        or artifact.get("output_target")
+        != PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE.value
+        or artifact.get("artifact_kind")
+        not in {"cyclepatch_direct", "cyclepatch_batlinet"}
+        or artifact.get("dataset_id") != prediction.dataset_id
+        or artifact.get("cell_id") != prediction.cell_id
+        or artifact.get("cutoff_cycle") != prediction.cutoff_cycle
+        or artifact.get("split_version") != prediction.split_version
+        or checked.model_version != prediction.model_version
+        or checked.data_version != prediction.data_version
+        or checked.feature_version != prediction.feature_version
+        or artifact.get("derived_remaining_cycles")
+        != prediction.derived_remaining_cycles
+        or not _approved_rul_role(prediction.cutoff_cycle, route_role)
+        or not _positive_int(artifact.get("ledger_sequence_number"))
+        or any(not _sha256(artifact.get(name)) for name in _ADVANCED_RUL_SHA_FIELDS)
+        or not _matches_advanced_rul_provenance(
+            checked,
+            artifact_id=artifact_id,
+            artifact_manifest_sha256=artifact.get("artifact_manifest_sha256"),
+        )
+    ):
+        return _advanced_rul_rejected("ADVANCED_RUL_RESULT_CONTRACT_MISMATCH")
+    return AuditedResultAuthorization(
+        allowed=True,
+        route_id=decision_event_id,
+        activation_status="ACTIVE",
+        evidence_level=EvidenceLevel.MODEL_INFERENCE,
+        supported_domain=_ADVANCED_RUL_DOMAIN,
+        rejection_reason=None,
+    )
+
+
+def _matches_advanced_rul_report(report: ToolResult, upstream: ToolResult) -> bool:
+    context = report.values.get("upstream_context")
+    if not isinstance(context, list) or len(context) != 1:
+        return False
+    expected_context = {
+        "result_id": upstream.result_id,
+        "tool_name": upstream.tool_name,
+        "tool_version": upstream.tool_version,
+        "model_version": upstream.model_version or "",
+        "data_version": upstream.data_version or "",
+        "feature_version": upstream.feature_version or "",
+        "input_hash": upstream.input_hash,
+    }
+    return (
+        report.values.get("report_kind") == "lifetime_decision"
+        and report.values.get("claim_ids") == ["lifetime_prediction"]
+        and context[0] == expected_context
+    )
+
+
+def _approved_rul_role(cutoff_cycle: int, role: AdvancedModelRouteRole) -> bool:
+    if cutoff_cycle == 20:
+        return role is AdvancedModelRouteRole.DEFAULT
+    return cutoff_cycle in {50, 100, 150} and role in {
+        AdvancedModelRouteRole.POINT_ACCURACY,
+        AdvancedModelRouteRole.COVERAGE,
+    }
+
+
+def _matches_advanced_rul_provenance(
+    result: ToolResult,
+    *,
+    artifact_id: str,
+    artifact_manifest_sha256: object,
+) -> bool:
+    return any(
+        record.source_kind is SourceKind.PREDICTED
+        and record.source_id == f"advanced-model-{artifact_id}"
+        and record.uri == f"artifact://advanced-model/{artifact_id}"
+        and record.sha256 == artifact_manifest_sha256
+        for record in result.provenance
+    )
+
+
+def _uuid(value: object) -> str:
+    return str(UUID(value))  # type: ignore[arg-type]
+
+
+def _sha256(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        int(value, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _advanced_rul_rejected(
+    reason: str,
+    *,
+    route_id: str = _ADVANCED_RUL_UNRESOLVED_ROUTE,
+) -> AuditedResultAuthorization:
+    return AuditedResultAuthorization(
+        allowed=False,
+        route_id=route_id,
+        activation_status="NOT_ACTIVATED",
+        evidence_level=EvidenceLevel.MODEL_INFERENCE,
+        supported_domain=_ADVANCED_RUL_DOMAIN,
+        rejection_reason=reason,
+    )
 
 
 class ScenarioAwareAuditedResultAuthorizer:

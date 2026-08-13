@@ -17,10 +17,13 @@ from quanxin_life.application import (
 )
 from quanxin_life.application.feishu_aily_assembly import (
     FeishuAilyAssemblyConfig,
+    FeishuProjectModelDependencies,
     RegisteredFeishuCsvRegistrationResolver,
     create_feishu_aily_components,
 )
 from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
+from quanxin_life.application.invocation_context import ProjectInvocationContextService
+from quanxin_life.audit import SqlProjectAuditLedger
 from quanxin_life.core import CellMetadata, ProvenanceRecord, SourceKind
 from quanxin_life.features import EarlyCycleFeatureConfig
 from quanxin_life.infrastructure.feishu_queue import FEISHU_ANALYSIS_TASK
@@ -178,6 +181,39 @@ def test_feishu_aily_assembly_exposes_only_the_minimal_global_tools(tmp_path) ->
         "project_storage_lifetime",
         "generate_audited_report",
     }
+
+
+def test_feishu_aily_assembly_injects_existing_project_model_runtime(tmp_path) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = create_session_factory(engine)
+    context_service = ProjectInvocationContextService(sessions, clock=lambda: NOW)
+    project_ledger = SqlProjectAuditLedger(
+        sessions,
+        context_validator=context_service,
+        clock=lambda: NOW,
+    )
+    project_tool_service = SimpleNamespace(invoke_in_project=lambda *_args, **_kwargs: None)
+
+    components = create_feishu_aily_components(
+        session_factory=sessions,
+        celery_app=_CeleryApp(),
+        config=_config(tmp_path / "batches"),
+        feishu_transport=_NoNetworkTransport(),
+        project_model_dependencies=FeishuProjectModelDependencies(
+            context_service=context_service,
+            project_ledger=project_ledger,
+            project_tool_service=project_tool_service,
+        ),
+        clock=lambda: NOW,
+    )
+
+    executor = components.worker._project_model_executor
+    assert executor is not None
+    assert executor._context_service is context_service
+    assert executor._project_ledger is project_ledger
+    assert executor._project_tool_service is project_tool_service
+    assert components.worker._result_resolver is not components.audit_ledger
 
 
 def test_feishu_file_registration_is_fail_closed_without_trusted_metadata(

@@ -70,6 +70,90 @@ def test_unique_record_selection_fails_closed_on_ambiguous_matches() -> None:
         module.unique_match([{"id": "one"}, {"id": "two"}], label="project")
 
 
+class _DatasetClient:
+    def __init__(self, datasets: list[dict[str, object]]) -> None:
+        self.datasets = datasets
+        self.created_payloads: list[dict[str, object]] = []
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: dict[str, object] | None = None,
+    ) -> object:
+        if method == "GET":
+            return list(self.datasets)
+        assert method == "POST"
+        assert path == "/v1/datasets"
+        assert payload is not None
+        self.created_payloads.append(payload)
+        return {"dataset_id": "dataset-new", "status": "DRAFT", **payload}
+
+
+def test_bootstrap_ignores_legacy_dataset_schema_and_creates_cycle_records() -> None:
+    module = _module()
+    client = _DatasetClient(
+        [
+            {
+                "dataset_id": "dataset-legacy",
+                "name": module.DATASET_NAME,
+                "data_version": "matr-v1",
+                "schema_version": "canonical-v1",
+                "status": "FROZEN",
+            }
+        ]
+    )
+
+    dataset = module._dataset(
+        client,
+        project_id="project-1",
+        data_version="matr-v1",
+    )
+
+    assert dataset["dataset_id"] == "dataset-new"
+    assert client.created_payloads == [
+        {
+            "project_id": "project-1",
+            "name": module.DATASET_NAME,
+            "data_version": "matr-v1",
+            "schema_version": "cycle-record-v1",
+        }
+    ]
+
+
+def test_bootstrap_reuses_only_the_matching_cycle_record_dataset() -> None:
+    module = _module()
+    expected = {
+        "dataset_id": "dataset-current",
+        "name": module.DATASET_NAME,
+        "data_version": "matr-v1",
+        "schema_version": "cycle-record-v1",
+        "status": "FROZEN",
+    }
+    client = _DatasetClient(
+        [
+            {
+                "dataset_id": "dataset-legacy",
+                "name": module.DATASET_NAME,
+                "data_version": "matr-v1",
+                "schema_version": "canonical-v1",
+                "status": "FROZEN",
+            },
+            expected,
+        ]
+    )
+
+    dataset = module._dataset(
+        client,
+        project_id="project-1",
+        data_version="matr-v1",
+    )
+
+    assert dataset == expected
+    assert client.created_payloads == []
+
+
 def test_calibration_source_identity_comes_from_reviewed_runtime_registry(
     tmp_path: Path,
 ) -> None:

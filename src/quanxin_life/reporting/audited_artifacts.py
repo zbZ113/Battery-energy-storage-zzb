@@ -9,12 +9,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256 as hash_sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from pydantic import field_validator
 
-from quanxin_life.audit import AuditLedger
 from quanxin_life.core import ToolResult
 from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
@@ -66,7 +65,7 @@ def reviewed_reportlab_vera_font() -> ReviewedPdfFont:
     """Locate ReportLab's pinned, SHA-reviewed portable TrueType font."""
 
     try:
-        import reportlab
+        import reportlab  # type: ignore[import-untyped]
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
         raise ReportExportDependencyUnavailable(
             "PDF export requires installing the reporting dependency group"
@@ -89,12 +88,16 @@ class AuditedReportArtifact:
     sha256: str
 
 
+class RegisteredResultResolver(Protocol):
+    def resolve_registered_result(self, result_id: str) -> ToolResult: ...
+
+
 class AuditedReportArtifactExporter:
     """Resolve one audited result from the ledger and render approved formats."""
 
     def __init__(
         self,
-        ledger: AuditLedger,
+        ledger: RegisteredResultResolver,
         *,
         pdf_font: ReviewedPdfFont | None = None,
     ) -> None:

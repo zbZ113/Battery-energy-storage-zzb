@@ -19,6 +19,7 @@ CUTOFFS = (20, 50, 100, 150)
 REGISTRY_ID = "c31f62e68faa66e56b16d21ebdd3067d5dea0c8408bb3ad6baa73e05a42824be"
 PROJECT_NAME = "泉芯智寿本地验证"
 DATASET_NAME = "MATR_b3c34 本地验证样例"
+DATASET_SCHEMA_VERSION = "cycle-record-v1"
 
 
 def required_calibration_routes() -> tuple[tuple[str, int, str], ...]:
@@ -164,6 +165,7 @@ def _dataset(
             for item in datasets
             if item.get("name") == DATASET_NAME
             and item.get("data_version") == data_version
+            and item.get("schema_version") == DATASET_SCHEMA_VERSION
         ),
         label="dataset",
     )
@@ -177,7 +179,7 @@ def _dataset(
                 "project_id": project_id,
                 "name": DATASET_NAME,
                 "data_version": data_version,
-                "schema_version": "canonical-v1",
+                "schema_version": DATASET_SCHEMA_VERSION,
             },
         ),
         label="dataset",

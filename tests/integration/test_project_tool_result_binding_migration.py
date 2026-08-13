@@ -51,9 +51,10 @@ def test_project_tool_result_binding_migration_matches_frozen_contract(
         assert columns["result_sha256"]["type"].length == 64
         assert columns["binding_sha256"]["type"].length == 64
         assert columns["agent_run_id"]["nullable"] is True
+        assert columns["actor_session_id"]["nullable"] is True
         assert all(
             columns[name]["nullable"] is False
-            for name in required - {"agent_run_id"}
+            for name in required - {"actor_session_id", "agent_run_id"}
         )
 
         foreign_keys = {

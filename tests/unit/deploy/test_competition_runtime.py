@@ -200,6 +200,13 @@ def test_competition_runtime_opt_in_mounts_feishu_aily_and_shared_worker(
     assert "/v1/aily/analysis-tasks" in route_paths
     assert FEISHU_ANALYSIS_TASK in runtime.celery_app.tasks
     assert runtime.feishu_worker is not None
+    project_executor = runtime.feishu_worker._project_model_executor
+    assert project_executor is not None
+    assert project_executor._project_tool_service is runtime.agent_worker._tool_service
+    assert (
+        project_executor._project_ledger
+        is runtime.agent_worker._tool_service.project_audit_ledger
+    )
 
     resolver = runtime.feishu_worker._registration_resolver
     registered = resolver(

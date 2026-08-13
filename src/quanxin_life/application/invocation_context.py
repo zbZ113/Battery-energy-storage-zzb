@@ -24,6 +24,7 @@ from quanxin_life.core import (
 from quanxin_life.persistence.database import SessionFactory, session_scope
 from quanxin_life.persistence.models import (
     AgentRun,
+    FeishuBindingRow,
     Project,
     SessionRecord,
     User,
@@ -42,6 +43,7 @@ class ProjectInvocationSource(StrEnum):
 
     HTTP = "HTTP"
     AGENT = "AGENT"
+    FEISHU = "FEISHU"
 
 
 class ProjectInvocationAccessError(RuntimeError):
@@ -58,17 +60,18 @@ class VerifiedProjectInvocationContext:
 
     project_id: str
     actor_user_id: str
-    actor_session_id: str
+    actor_session_id: str | None
     actor_role: UserRole
     invocation_source: ProjectInvocationSource
     agent_run_id: str | None = None
+    feishu_binding_id: str | None = None
+    _feishu_identity_sha256: str | None = field(repr=False, compare=True, default=None)
     _authorization_tag: str = field(repr=False, compare=True, default="")
 
     def __post_init__(self) -> None:
         for field_name in (
             "project_id",
             "actor_user_id",
-            "actor_session_id",
         ):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
@@ -78,16 +81,49 @@ class VerifiedProjectInvocationContext:
         if not isinstance(self.invocation_source, ProjectInvocationSource):
             raise TypeError("invocation_source must be a ProjectInvocationSource")
         if self.invocation_source is ProjectInvocationSource.HTTP:
-            if self.agent_run_id is not None:
-                raise ValueError("HTTP invocation context cannot contain agent_run_id")
-        elif not isinstance(self.agent_run_id, str) or not self.agent_run_id.strip():
-            raise ValueError("Agent invocation context requires a nonblank agent_run_id")
+            self._require_session_id()
+            if self.agent_run_id is not None or self.feishu_binding_id is not None:
+                raise ValueError("HTTP invocation context contains invalid source bindings")
+            if self._feishu_identity_sha256 is not None:
+                raise ValueError("HTTP invocation context contains Feishu identity evidence")
+        elif self.invocation_source is ProjectInvocationSource.AGENT:
+            self._require_session_id()
+            if not isinstance(self.agent_run_id, str) or not self.agent_run_id.strip():
+                raise ValueError("Agent invocation context requires a nonblank agent_run_id")
+            if self.feishu_binding_id is not None or self._feishu_identity_sha256 is not None:
+                raise ValueError("Agent invocation context contains Feishu identity evidence")
+        else:
+            if self.actor_session_id is not None or self.agent_run_id is not None:
+                raise ValueError("Feishu invocation context cannot contain session or Agent IDs")
+            if (
+                not isinstance(self.feishu_binding_id, str)
+                or not self.feishu_binding_id.strip()
+            ):
+                raise ValueError("Feishu invocation context requires a binding ID")
+            self._require_sha256(
+                self._feishu_identity_sha256,
+                field_name="Feishu identity digest",
+            )
         if (
             len(self._authorization_tag) != 64
             or self._authorization_tag.casefold() != self._authorization_tag
             or any(character not in "0123456789abcdef" for character in self._authorization_tag)
         ):
             raise ValueError("authorization tag must be a lowercase SHA-256 digest")
+
+    def _require_session_id(self) -> None:
+        if not isinstance(self.actor_session_id, str) or not self.actor_session_id.strip():
+            raise ValueError("actor_session_id must not be blank")
+
+    @staticmethod
+    def _require_sha256(value: str | None, *, field_name: str) -> None:
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or value.casefold() != value
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError(f"{field_name} must be a lowercase SHA-256 digest")
 
 
 class ProjectInvocationContextService:
@@ -188,6 +224,68 @@ class ProjectInvocationContextService:
         )
         return replace(unsigned, _authorization_tag=self._sign(unsigned))
 
+    def resolve_feishu(
+        self,
+        *,
+        chat_id: str,
+        sender_open_id: str,
+    ) -> VerifiedProjectInvocationContext:
+        """Issue a project context from one unique ACTIVE Feishu identity binding."""
+
+        normalized_chat_id = chat_id.strip() if isinstance(chat_id, str) else ""
+        normalized_open_id = (
+            sender_open_id.strip() if isinstance(sender_open_id, str) else ""
+        )
+        if not normalized_chat_id or not normalized_open_id:
+            raise ProjectInvocationAccessError("Feishu binding is required")
+
+        with session_scope(self._session_factory) as session:
+            bindings = tuple(
+                session.scalars(
+                    select(FeishuBindingRow).where(
+                        FeishuBindingRow.chat_id == normalized_chat_id,
+                        FeishuBindingRow.status == "ACTIVE",
+                    )
+                ).all()
+            )
+            matches = tuple(
+                (binding, local_user_id)
+                for binding in bindings
+                for local_user_id, open_id in binding.user_open_id_map_json.items()
+                if open_id == normalized_open_id
+            )
+            if len(matches) != 1:
+                raise ProjectInvocationAccessError(
+                    "Feishu binding is not uniquely authorized"
+                )
+            binding, actor_user_id = matches[0]
+            actor_role = self._resolve_actor_role(session.get(User, actor_user_id))
+            self._authorize_project_actor(
+                session=session,
+                project_id=binding.project_id,
+                actor_user_id=actor_user_id,
+                actor_role=actor_role,
+            )
+            identity_sha256 = self._feishu_identity_digest(
+                binding=binding,
+                actor_user_id=actor_user_id,
+                sender_open_id=normalized_open_id,
+            )
+            project_id = binding.project_id
+            binding_id = binding.id
+
+        unsigned = VerifiedProjectInvocationContext(
+            project_id=project_id,
+            actor_user_id=actor_user_id,
+            actor_session_id=None,
+            actor_role=actor_role,
+            invocation_source=ProjectInvocationSource.FEISHU,
+            feishu_binding_id=binding_id,
+            _feishu_identity_sha256=identity_sha256,
+            _authorization_tag="0" * 64,
+        )
+        return replace(unsigned, _authorization_tag=self._sign(unsigned))
+
     def revalidate(
         self,
         context: VerifiedProjectInvocationContext,
@@ -198,14 +296,22 @@ class ProjectInvocationContextService:
             raise ProjectInvocationAccessError("verified project context is required")
         if not hmac.compare_digest(context._authorization_tag, self._sign(context)):
             raise ProjectInvocationAccessError("project invocation context is not trusted")
-        self._authorize_live_scope(
-            project_id=context.project_id,
-            actor_user_id=context.actor_user_id,
-            actor_session_id=context.actor_session_id,
-            actor_role=context.actor_role,
-        )
+        if context.invocation_source is ProjectInvocationSource.FEISHU:
+            self._authorize_live_feishu_scope(context)
+        else:
+            if context.actor_session_id is None:  # pragma: no cover - dataclass invariant
+                raise ProjectInvocationAccessError("project actor is no longer authorized")
+            self._authorize_live_scope(
+                project_id=context.project_id,
+                actor_user_id=context.actor_user_id,
+                actor_session_id=context.actor_session_id,
+                actor_role=context.actor_role,
+            )
         if context.invocation_source is ProjectInvocationSource.AGENT:
-            if context.agent_run_id is None:  # pragma: no cover - dataclass invariant
+            if (
+                context.agent_run_id is None
+                or context.actor_session_id is None
+            ):  # pragma: no cover - dataclass invariant
                 raise ProjectInvocationAccessError(
                     "persisted Agent run is no longer authorized"
                 )
@@ -216,6 +322,59 @@ class ProjectInvocationContextService:
                 actor_session_id=context.actor_session_id,
             )
         return context
+
+    def _authorize_live_feishu_scope(
+        self,
+        context: VerifiedProjectInvocationContext,
+    ) -> None:
+        binding_id = context.feishu_binding_id
+        identity_sha256 = context._feishu_identity_sha256
+        if binding_id is None or identity_sha256 is None:  # pragma: no cover - invariant
+            raise ProjectInvocationAccessError("Feishu binding is no longer authorized")
+        with session_scope(self._session_factory) as session:
+            binding = session.get(FeishuBindingRow, binding_id)
+            if (
+                binding is None
+                or binding.status != "ACTIVE"
+                or binding.project_id != context.project_id
+                or not binding.chat_id
+            ):
+                raise ProjectInvocationAccessError(
+                    "Feishu binding is no longer authorized"
+                )
+            sender_open_id = binding.user_open_id_map_json.get(context.actor_user_id)
+            if not sender_open_id or not hmac.compare_digest(
+                identity_sha256,
+                self._feishu_identity_digest(
+                    binding=binding,
+                    actor_user_id=context.actor_user_id,
+                    sender_open_id=sender_open_id,
+                ),
+            ):
+                raise ProjectInvocationAccessError(
+                    "Feishu binding is no longer authorized"
+                )
+            matching_bindings = tuple(
+                candidate.id
+                for candidate in session.scalars(
+                    select(FeishuBindingRow).where(
+                        FeishuBindingRow.chat_id == binding.chat_id,
+                        FeishuBindingRow.status == "ACTIVE",
+                    )
+                ).all()
+                for mapped_open_id in candidate.user_open_id_map_json.values()
+                if mapped_open_id == sender_open_id
+            )
+            if matching_bindings != (binding.id,):
+                raise ProjectInvocationAccessError(
+                    "Feishu binding is no longer authorized"
+                )
+            self._authorize_project_actor(
+                session=session,
+                project_id=context.project_id,
+                actor_user_id=context.actor_user_id,
+                actor_role=context.actor_role,
+            )
 
     def _authorize_agent_run_binding(
         self,
@@ -263,21 +422,69 @@ class ProjectInvocationContextService:
                 or session_record.expires_at <= now
             ):
                 raise ProjectInvocationAccessError("project actor is no longer authorized")
-
-            project = session.get(Project, project_id)
-            if project is None or project.status != ProjectStatus.ACTIVE.value:
-                raise ProjectInvocationNotFoundError("project scope was not found")
-            if actor_role is UserRole.ADMIN or project.owner_user_id == actor_user_id:
-                return
-            membership = session.scalar(
-                select(UserProjectRole.id).where(
-                    UserProjectRole.user_id == actor_user_id,
-                    UserProjectRole.project_id == project_id,
-                    UserProjectRole.role == actor_role.value,
-                )
+            self._authorize_project_actor(
+                session=session,
+                project_id=project_id,
+                actor_user_id=actor_user_id,
+                actor_role=actor_role,
             )
-            if membership is None:
-                raise ProjectInvocationNotFoundError("project scope was not found")
+
+    @staticmethod
+    def _resolve_actor_role(user: User | None) -> UserRole:
+        if user is None or user.status != UserStatus.ACTIVE.value or user.must_change_credential:
+            raise ProjectInvocationAccessError("Feishu actor is no longer authorized")
+        try:
+            actor_role = UserRole(user.role)
+        except ValueError as exc:
+            raise ProjectInvocationAccessError(
+                "Feishu actor is no longer authorized"
+            ) from exc
+        if actor_role not in {UserRole.ADMIN, UserRole.MEMBER}:
+            raise ProjectInvocationAccessError("Feishu actor is no longer authorized")
+        return actor_role
+
+    @staticmethod
+    def _authorize_project_actor(
+        *,
+        session: object,
+        project_id: str,
+        actor_user_id: str,
+        actor_role: UserRole,
+    ) -> None:
+        project = session.get(Project, project_id)  # type: ignore[attr-defined]
+        if project is None or project.status != ProjectStatus.ACTIVE.value:
+            raise ProjectInvocationNotFoundError("project scope was not found")
+        if actor_role is UserRole.ADMIN or project.owner_user_id == actor_user_id:
+            return
+        membership = session.scalar(  # type: ignore[attr-defined]
+            select(UserProjectRole.id).where(
+                UserProjectRole.user_id == actor_user_id,
+                UserProjectRole.project_id == project_id,
+                UserProjectRole.role == actor_role.value,
+            )
+        )
+        if membership is None:
+            raise ProjectInvocationNotFoundError("project scope was not found")
+
+    @staticmethod
+    def _feishu_identity_digest(
+        *,
+        binding: FeishuBindingRow,
+        actor_user_id: str,
+        sender_open_id: str,
+    ) -> str:
+        return hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "binding_id": binding.id,
+                    "binding_version": binding.binding_version,
+                    "project_id": binding.project_id,
+                    "chat_id": binding.chat_id,
+                    "actor_user_id": actor_user_id,
+                    "sender_open_id": sender_open_id,
+                }
+            )
+        ).hexdigest()
 
     def _current_time(self) -> datetime:
         value = self._clock()
@@ -294,6 +501,8 @@ class ProjectInvocationContextService:
                 "actor_role": context.actor_role.value,
                 "invocation_source": context.invocation_source.value,
                 "agent_run_id": context.agent_run_id,
+                "feishu_binding_id": context.feishu_binding_id,
+                "feishu_identity_sha256": context._feishu_identity_sha256,
             }
         )
         return hmac.new(self._signing_key, payload, hashlib.sha256).hexdigest()

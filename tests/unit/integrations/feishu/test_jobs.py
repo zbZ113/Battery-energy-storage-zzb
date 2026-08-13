@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import create_engine, select
 
 from quanxin_life.api.feishu import FeishuEventRouteStatus
 from quanxin_life.integrations.feishu.events import FeishuReceiptClaimStatus
 from quanxin_life.integrations.feishu.jobs import (
+    FeishuAnalysisJobOrigin,
+    FeishuAnalysisJobStage,
     FeishuAnalysisJobStatus,
     FeishuJobClaimStatus,
+    FeishuJobDeliveryReceipt,
     FeishuJobDispatchReceipt,
+    SqlAlchemyFeishuJobReplayService,
     SqlAlchemyFeishuJobRouter,
     SqlAlchemyFeishuJobStore,
 )
@@ -267,3 +272,149 @@ def test_live_worker_checkpoints_delivery_references_for_retry_replay() -> None:
     assert snapshot.report_message_id == "om-report-file"
     assert snapshot.report_card_message_id == "om-report-card"
     assert snapshot.bitable_record_id == "rec-run"
+
+
+def test_route_rejection_replay_creates_one_new_auditable_job() -> None:
+    receipts, jobs, session_factory = _fixture()
+    claim = receipts.claim(
+        event_id="evt-job-1",
+        event_type="im.message.receive_v1",
+        payload_sha256="a" * 64,
+        received_at=NOW,
+    )
+    assert claim.claim_token is not None
+    original_queue = _Queue()
+    SqlAlchemyFeishuJobRouter(
+        jobs,
+        queue=original_queue,
+        task_resolver=lambda event: FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        clock=lambda: NOW,
+    ).route_event(event=_reference(), claim_token=claim.claim_token)
+    source_job_id = original_queue.job_ids[0]
+    owned = jobs.claim(job_id=source_job_id, claimed_at=NOW)
+    assert owned.claim_token is not None
+    jobs.checkpoint_batch(
+        job_id=source_job_id,
+        claim_token=owned.claim_token,
+        record_batch_id="canonical-csv-" + "b" * 64,
+        cell_reference="MATR_b3c34",
+        input_file_sha256="c" * 64,
+        updated_at=NOW,
+    )
+    jobs.checkpoint_results(
+        job_id=source_job_id,
+        claim_token=owned.claim_token,
+        validation_result_id="d" * 64,
+        updated_at=NOW,
+    )
+    jobs.checkpoint_delivery(
+        job_id=source_job_id,
+        claim_token=owned.claim_token,
+        result_card_message_id="om-original-rejection",
+        bitable_record_id="rec-original-rejection",
+        updated_at=NOW,
+    )
+    jobs.finish(
+        job_id=source_job_id,
+        claim_token=owned.claim_token,
+        status=FeishuAnalysisJobStatus.REJECTED,
+        stage=FeishuAnalysisJobStage.REJECTED,
+        error_code="MODEL_ROUTE_NOT_ACTIVATED",
+        delivery=FeishuJobDeliveryReceipt(
+            bitable_record_id="rec-original-rejection",
+            report_file_key=None,
+        ),
+        completed_at=NOW,
+    )
+    replay_queue = _Queue()
+    service = SqlAlchemyFeishuJobReplayService(
+        jobs,
+        queue=replay_queue,
+        clock=lambda: NOW + timedelta(minutes=1),
+    )
+
+    replay_job_id = service.replay_rejected(
+        source_job_id=source_job_id,
+        replay_key="project-binding-activated-v1",
+    )
+    duplicate_job_id = service.replay_rejected(
+        source_job_id=source_job_id,
+        replay_key="project-binding-activated-v1",
+    )
+
+    assert duplicate_job_id == replay_job_id
+    assert replay_queue.job_ids == [replay_job_id]
+    original = jobs.get(source_job_id)
+    replay = jobs.get(replay_job_id)
+    assert original.job_status is FeishuAnalysisJobStatus.REJECTED
+    assert original.job_last_error_code == "MODEL_ROUTE_NOT_ACTIVATED"
+    assert original.validation_result_id == "d" * 64
+    assert original.result_card_message_id == "om-original-rejection"
+    assert original.bitable_record_id == "rec-original-rejection"
+    assert replay.job_origin is FeishuAnalysisJobOrigin.FEISHU
+    assert replay.job_status is FeishuAnalysisJobStatus.PENDING
+    assert replay.job_stage == FeishuAnalysisJobStage.RECEIVED.value
+    assert replay.job_attempt_count == 0
+    assert replay.job_completed_at is None
+    assert replay.message_id == original.message_id
+    assert replay.file_key == original.file_key
+    assert replay.file_name == original.file_name
+    assert replay.chat_id == original.chat_id
+    assert replay.sender_id == original.sender_id
+    assert replay.receive_id_type == original.receive_id_type
+    assert replay.record_batch_id is None
+    assert replay.validation_result_id is None
+    assert replay.analysis_result_id is None
+    assert replay.report_result_id is None
+    assert replay.result_card_message_id is None
+    assert replay.bitable_record_id is None
+    with session_factory() as session:
+        row = session.scalar(
+            select(FeishuEventReceipt).where(
+                FeishuEventReceipt.job_id == replay_job_id
+            )
+        )
+        assert row is not None
+        assert row.event_type == "feishu.analysis_job.replay_v1"
+        assert row.event_id.startswith(f"replay:{source_job_id}:")
+        assert len(row.payload_sha256) == 64
+
+
+def test_replay_rejects_non_route_terminal_reason() -> None:
+    receipts, jobs, _session_factory = _fixture()
+    claim = receipts.claim(
+        event_id="evt-job-1",
+        event_type="im.message.receive_v1",
+        payload_sha256="a" * 64,
+        received_at=NOW,
+    )
+    assert claim.claim_token is not None
+    queue = _Queue()
+    SqlAlchemyFeishuJobRouter(
+        jobs,
+        queue=queue,
+        task_resolver=lambda event: FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        clock=lambda: NOW,
+    ).route_event(event=_reference(), claim_token=claim.claim_token)
+    source_job_id = queue.job_ids[0]
+    owned = jobs.claim(job_id=source_job_id, claimed_at=NOW)
+    assert owned.claim_token is not None
+    jobs.finish(
+        job_id=source_job_id,
+        claim_token=owned.claim_token,
+        status=FeishuAnalysisJobStatus.REJECTED,
+        stage=FeishuAnalysisJobStage.REJECTED,
+        error_code="ATTACHMENT_REJECTED",
+        delivery=None,
+        completed_at=NOW,
+    )
+
+    with pytest.raises(ValueError, match="MODEL_ROUTE_NOT_ACTIVATED"):
+        SqlAlchemyFeishuJobReplayService(
+            jobs,
+            queue=_Queue(),
+            clock=lambda: NOW + timedelta(minutes=1),
+        ).replay_rejected(
+            source_job_id=source_job_id,
+            replay_key="project-binding-activated-v1",
+        )

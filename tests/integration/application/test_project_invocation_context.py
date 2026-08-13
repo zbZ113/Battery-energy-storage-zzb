@@ -176,6 +176,7 @@ def test_http_operator_resolves_frozen_active_project_context(
         "actor_role",
         "invocation_source",
         "agent_run_id",
+        "feishu_binding_id",
     )
     assert resolved.project_id == context.active_project_id
     assert resolved.actor_user_id == principal.user_id
@@ -183,6 +184,7 @@ def test_http_operator_resolves_frozen_active_project_context(
     assert resolved.actor_role is principal.role
     assert resolved.invocation_source is ProjectInvocationSource.HTTP
     assert resolved.agent_run_id is None
+    assert resolved.feishu_binding_id is None
     assert len(resolved._authorization_tag) == 64
     with pytest.raises(FrozenInstanceError):
         resolved.project_id = str(uuid4())  # type: ignore[misc]

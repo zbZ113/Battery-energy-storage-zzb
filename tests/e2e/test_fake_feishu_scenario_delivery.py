@@ -385,10 +385,15 @@ def test_fake_feishu_scenario_pipeline_delivers_only_audited_results() -> None:
     assert all(not isinstance(value, list | dict) for value in fields.values())
     assert "natural_years" not in repr(fields)
     assert "model_effective_full_cycles" not in repr(fields)
-    result_card = _result_card_content(transport, analysis.result_id)
+    result_card = _result_card_content(transport)
     assert snapshot.scenario_image_key in result_card
-    assert "values.artifact.baseline.final_soh" in result_card
-    assert "values.artifact.comparisons.0.final_soh" in result_card
+    assert "储能工况年份推演" in result_card
+    assert "15 年 SOH" in result_card
+    assert "20 年 SOH" in result_card
+    assert "25 年 SOH" in result_card
+    assert "不是 MATR 电芯的自然年换算" in result_card
+    assert "values.artifact" not in result_card
+    assert analysis.result_id not in result_card
     assert "natural_years" not in result_card
     assert "model_effective_full_cycles" not in result_card
 
@@ -450,7 +455,6 @@ def _created_bitable_fields(
 
 def _result_card_content(
     transport: _SandboxAsgiTransport,
-    result_id: str,
 ) -> str:
     for request in transport.requests:
         if request.method != "POST" or _path(request) != "/open-apis/im/v1/messages":
@@ -458,7 +462,13 @@ def _result_card_content(
         if not isinstance(request.json_body, dict):
             continue
         content = request.json_body.get("content")
-        if isinstance(content, str) and result_id in content:
-            json.loads(content)
+        if not isinstance(content, str):
+            continue
+        decoded = json.loads(content)
+        if (
+            isinstance(decoded, dict)
+            and decoded.get("header", {}).get("title", {}).get("content")
+            == "储能工况年份推演"
+        ):
             return content
     raise AssertionError("audited scenario result card was not sent")

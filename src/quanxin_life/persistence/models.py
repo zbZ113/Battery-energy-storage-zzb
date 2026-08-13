@@ -466,7 +466,8 @@ class ProjectToolResultBindingRecord(Base):
         ),
         CheckConstraint(
             "binding_schema_version IN "
-            "('project-tool-result-binding-v1', 'project-tool-result-binding-v2')",
+            "('project-tool-result-binding-v1', 'project-tool-result-binding-v2', "
+            "'project-tool-result-binding-v3')",
             name="ck_project_tool_result_binding_schema_version",
         ),
         CheckConstraint(
@@ -474,7 +475,7 @@ class ProjectToolResultBindingRecord(Base):
             name="ck_project_tool_result_binding_actor_role",
         ),
         CheckConstraint(
-            "invocation_source IN ('HTTP', 'AGENT')",
+            "invocation_source IN ('HTTP', 'AGENT', 'FEISHU')",
             name="ck_project_tool_result_binding_invocation_source",
         ),
         CheckConstraint(
@@ -495,7 +496,8 @@ class ProjectToolResultBindingRecord(Base):
         ),
         CheckConstraint(
             "(binding_schema_version = 'project-tool-result-binding-v1' AND "
-            "invocation_source = 'HTTP' AND agent_run_id IS NULL AND "
+            "invocation_source = 'HTTP' AND actor_session_id IS NOT NULL AND "
+            "feishu_binding_id IS NULL AND agent_run_id IS NULL AND "
             "agent_step_id IS NULL AND step_id IS NULL AND plan_hash IS NULL AND "
             "claim_token_sha256 IS NULL AND claim_attempt IS NULL AND "
             "claim_lease_expires_at IS NULL AND execution_snapshot_sha256 IS NULL AND "
@@ -503,7 +505,8 @@ class ProjectToolResultBindingRecord(Base):
             "approval_request_id IS NULL AND approval_action_id IS NULL AND "
             "approval_evidence_sha256 IS NULL) OR "
             "(binding_schema_version = 'project-tool-result-binding-v2' AND "
-            "invocation_source = 'AGENT' AND agent_run_id IS NOT NULL AND "
+            "invocation_source = 'AGENT' AND actor_session_id IS NOT NULL AND "
+            "feishu_binding_id IS NULL AND agent_run_id IS NOT NULL AND "
             "agent_step_id IS NOT NULL AND step_id IS NOT NULL AND "
             "plan_hash IS NOT NULL AND claim_token_sha256 IS NOT NULL AND "
             "claim_attempt IS NOT NULL AND claim_attempt > 0 AND "
@@ -513,7 +516,17 @@ class ProjectToolResultBindingRecord(Base):
             "approval_required IS NOT NULL AND approval_evidence_sha256 IS NOT NULL AND "
             "((approval_required IS FALSE AND approval_request_id IS NULL AND "
             "approval_action_id IS NULL) OR (approval_required IS TRUE AND "
-            "approval_request_id IS NOT NULL AND approval_action_id IS NOT NULL)))",
+            "approval_request_id IS NOT NULL AND approval_action_id IS NOT NULL))) OR "
+            "(binding_schema_version = 'project-tool-result-binding-v3' AND "
+            "invocation_source = 'FEISHU' AND "
+            "actor_role IN ('ADMIN', 'MEMBER') AND actor_session_id IS NULL AND "
+            "feishu_binding_id IS NOT NULL AND agent_run_id IS NULL AND "
+            "agent_step_id IS NULL AND step_id IS NULL AND plan_hash IS NULL AND "
+            "claim_token_sha256 IS NULL AND claim_attempt IS NULL AND "
+            "claim_lease_expires_at IS NULL AND execution_snapshot_sha256 IS NULL AND "
+            "dependency_evidence_sha256 IS NULL AND approval_required IS NULL AND "
+            "approval_request_id IS NULL AND approval_action_id IS NULL AND "
+            "approval_evidence_sha256 IS NULL)",
             name="ck_project_tool_result_binding_exact_agent_contract",
         ),
         UniqueConstraint(
@@ -537,11 +550,14 @@ class ProjectToolResultBindingRecord(Base):
     actor_user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id"), nullable=False
     )
-    actor_session_id: Mapped[str] = mapped_column(
-        ForeignKey("sessions.id"), nullable=False
+    actor_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sessions.id"), nullable=True
     )
     actor_role: Mapped[str] = mapped_column(String(32), nullable=False)
     invocation_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    feishu_binding_id: Mapped[str | None] = mapped_column(
+        ForeignKey("feishu_bindings.id")
+    )
     agent_run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id"))
     agent_step_id: Mapped[str | None] = mapped_column(ForeignKey("agent_steps.id"))
     step_id: Mapped[str | None] = mapped_column(String(200))

@@ -160,10 +160,11 @@ class _RouteService:
     def __init__(self, routes: list[object]) -> None:
         self.routes = routes
         self.calls: list[tuple[object, int, object]] = []
+        self.principals: list[object] = []
 
     def resolve_verified_active_model_route(
         self,
-        _principal: object,
+        principal: object,
         *,
         project_id: str,
         task: AdvancedModelTask,
@@ -171,6 +172,7 @@ class _RouteService:
         role: AdvancedModelRouteRole,
     ) -> object:
         assert project_id == "project-1"
+        self.principals.append(principal)
         self.calls.append((task, cutoff_cycle, role))
         if len(self.routes) > 1:
             return self.routes.pop(0)
@@ -226,6 +228,37 @@ def test_resolver_revalidates_exact_route_and_artifact_before_returning_runtime(
     ]
     assert provider.calls == 2
     assert context_service.calls == 2
+
+
+def test_resolver_uses_sessionless_visibility_subject_for_feishu_context() -> None:
+    context = replace(
+        _context(),
+        actor_session_id=None,
+        invocation_source=ProjectInvocationSource.FEISHU,
+        feishu_binding_id="binding-1",
+        _feishu_identity_sha256="f" * 64,
+    )
+    route = _route()
+    route_service = _RouteService([route])
+    resolver = ActiveAdvancedRuntimeResolver(
+        context_service=_ContextService(),
+        route_service=route_service,
+        runtime_provider=_RuntimeProvider(
+            [_artifact(route, torch.nn.Identity())]
+        ),
+    )
+
+    resolver.resolve(
+        context,
+        task=AdvancedModelTask.RUL,
+        cutoff_cycle=20,
+        role=AdvancedModelRouteRole.DEFAULT,
+    )
+
+    assert len(route_service.principals) == 2
+    assert all(principal.user_id == "user-1" for principal in route_service.principals)
+    assert all(principal.role is UserRole.ADMIN for principal in route_service.principals)
+    assert all(not hasattr(principal, "session_id") for principal in route_service.principals)
 
 
 def test_resolver_rejects_loaded_artifact_model_version_mismatch() -> None:

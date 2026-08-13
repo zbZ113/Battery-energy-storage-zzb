@@ -126,6 +126,27 @@ class _Delivery:
         )
 
 
+class _JobBoundResultResolver:
+    def __init__(
+        self,
+        *,
+        ledger: AuditLedger,
+        jobs: SqlAlchemyFeishuJobStore,
+        run_id: str,
+    ) -> None:
+        self._ledger = ledger
+        self._jobs = jobs
+        self._run_id = run_id
+
+    def resolve_registered_result(self, result_id: str) -> ToolResult:
+        if not self._jobs.is_result_bound_to_run(
+            run_id=self._run_id,
+            result_id=result_id,
+        ):
+            raise ValueError("ToolResult is not bound to the scenario job")
+        return self._ledger.resolve_registered_result(result_id)
+
+
 def _scenario() -> OperationScenario:
     return OperationScenario(
         scenario_id="baseline",
@@ -274,6 +295,11 @@ def test_worker_resolves_scenario_context_without_downloading_and_runs_real_tool
     )
     delivery = _Delivery()
     client = _NoDownloadClient()
+    bound_resolver = _JobBoundResultResolver(
+        ledger=ledger,
+        jobs=jobs,
+        run_id=queue.job_id,
+    )
 
     worker = FeishuAnalysisJobWorker(
         jobs,
@@ -292,7 +318,7 @@ def test_worker_resolves_scenario_context_without_downloading_and_runs_real_tool
         ).model_dump(mode="json"),
         scenario_input_resolver=context_store,
         workflow=workflow,
-        result_resolver=ledger,
+        result_resolver=bound_resolver,
         report_result_factory=FeishuScenarioReportResultFactory(service),
         delivery=delivery,
         clock=lambda: NOW,

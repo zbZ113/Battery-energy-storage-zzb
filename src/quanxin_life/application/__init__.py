@@ -20,6 +20,7 @@ _EXPORT_MODULES = {
     "FeishuAilyAssemblyConfig": "feishu_aily_assembly",
     "FeishuAilyComponents": "feishu_aily_assembly",
     "FeishuCsvRegistrationResolver": "feishu_aily_assembly",
+    "FeishuProjectModelDependencies": "feishu_aily_assembly",
     "InMemoryVerifiedEarlyCycleBatchStore": "ingestion",
     "LifetimeDecisionWorkflowRequest": "lifetime_workflow",
     "LifetimeDecisionWorkflowResult": "lifetime_workflow",

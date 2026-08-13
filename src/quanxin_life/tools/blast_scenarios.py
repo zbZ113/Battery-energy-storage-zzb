@@ -45,7 +45,7 @@ COMPARE_OPERATION_SCENARIOS_ARTIFACT_TYPE = (
 PROJECT_STORAGE_LIFETIME_ARTIFACT_TYPE = (
     "quanxin_life.project_storage_lifetime.v1"
 )
-SCENARIO_FEATURE_VERSION = "operation-scenario-contract-v1"
+SCENARIO_FEATURE_VERSION = "operation-scenario-contract-v2"
 _REFERENCE_MODEL_LABEL = "BLAST-Lite LFP reference scenario"
 _UNCERTAINTY = {
     "kind": "DETERMINISTIC_SCENARIO",
@@ -204,7 +204,11 @@ def _resolve_route_and_context(
     return context, authorized, []
 
 
-def _projection_payload(projection: ScenarioProjection) -> dict[str, object]:
+def _projection_payload(
+    projection: ScenarioProjection,
+    *,
+    scenario: OperationScenario,
+) -> dict[str, object]:
     payload = projection.model_dump(mode="json")
     payload.pop("model_class", None)
     payload.update(
@@ -215,6 +219,9 @@ def _projection_payload(projection: ScenarioProjection) -> dict[str, object]:
         }
     )
     payload["reference_model"] = _REFERENCE_MODEL_LABEL
+    payload["operating_segments"] = [
+        segment.model_dump(mode="json") for segment in scenario.segments
+    ]
     payload["scenario_assumptions"] = [
         "Beginning-of-life BLAST initialization.",
         "Monthly aggregation of active cycling and SOC residence.",
@@ -344,9 +351,17 @@ def execute_compare_operation_scenarios_tool(
             "route_id": validated.route_id,
             "reference_model": _REFERENCE_MODEL_LABEL,
             "evidence_level": EvidenceLevel.PHYSICS_REFERENCE.value,
-            "baseline": _projection_payload(projections[0]),
+            "baseline": _projection_payload(
+                projections[0],
+                scenario=validated.baseline,
+            ),
             "comparisons": [
-                _projection_payload(projection) for projection in projections[1:]
+                _projection_payload(projection, scenario=scenario)
+                for projection, scenario in zip(
+                    projections[1:],
+                    validated.comparisons,
+                    strict=True,
+                )
             ],
         }
         warnings = [
@@ -423,7 +438,10 @@ def execute_project_storage_lifetime_tool(
             "route_id": validated.route_id,
             "reference_model": _REFERENCE_MODEL_LABEL,
             "evidence_level": EvidenceLevel.PHYSICS_REFERENCE.value,
-            "projection": _projection_payload(projection),
+            "projection": _projection_payload(
+                projection,
+                scenario=validated.scenario,
+            ),
         }
         warnings = ["CANDIDATE_ROUTE_RESEARCH_USE_ONLY", *projection.warnings]
     return _result(

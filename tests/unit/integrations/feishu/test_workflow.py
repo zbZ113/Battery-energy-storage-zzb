@@ -170,6 +170,44 @@ def test_validation_block_prevents_prediction_invocation() -> None:
     assert captured.value.validation_result.tool_name == "validate_battery_data"
 
 
+def test_validate_returns_registered_evidence_without_authorizing_or_predicting() -> None:
+    prediction_calls: list[str] = []
+    service = _service(prediction_calls=prediction_calls)
+    authorizer = _RecordingRouteAuthorizer()
+    workflow = FeishuAnalysisWorkflow(
+        service,
+        route_authorizer=authorizer,
+        input_binder=_SameEvidenceInputBinder(),
+    )
+    valid_input = _input(
+        records=(
+            {
+                "dataset_id": "source",
+                "cell_id": "cell",
+                "cycle_index": 0,
+                "sample_index": 0,
+                "time_s": 0,
+                "voltage_v": 3,
+                "current_a": 0,
+                "temperature_c": None,
+                "charge_capacity_ah": None,
+                "discharge_capacity_ah": None,
+                "internal_resistance_ohm": None,
+                "diagnostic": False,
+                "valid": True,
+            },
+        )
+    )
+
+    result = workflow.validate(validation_input=valid_input)
+
+    assert result.tool_name == StandardToolName.VALIDATE_BATTERY_DATA.value
+    assert prediction_calls == []
+    assert authorizer.calls == []
+    assert service.audit_ledger is not None
+    assert service.audit_ledger.resolve_registered_result(result.result_id) == result
+
+
 def test_inactive_model_route_is_rejected_after_validation_and_before_prediction() -> None:
     prediction_calls: list[str] = []
     service = _service(prediction_calls=prediction_calls)

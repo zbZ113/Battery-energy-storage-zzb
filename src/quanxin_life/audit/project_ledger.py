@@ -117,6 +117,12 @@ class ProjectResultLedger(Protocol):
         result_id: str,
     ) -> ToolResult: ...
 
+    def resolve_binding(
+        self,
+        context: VerifiedProjectInvocationContext,
+        result_id: str,
+    ) -> ProjectToolResultBinding: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectToolResultBinding:
@@ -125,10 +131,11 @@ class ProjectToolResultBinding:
     result_id: str
     project_id: str
     actor_user_id: str
-    actor_session_id: str
+    actor_session_id: str | None
     actor_role: UserRole
     invocation_source: ProjectInvocationSource
     agent_run_id: str | None
+    feishu_binding_id: str | None
     tool_name: str
     input_hash: str
     agent_step_id: str | None = None
@@ -179,6 +186,7 @@ class ProjectAuditLedger:
             actor_role=verified.actor_role,
             invocation_source=verified.invocation_source,
             agent_run_id=verified.agent_run_id,
+            feishu_binding_id=verified.feishu_binding_id,
             tool_name=result.tool_name,
             input_hash=result.input_hash,
         )

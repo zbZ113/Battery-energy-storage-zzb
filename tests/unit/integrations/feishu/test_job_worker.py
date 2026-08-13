@@ -31,6 +31,8 @@ from quanxin_life.integrations.feishu.jobs import (
     FeishuJobDeliveryReceipt,
     FeishuJobDispatchReceipt,
     FeishuJobRetryableError,
+    FeishuProjectModelExecution,
+    FeishuProjectModelRejected,
     SqlAlchemyFeishuJobRouter,
     SqlAlchemyFeishuJobStore,
 )
@@ -152,6 +154,83 @@ class _Delivery:
         return FeishuJobDeliveryReceipt(
             bitable_record_id="rec-success",
             report_file_key="file-report",
+        )
+
+
+class _ProjectModelExecutor:
+    def __init__(
+        self,
+        ledger: AuditLedger,
+        *,
+        rejection_code: str | None = None,
+    ) -> None:
+        self._ledger = ledger
+        self._rejection_code = rejection_code
+        self.calls: list[tuple[str, int]] = []
+
+    def execute(
+        self,
+        job: object,
+        registration: CanonicalCsvBatchRegistration,
+    ) -> FeishuProjectModelExecution:
+        self.calls.append(
+            (registration.metadata.cell_id, registration.feature_config.cutoff_cycle)
+        )
+        if self._rejection_code is not None:
+            raise FeishuProjectModelRejected(self._rejection_code)
+        prepared = ToolResult(
+            result_id=str(uuid4()),
+            tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+            tool_version="prepare-advanced-input-tool-v1",
+            model_version="advanced-input-transform-v1",
+            data_version=registration.data_version,
+            feature_version=registration.feature_config.feature_version,
+            input_hash="1" * 64,
+            values={"artifact": {"record_batch_id": "project-batch-1"}},
+            provenance=list(registration.provenance),
+            created_at=NOW,
+        )
+        analysis = ToolResult(
+            result_id=str(uuid4()),
+            tool_name=StandardToolName.PREDICT_CYCLE_LIFE.value,
+            tool_version="advanced-rul-prediction-tool-v1",
+            model_version="reviewed-project-model-v1",
+            data_version=registration.data_version,
+            feature_version=registration.feature_config.feature_version,
+            input_hash="2" * 64,
+            values={
+                "artifact": {
+                    "cycle_life_prediction": {"predicted_cycle": 24},
+                    "derived_remaining_cycles": 4,
+                }
+            },
+            provenance=list(registration.provenance),
+            created_at=NOW,
+        )
+        report = ToolResult(
+            result_id=str(uuid4()),
+            tool_name=StandardToolName.GENERATE_AUDITED_REPORT.value,
+            tool_version="audited-report-tool-v1",
+            model_version="audited-markdown-v1",
+            data_version="ledger-bound-toolresults-v1",
+            feature_version="audited-evidence-v1",
+            input_hash="3" * 64,
+            values={
+                "report_id": str(uuid4()),
+                "rendering_version": "audited-markdown-v1",
+                "markdown": "# Audited\n",
+                "upstream_result_ids": [analysis.result_id],
+            },
+            provenance=list(registration.provenance),
+            created_at=NOW,
+        )
+        for result in (prepared, analysis, report):
+            self._ledger.register_result(result)
+        return FeishuProjectModelExecution(
+            record_batch_id="project-batch-1",
+            prepared_input_result_id=prepared.result_id,
+            analysis_result=analysis,
+            report_result=report,
         )
 
 
@@ -291,6 +370,8 @@ def _worker(
     analysis_input_error: Exception | None = None,
     analysis_rejection_reason: str | None = None,
     max_attempts: int = 3,
+    enable_project_model: bool = False,
+    project_model_rejection_code: str | None = None,
 ) -> FeishuAnalysisJobWorker:
     service, ledger = _tool_service(
         prediction_calls=prediction_calls,
@@ -300,6 +381,14 @@ def _worker(
         service,
         route_authorizer=_RouteAuthorizer(active=route_active),
         input_binder=_InputBinder(),
+    )
+    project_executor = (
+        _ProjectModelExecutor(
+            ledger,
+            rejection_code=project_model_rejection_code,
+        )
+        if enable_project_model
+        else None
     )
 
     def report_result(_job: object, result: ToolResult) -> ToolResult:
@@ -344,11 +433,86 @@ def _worker(
         workflow=workflow,
         result_resolver=ledger,
         report_result_factory=report_result,
+        project_model_executor=project_executor,
         delivery=delivery,
         clock=lambda: NOW,
         heartbeat_interval_seconds=30,
         max_attempts=max_attempts,
     )
+
+
+def test_worker_uses_project_model_executor_after_global_validation() -> None:
+    jobs, job_id = _job()
+    delivery = _Delivery()
+    predictions: list[str] = []
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=predictions,
+        delivery=delivery,
+        enable_project_model=True,
+    )
+
+    status = worker.execute(job_id=job_id)
+
+    snapshot = jobs.get(job_id)
+    assert status is FeishuAnalysisJobStatus.SUCCEEDED
+    assert predictions == []
+    assert snapshot.record_batch_id == "project-batch-1"
+    assert snapshot.validation_result_id is not None
+    assert snapshot.analysis_result_id is not None
+    assert snapshot.report_result_id is not None
+    assert delivery.successes == [
+        (snapshot.run_id, snapshot.analysis_result_id, snapshot.report_result_id)
+    ]
+
+
+def test_worker_does_not_call_project_model_after_validation_rejection() -> None:
+    jobs, job_id = _job()
+    delivery = _Delivery()
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(DUPLICATE_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=delivery,
+        enable_project_model=True,
+    )
+
+    status = worker.execute(job_id=job_id)
+
+    assert status is FeishuAnalysisJobStatus.REJECTED
+    assert jobs.get(job_id).analysis_result_id is None
+    assert delivery.rejections[0][1] == "DATA_VALIDATION_BLOCKED"
+
+
+def test_worker_preserves_validation_result_when_project_model_rejects() -> None:
+    jobs, job_id = _job()
+    delivery = _Delivery()
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=delivery,
+        enable_project_model=True,
+        project_model_rejection_code="PROJECT_RECORD_BATCH_NOT_FROZEN",
+    )
+
+    status = worker.execute(job_id=job_id)
+
+    snapshot = jobs.get(job_id)
+    assert status is FeishuAnalysisJobStatus.REJECTED
+    assert snapshot.validation_result_id is not None
+    assert snapshot.analysis_result_id is None
+    assert delivery.rejections == [
+        (
+            snapshot.run_id,
+            "PROJECT_RECORD_BATCH_NOT_FROZEN",
+            snapshot.validation_result_id,
+        )
+    ]
 
 
 def _response(payload: bytes) -> FeishuHttpResponse:

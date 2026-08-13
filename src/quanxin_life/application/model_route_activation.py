@@ -19,7 +19,7 @@ from quanxin_life.application.model_artifact_catalog import (
     VerifiedModelArtifactMetadata,
     VerifiedModelArtifactRegistration,
 )
-from quanxin_life.application.projects import ProjectService
+from quanxin_life.application.projects import ProjectService, ProjectVisibilitySubject
 from quanxin_life.auth import AuthPrincipal
 from quanxin_life.core import (
     AdvancedModelRouteRole,
@@ -395,7 +395,7 @@ class ModelRouteActivationService:
 
     def list_events(
         self,
-        principal: AuthPrincipal,
+        principal: ProjectVisibilitySubject,
         *,
         project_id: str,
         task: AdvancedModelTask,
@@ -420,7 +420,7 @@ class ModelRouteActivationService:
 
     def list_verified_active_model_routes(
         self,
-        principal: AuthPrincipal,
+        principal: ProjectVisibilitySubject,
         *,
         project_id: str,
     ) -> tuple[VerifiedActiveModelRoute, ...]:
@@ -468,7 +468,7 @@ class ModelRouteActivationService:
 
     def resolve_verified_active_model_route(
         self,
-        principal: AuthPrincipal,
+        principal: ProjectVisibilitySubject,
         *,
         project_id: str,
         task: AdvancedModelTask,
@@ -795,7 +795,7 @@ class ModelRouteActivationService:
     @staticmethod
     def _active_project(
         session: Session,
-        principal: AuthPrincipal,
+        principal: ProjectVisibilitySubject,
         project_id: str,
     ) -> Project:
         project = session.scalar(

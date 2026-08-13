@@ -419,7 +419,10 @@ def _sandbox_tool_service(prediction_calls: list[str]) -> ToolInvocationService:
             feature_version=input_value.feature_version,
             input_hash=sha256_canonical(input_value.model_dump(mode="json")),
             values={
+                "artifact_type": "quanxin_life.advanced_rul_prediction.v1",
                 "artifact": {
+                    "cell_id": "cell-sandbox",
+                    "cutoff_cycle": last_observed_cycle,
                     "cycle_life_prediction": {
                         "predicted_cycle": sandbox_projection
                     },

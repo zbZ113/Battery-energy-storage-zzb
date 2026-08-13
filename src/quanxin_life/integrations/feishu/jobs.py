@@ -107,6 +107,14 @@ class FeishuJobRetryableError(RuntimeError):
     """Raised after durable retry state is written so Celery redelivers the job."""
 
 
+class FeishuProjectModelRejected(RuntimeError):
+    """Machine-readable refusal from project-bound Feishu model orchestration."""
+
+    def __init__(self, reason_code: str, message: str | None = None) -> None:
+        super().__init__(message or reason_code)
+        self.reason_code = reason_code
+
+
 @dataclass(frozen=True, slots=True)
 class FeishuJobDispatchReceipt:
     job_id: str
@@ -165,6 +173,14 @@ class FeishuJobDeliveryReceipt:
 
 
 @dataclass(frozen=True, slots=True)
+class FeishuProjectModelExecution:
+    record_batch_id: str
+    prepared_input_result_id: str
+    analysis_result: ToolResult
+    report_result: ToolResult
+
+
+@dataclass(frozen=True, slots=True)
 class FeishuJobDeliveryProgress:
     scenario_image_key: str | None = None
     result_card_message_id: str | None = None
@@ -196,6 +212,14 @@ class FeishuResourceClient(Protocol):
 
 class RegisteredResultResolver(Protocol):
     def resolve_registered_result(self, result_id: str) -> ToolResult: ...
+
+
+class FeishuProjectModelExecutorPort(Protocol):
+    def execute(
+        self,
+        job: FeishuAnalysisJobRecord,
+        registration: CanonicalCsvBatchRegistration,
+    ) -> FeishuProjectModelExecution: ...
 
 
 class FeishuScenarioInputResolver(Protocol):
@@ -453,6 +477,99 @@ class SqlAlchemyFeishuJobStore:
                 task=task,
                 scenario_context_id=context_id,
                 request_sha256=request_sha256,
+            )
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def stage_replay(
+        self,
+        *,
+        source_job_id: str,
+        replay_key: str,
+        staged_at: datetime,
+    ) -> _StagedJob:
+        """Create one new job from an explicitly replayable terminal rejection."""
+
+        checked_source_job_id = validate_feishu_job_id(source_job_id)
+        checked_replay_key = _replay_key(replay_key)
+        now = _utc(staged_at)
+        replay_sha256 = sha256_canonical(
+            {
+                "schema_version": "feishu-analysis-job-replay-v1",
+                "source_job_id": checked_source_job_id,
+                "replay_key": checked_replay_key,
+            }
+        )
+        replay_event_id = f"replay:{checked_source_job_id}:{replay_sha256}"
+        session = self._session_factory()
+        try:
+            existing = session.scalar(
+                select(FeishuEventReceipt)
+                .where(FeishuEventReceipt.event_id == replay_event_id)
+                .with_for_update()
+            )
+            if existing is not None:
+                staged = self._existing_replay_job(
+                    existing,
+                    replay_sha256=replay_sha256,
+                )
+                session.rollback()
+                return staged
+            source = session.scalar(
+                select(FeishuEventReceipt)
+                .where(FeishuEventReceipt.job_id == checked_source_job_id)
+                .with_for_update()
+            )
+            self._require_replayable_route_rejection(source)
+            assert source is not None
+            job_id = str(uuid4())
+            session.add(
+                FeishuEventReceipt(
+                    id=str(uuid4()),
+                    event_id=replay_event_id,
+                    event_type="feishu.analysis_job.replay_v1",
+                    payload_sha256=replay_sha256,
+                    status=FeishuReceiptClaimStatus.PROCESSED.value,
+                    attempt_count=1,
+                    received_at=now,
+                    processed_at=now,
+                    job_id=job_id,
+                    job_origin=FeishuAnalysisJobOrigin.FEISHU.value,
+                    job_request_sha256=None,
+                    job_status=FeishuAnalysisJobStatus.PENDING.value,
+                    job_stage=FeishuAnalysisJobStage.RECEIVED.value,
+                    task_type=source.task_type,
+                    run_id=job_id,
+                    message_id=source.message_id,
+                    file_key=source.file_key,
+                    file_name=source.file_name,
+                    chat_id=source.chat_id,
+                    sender_id=source.sender_id,
+                    receive_id_type=source.receive_id_type,
+                    event_time=source.event_time,
+                    scenario_context_id=None,
+                    job_attempt_count=0,
+                    job_created_at=now,
+                    job_updated_at=now,
+                )
+            )
+            session.commit()
+            return _StagedJob(job_id=job_id, dispatched=False)
+        except IntegrityError:
+            session.rollback()
+            existing = session.scalar(
+                select(FeishuEventReceipt).where(
+                    FeishuEventReceipt.event_id == replay_event_id
+                )
+            )
+            if existing is None:
+                raise
+            return self._existing_replay_job(
+                existing,
+                replay_sha256=replay_sha256,
             )
         except Exception:
             session.rollback()
@@ -888,6 +1005,54 @@ class SqlAlchemyFeishuJobStore:
         )
 
     @staticmethod
+    def _existing_replay_job(
+        row: FeishuEventReceipt,
+        *,
+        replay_sha256: str,
+    ) -> _StagedJob:
+        if (
+            row.job_id is None
+            or row.event_type != "feishu.analysis_job.replay_v1"
+            or row.payload_sha256 != replay_sha256
+            or row.job_origin != FeishuAnalysisJobOrigin.FEISHU.value
+        ):
+            raise FeishuJobOwnershipError(
+                "Feishu replay conflicts with its persisted sanitized reference"
+            )
+        return _StagedJob(
+            job_id=row.job_id,
+            dispatched=row.job_task_id is not None,
+        )
+
+    @staticmethod
+    def _require_replayable_route_rejection(
+        row: FeishuEventReceipt | None,
+    ) -> None:
+        required_references = (
+            row.message_id if row is not None else None,
+            row.file_key if row is not None else None,
+            row.file_name if row is not None else None,
+            row.chat_id if row is not None else None,
+            row.sender_id if row is not None else None,
+            row.receive_id_type if row is not None else None,
+            row.event_time if row is not None else None,
+        )
+        if (
+            row is None
+            or row.job_origin != FeishuAnalysisJobOrigin.FEISHU.value
+            or row.job_status != FeishuAnalysisJobStatus.REJECTED.value
+            or row.job_stage != FeishuAnalysisJobStage.REJECTED.value
+            or row.job_last_error_code != "MODEL_ROUTE_NOT_ACTIVATED"
+            or row.task_type != FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value
+            or row.scenario_context_id is not None
+            or row.job_completed_at is None
+            or any(value is None for value in required_references)
+        ):
+            raise ValueError(
+                "replay requires a completed MODEL_ROUTE_NOT_ACTIVATED Feishu file job"
+            )
+
+    @staticmethod
     def _require_same_reference(
         row: FeishuEventReceipt,
         *,
@@ -962,6 +1127,39 @@ class SqlAlchemyFeishuJobRouter:
             dispatched_at=self._clock(),
         )
         return FeishuEventRouteStatus.ENQUEUED
+
+
+class SqlAlchemyFeishuJobReplayService:
+    """Idempotently replay one reviewed terminal route rejection as a new job."""
+
+    def __init__(
+        self,
+        store: SqlAlchemyFeishuJobStore,
+        *,
+        queue: FeishuJobQueue,
+        clock: Callable[[], datetime],
+    ) -> None:
+        self._store = store
+        self._queue = queue
+        self._clock = clock
+
+    def replay_rejected(self, *, source_job_id: str, replay_key: str) -> str:
+        staged = self._store.stage_replay(
+            source_job_id=source_job_id,
+            replay_key=replay_key,
+            staged_at=self._clock(),
+        )
+        if staged.dispatched:
+            return staged.job_id
+        receipt = self._queue.enqueue(job_id=staged.job_id)
+        if receipt.job_id != staged.job_id:
+            raise ValueError("Feishu queue returned a mismatched replay job identity")
+        self._store.mark_dispatched(
+            job_id=staged.job_id,
+            task_id=receipt.task_id,
+            dispatched_at=self._clock(),
+        )
+        return staged.job_id
 
 
 class FeishuAnalysisJobDelivery:
@@ -1253,6 +1451,7 @@ class FeishuAnalysisJobWorker:
         report_result_factory: Callable[
             [FeishuAnalysisJobRecord, ToolResult], ToolResult
         ],
+        project_model_executor: FeishuProjectModelExecutorPort | None = None,
         delivery: FeishuJobDelivery,
         clock: Callable[[], datetime],
         heartbeat_interval_seconds: int = 30,
@@ -1272,6 +1471,7 @@ class FeishuAnalysisJobWorker:
         self._workflow = workflow
         self._result_resolver = result_resolver
         self._report_result_factory = report_result_factory
+        self._project_model_executor = project_model_executor
         self._delivery = delivery
         self._clock = clock
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
@@ -1321,6 +1521,7 @@ class FeishuAnalysisJobWorker:
             report = self._resolve_result(job.report_result_id)
             return self._deliver_success(job, claim_token, analysis, report)
 
+        registration: CanonicalCsvBatchRegistration | None = None
         if job.task_type in _SCENARIO_TASKS:
             if self._scenario_input_resolver is None or job.scenario_context_id is None:
                 return self._reject(job, claim_token, "SCENARIO_CONTEXT_REQUIRED", None)
@@ -1452,6 +1653,18 @@ class FeishuAnalysisJobWorker:
                 return self._reject(job, claim_token, "ANALYSIS_INPUT_REJECTED", None)
             requested_analysis_input = validation_input
 
+        if (
+            self._project_model_executor is not None
+            and registration is not None
+            and job.task_type is FeishuAnalysisTask.PREDICT_CYCLE_LIFE
+        ):
+            return self._execute_project_model(
+                job=job,
+                claim_token=claim_token,
+                registration=registration,
+                validation_input=validation_input,
+            )
+
         try:
             self._store.update_stage(
                 job_id=job_id,
@@ -1507,19 +1720,106 @@ class FeishuAnalysisJobWorker:
                     mode="json"
                 )
             )
+            self._store.checkpoint_results(
+                job_id=job_id,
+                claim_token=claim_token,
+                report_result_id=report.result_id,
+                updated_at=self._now(),
+            )
             resolved_report = self._resolve_result(report.result_id)
             if resolved_report != report:
                 raise ValueError("report ToolResult registration changed")
         except (AttributeError, TypeError, ValueError):
             return self._fail(job, claim_token, "REPORT_RESULT_INVALID")
-        self._store.checkpoint_results(
-            job_id=job_id,
+        job = self._store.get(job_id)
+        return self._deliver_success(job, claim_token, outcome.analysis_result, report)
+
+    def _execute_project_model(
+        self,
+        *,
+        job: FeishuAnalysisJobRecord,
+        claim_token: str,
+        registration: CanonicalCsvBatchRegistration,
+        validation_input: Mapping[str, object],
+    ) -> FeishuAnalysisJobStatus:
+        executor = self._project_model_executor
+        if executor is None:  # pragma: no cover - guarded by caller
+            raise RuntimeError("project model executor is unavailable")
+        self._store.update_stage(
+            job_id=job.job_id,
             claim_token=claim_token,
+            stage=FeishuAnalysisJobStage.WAITING_FOR_ROUTE,
+            updated_at=self._now(),
+        )
+        try:
+            validation = self._workflow.validate(validation_input=validation_input)
+        except FeishuWorkflowRejected as exc:
+            primary_result_id = None
+            if exc.validation_result is not None:
+                primary_result_id = exc.validation_result.result_id
+                self._store.checkpoint_results(
+                    job_id=job.job_id,
+                    claim_token=claim_token,
+                    validation_result_id=primary_result_id,
+                    updated_at=self._now(),
+                )
+                job = self._store.get(job.job_id)
+            return self._reject(job, claim_token, exc.reason_code, primary_result_id)
+        self._store.checkpoint_results(
+            job_id=job.job_id,
+            claim_token=claim_token,
+            validation_result_id=validation.result_id,
+            updated_at=self._now(),
+        )
+        job = self._store.get(job.job_id)
+        self._store.update_stage(
+            job_id=job.job_id,
+            claim_token=claim_token,
+            stage=FeishuAnalysisJobStage.RUNNING_TOOL,
+            updated_at=self._now(),
+        )
+        try:
+            execution = executor.execute(job, registration)
+            analysis = ToolResult.model_validate(
+                execution.analysis_result.model_dump(mode="json")
+            )
+            report = ToolResult.model_validate(
+                execution.report_result.model_dump(mode="json")
+            )
+        except FeishuProjectModelRejected as exc:
+            return self._reject(
+                job,
+                claim_token,
+                exc.reason_code,
+                validation.result_id,
+            )
+        except (AttributeError, TypeError, ValueError):
+            return self._reject(
+                job,
+                claim_token,
+                "PROJECT_MODEL_EXECUTION_REJECTED",
+                validation.result_id,
+            )
+        self._store.checkpoint_batch(
+            job_id=job.job_id,
+            claim_token=claim_token,
+            record_batch_id=execution.record_batch_id,
+            cell_reference=registration.metadata.cell_id,
+            input_file_sha256=registration.metadata.source_sha256,
+            updated_at=self._now(),
+        )
+        self._store.checkpoint_results(
+            job_id=job.job_id,
+            claim_token=claim_token,
+            analysis_result_id=analysis.result_id,
             report_result_id=report.result_id,
             updated_at=self._now(),
         )
-        job = self._store.get(job_id)
-        return self._deliver_success(job, claim_token, outcome.analysis_result, report)
+        job = self._store.get(job.job_id)
+        rejection_reason = _analysis_rejection_reason(analysis)
+        if rejection_reason is not None:
+            return self._reject(job, claim_token, rejection_reason, analysis.result_id)
+        return self._deliver_success(job, claim_token, analysis, report)
 
     def _deliver_success(
         self,
@@ -1700,6 +2000,17 @@ def _error_code(value: str) -> str:
     return normalized
 
 
+def _replay_key(value: str) -> str:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if (
+        not normalized
+        or len(normalized) > 200
+        or any(ord(character) < 32 for character in normalized)
+    ):
+        raise ValueError("Feishu replay_key is invalid")
+    return normalized
+
+
 def _delivery_reference(value: object, *, field_name: str) -> str:
     normalized = value.strip() if isinstance(value, str) else ""
     if (
@@ -1841,9 +2152,13 @@ __all__ = [
     "FeishuJobOwnershipError",
     "FeishuJobQueue",
     "FeishuJobRetryableError",
+    "FeishuProjectModelExecution",
+    "FeishuProjectModelExecutorPort",
+    "FeishuProjectModelRejected",
     "FeishuScenarioInputResolver",
     "FeishuScenarioPlotRenderer",
     "OriginAwareAnalysisJobDelivery",
+    "SqlAlchemyFeishuJobReplayService",
     "SqlAlchemyFeishuJobRouter",
     "SqlAlchemyFeishuJobStore",
     "validate_feishu_job_id",

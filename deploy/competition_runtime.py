@@ -56,6 +56,7 @@ from quanxin_life.application.assembly import (
 from quanxin_life.application.datasets import DatasetService
 from quanxin_life.application.feishu_aily_assembly import (
     FeishuAilyAssemblyConfig,
+    FeishuProjectModelDependencies,
     RegisteredFeishuCsvRegistrationResolver,
     create_feishu_aily_components,
 )
@@ -299,6 +300,11 @@ def create_competition_runtime(
             ),
             registration_resolver=RegisteredFeishuCsvRegistrationResolver(
                 load_feishu_csv_registrations(integration.csv_registrations_file)
+            ),
+            project_model_dependencies=FeishuProjectModelDependencies(
+                context_service=context_service,
+                project_ledger=ledger,
+                project_tool_service=tool_service,
             ),
         )
         register_feishu_analysis_task(

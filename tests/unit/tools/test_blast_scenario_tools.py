@@ -17,6 +17,7 @@ from quanxin_life.scenarios import (
 )
 from quanxin_life.tools import StandardToolName, ToolRegistry
 from quanxin_life.tools.blast_scenarios import (
+    SCENARIO_FEATURE_VERSION,
     CompareOperationScenariosToolInput,
     ProjectStorageLifetimeToolInput,
     register_compare_operation_scenarios_tool,
@@ -137,6 +138,7 @@ def test_compare_tool_runs_two_scenarios_and_registers_audited_result() -> None:
     baseline = cast(JsonMapping, artifact["baseline"])
     comparisons = cast(list[JsonMapping], artifact["comparisons"])
     assert artifact["status"] == "COMPLETED"
+    assert result.feature_version == SCENARIO_FEATURE_VERSION
     assert len(cast(list[float], baseline["natural_years"])) == 13
     assert len(comparisons) == 1
     assert baseline["soh"] != comparisons[0]["soh"]
@@ -145,6 +147,12 @@ def test_compare_tool_runs_two_scenarios_and_registers_audited_result() -> None:
         list[float], baseline["equivalent_full_cycles"]
     )[-1]
     assert baseline["final_soh"] == cast(list[float], baseline["soh"])[-1]
+    assert baseline["operating_segments"] == [
+        input_value.baseline.segments[0].model_dump(mode="json")
+    ]
+    assert comparisons[0]["operating_segments"] == [
+        input_value.comparisons[0].segments[0].model_dump(mode="json")
+    ]
     assert artifact["run_id"] == input_value.run_id
     assert artifact["result_id"] == result.result_id
     assert "model_class" not in artifact
@@ -260,3 +268,6 @@ def test_lifetime_tool_outputs_only_horizon_milestones_and_trace_ids() -> None:
     assert artifact["evidence_level"] == "PHYSICS_REFERENCE"
     assert projection["final_natural_year"] == 20.0
     assert projection["final_soh"] == cast(list[float], projection["soh"])[-1]
+    assert projection["operating_segments"] == [
+        input_value.scenario.segments[0].model_dump(mode="json")
+    ]

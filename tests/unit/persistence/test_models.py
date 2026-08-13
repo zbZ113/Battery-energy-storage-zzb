@@ -114,6 +114,26 @@ def test_feishu_analysis_job_origin_matches_the_0021_migration_contract() -> Non
     )
 
 
+def test_project_result_binding_matches_the_0022_feishu_contract() -> None:
+    bindings = Base.metadata.tables["project_tool_result_bindings"]
+    checks = _named_check_constraints("project_tool_result_bindings")
+
+    assert bindings.c.actor_session_id.nullable is True
+    assert bindings.c.feishu_binding_id.nullable is True
+    assert {
+        foreign_key.target_fullname
+        for foreign_key in bindings.c.feishu_binding_id.foreign_keys
+    } == {"feishu_bindings.id"}
+    assert "project-tool-result-binding-v3" in checks[
+        "ck_project_tool_result_binding_schema_version"
+    ]
+    assert "'FEISHU'" in checks["ck_project_tool_result_binding_invocation_source"]
+    source_contract = checks["ck_project_tool_result_binding_exact_agent_contract"]
+    assert "actor_session_id IS NULL" in source_contract
+    assert "feishu_binding_id IS NOT NULL" in source_contract
+    assert "actor_role IN ('ADMIN', 'MEMBER')" in source_contract
+
+
 def test_model_route_activation_ledger_declares_stream_identity_and_indexes() -> None:
     unique_columns = _unique_column_sets("model_route_activation_events")
     assert (

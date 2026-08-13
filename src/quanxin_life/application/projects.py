@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import uuid4
 
 from pydantic import Field, field_validator
@@ -21,6 +22,14 @@ class ProjectAccessError(RuntimeError):
 
 class ProjectNotFoundError(RuntimeError):
     """Used for both absent and invisible projects to avoid identifier disclosure."""
+
+
+class ProjectVisibilitySubject(Protocol):
+    @property
+    def user_id(self) -> str: ...
+
+    @property
+    def role(self) -> UserRole: ...
 
 
 class ProjectRecord(ContractModel):
@@ -124,7 +133,9 @@ class ProjectService:
             return _project_record(project)
 
     @staticmethod
-    def visible_projects_statement(principal: AuthPrincipal) -> Select[tuple[Project]]:
+    def visible_projects_statement(
+        principal: ProjectVisibilitySubject,
+    ) -> Select[tuple[Project]]:
         """Return the canonical object-visibility query for project-scoped services."""
         statement = select(Project)
         if principal.role is UserRole.ADMIN:
@@ -148,4 +159,5 @@ __all__ = [
     "ProjectNotFoundError",
     "ProjectRecord",
     "ProjectService",
+    "ProjectVisibilitySubject",
 ]

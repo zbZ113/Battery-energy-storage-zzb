@@ -40,8 +40,8 @@ from quanxin_life.application.invocation_context import (
 from quanxin_life.application.model_route_activation import (
     VerifiedActiveModelRoute,
 )
-from quanxin_life.auth.contracts import AuthPrincipal
-from quanxin_life.core import AdvancedModelRouteRole, AdvancedModelTask
+from quanxin_life.application.projects import ProjectVisibilitySubject
+from quanxin_life.core import AdvancedModelRouteRole, AdvancedModelTask, UserRole
 from quanxin_life.features.early_cycle_sequence import (
     EarlyCycleNormalizer,
     EarlyCycleSequence,
@@ -65,10 +65,18 @@ class ProjectContextVerifier(Protocol):
     ) -> VerifiedProjectInvocationContext: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _ProjectVisibilityIdentity:
+    """Session-independent subject for read-only project route visibility."""
+
+    user_id: str
+    role: UserRole
+
+
 class ActiveModelRouteResolver(Protocol):
     def resolve_verified_active_model_route(
         self,
-        principal: AuthPrincipal,
+        principal: ProjectVisibilitySubject,
         *,
         project_id: str,
         task: AdvancedModelTask,
@@ -513,7 +521,7 @@ class ActiveAdvancedRuntimeResolver:
                 "Advanced runtime requires an approved cutoff cycle"
             )
         verified_context = self._context_service.revalidate(context)
-        principal = _principal_from_context(verified_context)
+        principal = _visibility_subject_from_context(verified_context)
         first_route = self._resolve_route(
             principal,
             verified_context,
@@ -612,7 +620,7 @@ class ActiveAdvancedRuntimeResolver:
 
     def _resolve_route(
         self,
-        principal: AuthPrincipal,
+        principal: ProjectVisibilitySubject,
         context: VerifiedProjectInvocationContext,
         *,
         task: AdvancedModelTask,
@@ -638,15 +646,12 @@ class ActiveAdvancedRuntimeResolver:
         return route
 
 
-def _principal_from_context(
+def _visibility_subject_from_context(
     context: VerifiedProjectInvocationContext,
-) -> AuthPrincipal:
-    return AuthPrincipal(
+) -> ProjectVisibilitySubject:
+    return _ProjectVisibilityIdentity(
         user_id=context.actor_user_id,
-        session_id=context.actor_session_id,
-        username=context.actor_user_id,
         role=context.actor_role,
-        must_change_password=False,
     )
 
 

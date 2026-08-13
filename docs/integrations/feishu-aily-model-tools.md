@@ -37,7 +37,8 @@ BLAST-Lite 数值路由独立于上述深度学习 activation。当前两个参�
 | `update_trajectory` | 映射现有在线更新契约 |
 | `generate_audited_report` | 仅消费账本中有效的 `result_id` 和字段路径 |
 
-模型选择只发生在服务器端。CyclePatch、Hybrid、PBT、MAGNet 等内部名称不进入飞书卡片、Aily 工具名或多维表格业务流程。
+模型选择只发生在服务器端。CyclePatch、Hybrid、PBT、MAGNet 等内部名称不作为面向用户的
+飞书/Aily 业务工具名；卡片和报告的审计证据层仍可展示实际 route 与 model metadata。
 
 ## BLAST-Lite 情景边界
 
@@ -178,7 +179,7 @@ docs/integrations/aily-system-prompt.md
 正式 API/Worker 使用 `deploy.competition_api:app` 与 `deploy.competition_worker:app`，
 基础 `deploy/competition.compose.yaml` 默认不挂载任何 Feishu/Aily secret。只有显式合并
 `deploy/competition.feishu-aily.override.yaml` 才会统一装配 migrate、API 与 Worker。先执行
-Alembic migration 到唯一 head `0021`，再启动 API 与 Worker。启用时设置以下非秘密身份：
+Alembic migration 到唯一 head `0022`，再启动 API 与 Worker。启用时设置以下非秘密身份：
 
 ```text
 FEISHU_APP_ID
@@ -255,9 +256,10 @@ QUANXIN_EXTERNAL_HTTPS_BASE_URL
 自动化 Fake Feishu scenario E2E 已验证真实 BLAST 数值、ToolResult、曲线卡片、报告和
 scalar-only Bitable。Fake Aily scenario E2E 已通过生产 assembly 创建受控场景、持久化
 任务、运行共享 Worker、读取 run-bound ToolResult/报告并写入 scalar-only Bitable，且
-没有飞书聊天或文件副作用。本轮由于断网，没有重新执行目标租户的真实飞书/Aily/Bitable
-纵向验证；这不改变 2026-08-08 旧 callback receipt 与 metadata-only Bitable smoke 的历史
-证据，也不能把 Fake E2E 描述为真实租户验证。
+没有飞书聊天或文件副作用。目标租户已经真实执行飞书 CSV 到项目级 CyclePatch，以及独立
+BLAST-Lite 到曲线、卡片、报告和 Bitable 的两条交付链。当前运行记录尚无 `job_origin=AILY`
+证据，因此不能声称 Aily 已经通过自然语言完成同一纵向编排；Fake Aily E2E 也不能描述为
+真实租户的 Aily 验证。
 
 ## 本地运行
 
@@ -328,7 +330,7 @@ https://实际返回的临时主机名/v1/integrations/feishu/events
 隧道 URL 每次可能变化。隧道关闭后应视为失效；不要把临时主机名当作生产地址。配置 URL
 verification 前确认 `FEISHU_ENCRYPT_KEY` 和 `FEISHU_VERIFICATION_TOKEN` 与当前应用一致；本地 runner 支持加密 URL verification，不要求关闭飞书事件加密。
 
-2026-08-08 已使用 Cloudflare Quick Tunnel 与目标企业飞书应用完成旧 callback receipt 链的受控验证：加密 URL verification、群聊文本消息和 CSV 文件消息均到达 `/v1/integrations/feishu/events` 并返回 HTTP 200。新增 durable job、场景卡片、BLAST 计算、曲线、报告与 Bitable 链已经通过 Fake Feishu scenario E2E 自动化测试，但尚未在目标企业重新执行真实端到端验证。临时隧道主机名不构成生产部署证据。
+2026-08-08 已使用 Cloudflare Quick Tunnel 与目标企业飞书应用完成 callback receipt 链的受控验证：加密 URL verification、群聊文本消息和 CSV 文件消息均到达 `/v1/integrations/feishu/events` 并返回 HTTP 200。此后目标租户已真实执行 durable job、项目级 CyclePatch，以及独立 BLAST-Lite 的曲线、卡片、报告与 Bitable 交付。Aily 自然语言创建和编排这些任务仍缺少真实 `job_origin=AILY` 运行证据。临时隧道主机名不构成生产部署证据。
 
 ### 真实 Bitable metadata smoke
 
@@ -401,4 +403,4 @@ PBT 只能作为 `predict_cycle_life` 的候选内部路由。MAGNet 保持独�
 
 当前链路不支持把循环数直接描述为自然年，也不支持未经受审计情景工具的长期经营结论。PyBaMM 仅可用于短时滚动物理核验和敏感性参考，不能制造长期退化标签。
 
-因此，本阶段交付的是可追溯、安全拒绝的情景工具链，不是海辰电芯 15～25 年真实寿命结论。真实场景飞书/Aily 联调仍需要有效凭证、目标租户卡片配置与人工候选授权；PBT/MAGNet activation 状态没有改变。
+因此，本阶段交付的是可追溯、安全拒绝的情景工具链，不是海辰电芯 15～25 年真实寿命结论。真实飞书交付仍依赖有效凭证、目标租户配置与人工候选授权；Aily 自然语言编排还需要真实调用证据。PBT/MAGNet activation 状态没有改变。

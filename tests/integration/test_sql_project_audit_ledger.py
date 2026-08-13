@@ -213,6 +213,36 @@ def test_tool_result_is_inserted_before_fk_dependent_project_binding(
     assert tool_result_position < project_binding_position
 
 
+def test_historical_v1_http_binding_hash_remains_verifiable(tmp_path: Path) -> None:
+    from quanxin_life.audit import SqlProjectAuditLedger
+
+    context = _context(tmp_path)
+    result = _result()
+    result_sha256 = sha256_canonical(result.model_dump(mode="json"))
+    old_payload = {
+        "result_id": result.result_id,
+        "binding_schema_version": "project-tool-result-binding-v1",
+        "project_id": context.invocation.project_id,
+        "actor_user_id": context.invocation.actor_user_id,
+        "actor_session_id": context.invocation.actor_session_id,
+        "actor_role": context.invocation.actor_role.value,
+        "invocation_source": "HTTP",
+        "agent_run_id": None,
+        "tool_name": result.tool_name,
+        "input_hash": result.input_hash,
+        "result_sha256": result_sha256,
+        "created_at": NOW.isoformat(),
+    }
+    binding = ProjectToolResultBindingRecord(
+        **{key: value for key, value in old_payload.items() if key != "created_at"},
+        feishu_binding_id=None,
+        binding_sha256=sha256_canonical(old_payload),
+        created_at=NOW,
+    )
+
+    SqlProjectAuditLedger.verify_persisted_binding(binding, result)
+
+
 def test_result_is_hidden_from_another_live_project(tmp_path: Path) -> None:
     context = _context(tmp_path)
     ledger = _ledger(context)
