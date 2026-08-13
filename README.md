@@ -270,7 +270,7 @@ composition root。
 
 正式 competition composition root 已可选择性装配这条链：API 入口仍为
 `deploy.competition_api:app`，Worker 仍复用 `agent-runs` 队列，数据库迁移 head 为
-`0023`。基础 `deploy/competition.compose.yaml` 不装配飞书/Aily；只有显式合并
+`0025`。基础 `deploy/competition.compose.yaml` 不装配飞书/Aily；只有显式合并
 `deploy/competition.feishu-aily.override.yaml` 才会启用，并让 API、Worker 和 migrate
 使用同一组 secret-file settings。候选情景执行与候选结果展示分别由两个独立开关
 控制，不能以“能计算”替代“获准展示”。

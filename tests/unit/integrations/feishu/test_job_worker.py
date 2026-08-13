@@ -38,6 +38,9 @@ from quanxin_life.integrations.feishu.client import (
     FeishuHttpResponse,
     FeishuTransportError,
 )
+from quanxin_life.integrations.feishu.delivery_contract import (
+    FeishuDeliveryResultContractError,
+)
 from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobStatus,
     FeishuAnalysisJobWorker,
@@ -128,11 +131,17 @@ class _InputBinder:
 
 
 class _Delivery:
-    def __init__(self, *, fail_success_once: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_success_once: bool = False,
+        reject_success_contract: bool = False,
+    ) -> None:
         self.rejections: list[tuple[str, str, str | None]] = []
         self.successes: list[tuple[str, str, str]] = []
         self.seen_result_card_message_ids: list[str | None] = []
         self.fail_success_once = fail_success_once
+        self.reject_success_contract = reject_success_contract
 
     def deliver_rejection(
         self,
@@ -159,6 +168,10 @@ class _Delivery:
         checkpoint: Callable[[FeishuJobDeliveryProgress], None],
     ) -> FeishuJobDeliveryReceipt:
         self.seen_result_card_message_ids.append(job.result_card_message_id)
+        if self.reject_success_contract:
+            raise FeishuDeliveryResultContractError(
+                "report is not bound to the exact analysis result"
+            )
         if self.fail_success_once:
             self.fail_success_once = False
             checkpoint(
@@ -189,6 +202,7 @@ class _ProjectModelExecutor:
         self._ledger = ledger
         self._rejection_code = rejection_code
         self.calls: list[tuple[str, int]] = []
+        self.claim_tokens: list[str | None] = []
         self._registrations = registrations
         self._crash_before_return = crash_before_return
 
@@ -196,7 +210,10 @@ class _ProjectModelExecutor:
         self,
         job: object,
         registration: CanonicalCsvBatchRegistration,
+        *,
+        claim_token: str | None = None,
     ) -> FeishuProjectModelExecution:
+        self.claim_tokens.append(claim_token)
         if self._registrations is not None:
             self._registrations.append(registration)
         self.calls.append(
@@ -511,6 +528,7 @@ def test_worker_uses_project_model_executor_after_global_validation() -> None:
     assert snapshot.record_batch_id.startswith("canonical-csv-")
     assert snapshot.record_batch_id != "project-batch-1"
     assert snapshot.validation_result_id is not None
+    assert snapshot.prepared_input_result_id is not None
     assert snapshot.analysis_result_id is not None
     assert snapshot.report_result_id is not None
     assert delivery.successes == [
@@ -778,6 +796,32 @@ def test_worker_restart_resumes_checkpointed_results_without_rerunning_tool() ->
     assert delivery.seen_result_card_message_ids == [
         None,
         "om-checkpointed-result-card",
+    ]
+
+
+def test_worker_terminally_rejects_delivery_result_contract_mismatch() -> None:
+    jobs, job_id = _job()
+    delivery = _Delivery(reject_success_contract=True)
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=True,
+        prediction_calls=[],
+        delivery=delivery,
+    )
+
+    status = worker.execute(job_id=job_id)
+
+    snapshot = jobs.get(job_id)
+    assert status is FeishuAnalysisJobStatus.REJECTED
+    assert snapshot.job_status is FeishuAnalysisJobStatus.REJECTED
+    assert snapshot.job_last_error_code == "DELIVERY_RESULT_CONTRACT_REJECTED"
+    assert delivery.rejections == [
+        (
+            snapshot.run_id,
+            "DELIVERY_RESULT_CONTRACT_REJECTED",
+            snapshot.analysis_result_id,
+        )
     ]
 
 

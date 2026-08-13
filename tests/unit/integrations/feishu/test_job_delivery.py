@@ -4,12 +4,17 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
 
+import pytest
+
 from quanxin_life.core import EvidenceLevel, ProvenanceRecord, SourceKind, ToolResult
 from quanxin_life.integrations.feishu.bitable import (
     BitableWriteAction,
     BitableWriteResult,
 )
 from quanxin_life.integrations.feishu.cards import AuditedResultAuthorization
+from quanxin_life.integrations.feishu.delivery_contract import (
+    FeishuDeliveryResultContractError,
+)
 from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobDelivery,
     FeishuAnalysisJobRecord,
@@ -108,7 +113,10 @@ class _ReportDelivery:
 
 class _Authorizer:
     def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
-        assert result.tool_name == "predict_cycle_life"
+        assert result.tool_name in {
+            "predict_cycle_life",
+            "generate_audited_report",
+        }
         return AuditedResultAuthorization(
             allowed=True,
             route_id="controlled-route",
@@ -120,7 +128,10 @@ class _Authorizer:
 
 class _ScenarioAuthorizer:
     def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
-        assert result.tool_name == "compare_operation_scenarios"
+        assert result.tool_name in {
+            "compare_operation_scenarios",
+            "generate_audited_report",
+        }
         return AuditedResultAuthorization(
             allowed=True,
             route_id="blast-lite-lfp-gr-250ah-prismatic-2019-v1",
@@ -130,12 +141,41 @@ class _ScenarioAuthorizer:
         )
 
 
+class _SohAuthorizer:
+    def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
+        assert result.tool_name in {
+            "predict_soh_trajectory",
+            "generate_audited_report",
+        }
+        return AuditedResultAuthorization(
+            allowed=True,
+            route_id="controlled-soh-route",
+            activation_status="ACTIVE",
+            evidence_level=EvidenceLevel.MODEL_INFERENCE,
+            supported_domain="registered-project-finite-soh",
+        )
+
+
 class _ScenarioPlotter:
     def render(self, result: ToolResult) -> FeishuScenarioPlotArtifact:
         payload = b"\x89PNG\r\n\x1a\ncontrolled"
         return FeishuScenarioPlotArtifact(
             source_result_id=result.result_id,
             filename=f"scenario-{result.result_id}.png",
+            media_type="image/png",
+            payload=payload,
+            sha256=sha256(payload).hexdigest(),
+        )
+
+
+class _SohPlotter:
+    renderer_version = "test-soh-renderer-v1"
+
+    def render(self, result: ToolResult) -> FeishuScenarioPlotArtifact:
+        payload = b"\x89PNG\r\n\x1a\nsoh-controlled"
+        return FeishuScenarioPlotArtifact(
+            source_result_id=result.result_id,
+            filename=f"soh-{result.result_id}.png",
             media_type="image/png",
             payload=payload,
             sha256=sha256(payload).hexdigest(),
@@ -166,9 +206,16 @@ def _job(
         cell_reference="cell-1",
         input_file_sha256="a" * 64,
         validation_result_id="0f1eef6f-7193-48f5-9c49-f56e96f5eec7",
+        prepared_input_result_id=None,
         analysis_result_id="a03018dd-7a76-42bf-a506-4dc571ddca7e",
         report_result_id="d9a37276-54ee-48ab-b491-ec5199213c6c",
         scenario_image_key=None,
+        analysis_image_key=None,
+        analysis_image_renderer_version=None,
+        analysis_image_sha256=None,
+        csv_mapping_status=None,
+        csv_mapping_evidence=None,
+        csv_mapping_evidence_sha256=None,
         result_card_message_id=None,
         report_file_key=None,
         report_message_id=None,
@@ -182,7 +229,12 @@ def _job(
     )
 
 
-def _result(*, result_id: str, tool_name: str) -> ToolResult:
+def _result(
+    *,
+    result_id: str,
+    tool_name: str,
+    upstream_result_id: str | None = None,
+) -> ToolResult:
     return ToolResult(
         result_id=result_id,
         tool_name=tool_name,
@@ -195,7 +247,12 @@ def _result(*, result_id: str, tool_name: str) -> ToolResult:
         data_version="data-v1",
         feature_version="feature-v1",
         input_hash="c" * 64,
-        values={"registered": True},
+        values=(
+            {"upstream_result_ids": [upstream_result_id]}
+            if tool_name == "generate_audited_report"
+            and upstream_result_id is not None
+            else {"registered": True}
+        ),
         warnings=["TRACEABLE_WARNING"],
         provenance=[
             ProvenanceRecord(
@@ -234,6 +291,7 @@ def test_success_delivery_uses_audited_card_bitable_metadata_and_report_result()
     report = _result(
         result_id=job.report_result_id or "",
         tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
     )
 
     receipt = delivery.deliver_success(
@@ -253,6 +311,86 @@ def test_success_delivery_uses_audited_card_bitable_metadata_and_report_result()
     assert fields["cell_reference"] == "cell-1"
     assert all(not isinstance(value, list | dict) for value in fields.values())
     assert len(client.messages) == 2
+
+
+def test_success_delivery_rejects_task_result_mismatch_before_external_actions() -> None:
+    client = _Client()
+    bitable = _Bitable()
+    reports = _ReportDelivery()
+    delivery = FeishuAnalysisJobDelivery(
+        client=client,
+        card_builder=_CardBuilder(),
+        bitable_writer=bitable,
+        report_delivery=reports,
+        result_authorizer=_Authorizer(),
+    )
+    job = _job(task_type=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY)
+    analysis = _result(
+        result_id=job.analysis_result_id or "",
+        tool_name="predict_cycle_life",
+    )
+    report = _result(
+        result_id=job.report_result_id or "",
+        tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
+    ).model_copy(
+        update={"values": {"upstream_result_ids": [analysis.result_id]}}
+    )
+
+    with pytest.raises(
+        FeishuDeliveryResultContractError,
+        match="task does not match",
+    ):
+        delivery.deliver_success(
+            job=job,
+            analysis_result=analysis,
+            report_result=report,
+        )
+
+    assert client.messages == []
+    assert client.images == []
+    assert reports.calls == []
+    assert bitable.fields == []
+
+
+def test_success_delivery_rejects_report_not_bound_to_exact_analysis() -> None:
+    client = _Client()
+    bitable = _Bitable()
+    reports = _ReportDelivery()
+    delivery = FeishuAnalysisJobDelivery(
+        client=client,
+        card_builder=_CardBuilder(),
+        bitable_writer=bitable,
+        report_delivery=reports,
+        result_authorizer=_Authorizer(),
+    )
+    job = _job()
+    analysis = _result(
+        result_id=job.analysis_result_id or "",
+        tool_name="predict_cycle_life",
+    )
+    report = _result(
+        result_id=job.report_result_id or "",
+        tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
+    ).model_copy(
+        update={"values": {"upstream_result_ids": ["wrong-result-id"]}}
+    )
+
+    with pytest.raises(
+        FeishuDeliveryResultContractError,
+        match="exact analysis result",
+    ):
+        delivery.deliver_success(
+            job=job,
+            analysis_result=analysis,
+            report_result=report,
+        )
+
+    assert client.messages == []
+    assert client.images == []
+    assert reports.calls == []
+    assert bitable.fields == []
 
 
 def test_rejection_delivery_contains_only_metadata_and_reason_reference() -> None:
@@ -320,6 +458,7 @@ def test_scenario_delivery_uploads_curve_and_writes_scalar_context_metadata() ->
     report = _result(
         result_id=job.report_result_id or "",
         tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
     )
 
     receipt = delivery.deliver_success(
@@ -337,6 +476,116 @@ def test_scenario_delivery_uploads_curve_and_writes_scalar_context_metadata() ->
     assert fields["scenario_id"] == "baseline"
     assert fields["scenario_version"] == "baseline-v1"
     assert all(not isinstance(value, list | dict) for value in fields.values())
+
+
+def test_soh_delivery_uploads_controlled_curve_and_checkpoints_generic_image() -> None:
+    client = _Client()
+    cards = _CardBuilder()
+    progress: list[FeishuJobDeliveryProgress] = []
+    delivery = FeishuAnalysisJobDelivery(
+        client=client,
+        card_builder=cards,
+        bitable_writer=_Bitable(),
+        report_delivery=_ReportDelivery(),
+        result_authorizer=_SohAuthorizer(),
+        analysis_plotter=_SohPlotter(),
+    )
+    job = _job(task_type=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY)
+    analysis = _result(
+        result_id=job.analysis_result_id or "",
+        tool_name="predict_soh_trajectory",
+    ).model_copy(update={"tool_version": "advanced-soh-prediction-tool-v1"})
+    report = _result(
+        result_id=job.report_result_id or "",
+        tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
+    )
+
+    delivery.deliver_success(
+        job=job,
+        analysis_result=analysis,
+        report_result=report,
+        checkpoint=progress.append,
+    )
+
+    assert client.images[0]["payload"] == b"\x89PNG\r\n\x1a\nsoh-controlled"
+    assert any(
+        item.analysis_image_key == "img-scenario"
+        and item.analysis_image_renderer_version == "test-soh-renderer-v1"
+        and item.analysis_image_sha256 == sha256(
+            b"\x89PNG\r\n\x1a\nsoh-controlled"
+        ).hexdigest()
+        for item in progress
+    )
+    assert client.messages[0]["content"]["image_key"] == "img-scenario"  # type: ignore[index]
+
+
+def test_soh_delivery_rejects_partial_persisted_image_provenance() -> None:
+    client = _Client()
+    delivery = FeishuAnalysisJobDelivery(
+        client=client,
+        card_builder=_CardBuilder(),
+        bitable_writer=_Bitable(),
+        report_delivery=_ReportDelivery(),
+        result_authorizer=_SohAuthorizer(),
+        analysis_plotter=_SohPlotter(),
+    )
+    job = replace(
+        _job(task_type=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY),
+        analysis_image_key="img-analysis",
+    )
+    analysis = _result(
+        result_id=job.analysis_result_id or "",
+        tool_name="predict_soh_trajectory",
+    ).model_copy(update={"tool_version": "advanced-soh-prediction-tool-v1"})
+    report = _result(
+        result_id=job.report_result_id or "",
+        tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
+    )
+
+    with pytest.raises(ValueError, match="image provenance is incomplete"):
+        delivery.deliver_success(job=job, analysis_result=analysis, report_result=report)
+
+    assert client.images == []
+    assert client.messages == []
+
+
+def test_soh_delivery_reuses_complete_image_provenance_without_render_or_upload() -> None:
+    client = _Client()
+    plotter = _SohPlotter()
+    payload = b"\x89PNG\r\n\x1a\nsoh-controlled"
+    delivery = FeishuAnalysisJobDelivery(
+        client=client,
+        card_builder=_CardBuilder(),
+        bitable_writer=_Bitable(),
+        report_delivery=_ReportDelivery(),
+        result_authorizer=_SohAuthorizer(),
+        analysis_plotter=plotter,
+    )
+    job = replace(
+        _job(task_type=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY),
+        analysis_image_key="img-analysis",
+        analysis_image_renderer_version="old-reviewed-renderer-v1",
+        analysis_image_sha256=sha256(payload).hexdigest(),
+    )
+    analysis = _result(
+        result_id=job.analysis_result_id or "",
+        tool_name="predict_soh_trajectory",
+    ).model_copy(update={"tool_version": "advanced-soh-prediction-tool-v1"})
+    report = _result(
+        result_id=job.report_result_id or "",
+        tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
+    )
+    with pytest.raises(ValueError, match="renderer version mismatch"):
+        delivery.deliver_success(
+            job=job,
+            analysis_result=analysis,
+            report_result=report,
+        )
+
+    assert client.images == []
 
 
 def test_success_delivery_replay_skips_checkpointed_external_actions() -> None:
@@ -359,6 +608,7 @@ def test_success_delivery_replay_skips_checkpointed_external_actions() -> None:
     report = _result(
         result_id=job.report_result_id or "",
         tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
     )
     progress: list[FeishuJobDeliveryProgress] = []
 

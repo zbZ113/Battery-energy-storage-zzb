@@ -100,6 +100,28 @@ class ToolInvocationService:
         )
         return self.project_audit_ledger.register_result(context, result)
 
+    def execute_in_project_unregistered(
+        self,
+        invocation: ToolInvocation,
+        *,
+        context: VerifiedProjectInvocationContext,
+    ) -> ToolResult:
+        """Execute a project tool without persisting it for an atomic caller."""
+
+        from quanxin_life.application.invocation_context import ProjectInvocationSource
+
+        if context.invocation_source is ProjectInvocationSource.AGENT:
+            raise ToolAuthorizationError(
+                "AGENT project contexts require a verified per-step grant"
+            )
+        if self.project_audit_ledger is None:
+            raise AuditLedgerError("project audit ledger is required before execution")
+        return self.registry.execute_in_project(
+            invocation.tool_name,
+            invocation.input_value,
+            context=context,
+        )
+
     def invoke_for_project_agent(
         self,
         invocation: ToolInvocation,

@@ -10,6 +10,7 @@ from quanxin_life.core import AgentRunState, AgentRunStatus, ToolResult
 
 from .bitable import BitableWriteResult
 from .cards import AuditedResultAuthorizer
+from .delivery_contract import validate_delivery_results
 from .jobs import (
     FeishuAnalysisJobOrigin,
     FeishuAnalysisJobRecord,
@@ -91,9 +92,14 @@ class AilyAnalysisJobDelivery:
         checkpoint: Callable[[FeishuJobDeliveryProgress], None] | None = None,
     ) -> FeishuJobDeliveryReceipt:
         self._require_aily(job)
-        authorization = self._result_authorizer.authorize(analysis_result)
-        if not authorization.allowed:
-            raise ValueError("audited result is not authorized for Aily delivery")
+        authorization = validate_delivery_results(
+            task=job.task_type,
+            expected_analysis_result_id=job.analysis_result_id,
+            expected_report_result_id=job.report_result_id,
+            analysis_result=analysis_result,
+            report_result=report_result,
+            authorizer=self._result_authorizer,
+        )
         if job.bitable_record_id is not None:
             return FeishuJobDeliveryReceipt(
                 bitable_record_id=job.bitable_record_id,

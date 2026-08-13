@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -21,6 +21,7 @@ from quanxin_life.core import (
     AdvancedModelRouteRole,
     DatasetStatus,
     ToolResult,
+    sha256_canonical,
 )
 from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobRecord,
@@ -29,9 +30,14 @@ from quanxin_life.integrations.feishu.jobs import (
 )
 from quanxin_life.persistence.database import SessionFactory, session_scope
 from quanxin_life.persistence.models import Dataset, FeishuEventReceipt, RecordBatchBinding
+from quanxin_life.reporting.contracts import AUDITED_REPORT_TOOL_VERSION
 from quanxin_life.tools import StandardToolName
 from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_TOOL_VERSION,
+)
+from quanxin_life.tools.advanced_input import PREPARE_ADVANCED_INPUT_TOOL_VERSION
+from quanxin_life.tools.advanced_soh_prediction import (
+    ADVANCED_SOH_PREDICTION_TOOL_VERSION,
 )
 from quanxin_life.tools.audited_report import (
     AuditedReportClaimReference,
@@ -51,6 +57,31 @@ class ProjectToolInvocationPort(Protocol):
         invocation: ToolInvocation,
         *,
         context: VerifiedProjectInvocationContext,
+    ) -> ToolResult: ...
+
+
+class UnregisteredProjectToolExecutionPort(Protocol):
+    def execute_in_project_unregistered(
+        self,
+        invocation: ToolInvocation,
+        *,
+        context: VerifiedProjectInvocationContext,
+    ) -> ToolResult: ...
+
+
+class FeishuProjectResultSlotCommitter(Protocol):
+    def commit_feishu_result_slot(
+        self,
+        *,
+        context: VerifiedProjectInvocationContext,
+        job_id: str,
+        claim_token: str,
+        slot: str,
+        expected_task: str,
+        run_id: str,
+        chat_id: str,
+        sender_id: str,
+        result: ToolResult,
     ) -> ToolResult: ...
 
 
@@ -139,6 +170,8 @@ class FeishuProjectResultResolver:
                         or_(
                             FeishuEventReceipt.validation_result_id
                             == checked_result_id,
+                            FeishuEventReceipt.prepared_input_result_id
+                            == checked_result_id,
                             FeishuEventReceipt.analysis_result_id
                             == checked_result_id,
                             FeishuEventReceipt.report_result_id
@@ -217,8 +250,35 @@ class FeishuProjectModelExecutor:
         self,
         job: FeishuAnalysisJobRecord,
         registration: CanonicalCsvBatchRegistration,
+        *,
+        claim_token: str | None = None,
     ) -> FeishuProjectModelExecution:
-        if _task_value(job.task_type) != StandardToolName.PREDICT_CYCLE_LIFE.value:
+        if callable(
+            getattr(self._project_tool_service, "execute_in_project_unregistered", None)
+        ):
+            return self._execute_atomic(
+                job=job,
+                registration=registration,
+                claim_token=claim_token,
+            )
+        return self._execute_legacy(job, registration)
+
+    def _execute_legacy(
+        self,
+        job: FeishuAnalysisJobRecord,
+        registration: CanonicalCsvBatchRegistration,
+    ) -> FeishuProjectModelExecution:
+        try:
+            task = StandardToolName(_task_value(job.task_type))
+        except ValueError as exc:
+            raise FeishuProjectModelRejected(
+                "PROJECT_MODEL_TASK_NOT_SUPPORTED",
+                "Feishu project model task is not supported",
+            ) from exc
+        if task not in {
+            StandardToolName.PREDICT_CYCLE_LIFE,
+            StandardToolName.PREDICT_SOH_TRAJECTORY,
+        }:
             raise FeishuProjectModelRejected(
                 "PROJECT_MODEL_TASK_NOT_SUPPORTED",
                 "Feishu project model task is not supported",
@@ -234,7 +294,6 @@ class FeishuProjectModelExecutor:
                 sender_open_id=job.sender_id,
             )
             record_batch_id = self._batch_resolver.resolve(context, registration)
-            role = _rul_role(registration.feature_config.cutoff_cycle)
             prepared = self._project_tool_service.invoke_in_project(
                 ToolInvocation(
                     tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
@@ -242,9 +301,13 @@ class FeishuProjectModelExecutor:
                 ),
                 context=context,
             )
+            role = _project_model_role(
+                task=task,
+                cutoff_cycle=registration.feature_config.cutoff_cycle,
+            )
             analysis = self._project_tool_service.invoke_in_project(
                 ToolInvocation(
-                    tool_name=StandardToolName.PREDICT_CYCLE_LIFE,
+                    tool_name=task,
                     input_value={
                         "upstream_result_id": prepared.result_id,
                         "route_role": role.value,
@@ -252,11 +315,16 @@ class FeishuProjectModelExecutor:
                 ),
                 context=context,
             )
+            expected_version = (
+                ADVANCED_RUL_PREDICTION_TOOL_VERSION
+                if task is StandardToolName.PREDICT_CYCLE_LIFE
+                else ADVANCED_SOH_PREDICTION_TOOL_VERSION
+            )
             if (
-                analysis.tool_name != StandardToolName.PREDICT_CYCLE_LIFE.value
-                or analysis.tool_version != ADVANCED_RUL_PREDICTION_TOOL_VERSION
+                analysis.tool_name != task.value
+                or analysis.tool_version != expected_version
             ):
-                raise ValueError("project RUL ToolResult contract is invalid")
+                raise ValueError("project model ToolResult contract is invalid")
             report = self._audited_report(context, analysis)
         except FeishuProjectModelRejected:
             raise
@@ -277,22 +345,26 @@ class FeishuProjectModelExecutor:
         context: VerifiedProjectInvocationContext,
         analysis: ToolResult,
     ) -> ToolResult:
+        if analysis.tool_name == StandardToolName.PREDICT_CYCLE_LIFE.value:
+            paths = (
+                "values.artifact.cycle_life_prediction.predicted_cycle",
+                "values.artifact.derived_remaining_cycles",
+            )
+        elif analysis.tool_name == StandardToolName.PREDICT_SOH_TRAJECTORY.value:
+            paths = _soh_report_paths(analysis)
+        else:  # pragma: no cover - guarded by execute
+            raise ValueError("project report task is unsupported")
         report_input = GenerateAuditedReportToolInput(
             report_kind=ReportKind.LIFETIME_DECISION,
             claims=(
                 AuditedReportClaimReference(
                     claim_kind=ReportClaimKind.LIFETIME_PREDICTION,
-                    numeric_evidence=(
+                    numeric_evidence=tuple(
                         NumericEvidenceReference(
                             result_id=analysis.result_id,
-                            json_path=(
-                                "values.artifact.cycle_life_prediction.predicted_cycle"
-                            ),
-                        ),
-                        NumericEvidenceReference(
-                            result_id=analysis.result_id,
-                            json_path="values.artifact.derived_remaining_cycles",
-                        ),
+                            json_path=json_path,
+                        )
+                        for json_path in paths
                     ),
                 ),
             ),
@@ -305,6 +377,272 @@ class FeishuProjectModelExecutor:
         )
         return self._project_ledger.register_result(context, report)
 
+    def _execute_atomic(
+        self,
+        *,
+        job: FeishuAnalysisJobRecord,
+        registration: CanonicalCsvBatchRegistration,
+        claim_token: str | None,
+    ) -> FeishuProjectModelExecution:
+        if claim_token is None:
+            raise FeishuProjectModelRejected(
+                "FEISHU_PROJECT_CLAIM_REQUIRED",
+                "atomic Feishu project execution requires a live job claim",
+            )
+        if not callable(
+            getattr(self._project_ledger, "commit_feishu_result_slot", None)
+        ):
+            raise FeishuProjectModelRejected(
+                "FEISHU_PROJECT_ATOMIC_COMMIT_UNAVAILABLE",
+                "atomic Feishu project result commit is unavailable",
+            )
+        try:
+            task = StandardToolName(_task_value(job.task_type))
+            role = _project_model_role(
+                task=task,
+                cutoff_cycle=registration.feature_config.cutoff_cycle,
+            )
+            context = self._context_service.resolve_feishu(
+                chat_id=job.chat_id or "",
+                sender_open_id=job.sender_id or "",
+            )
+            record_batch_id = self._batch_resolver.resolve(context, registration)
+            execute_port = cast(
+                UnregisteredProjectToolExecutionPort,
+                self._project_tool_service,
+            )
+            committer = cast(FeishuProjectResultSlotCommitter, self._project_ledger)
+            prepared_input = ToolInvocation(
+                tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+                input_value={"record_batch_id": record_batch_id},
+            )
+            prepared = _resolve_or_execute_slot(
+                job=job,
+                slot="PREPARED",
+                result_id=job.prepared_input_result_id,
+                expected_tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+                expected_tool_version=PREPARE_ADVANCED_INPUT_TOOL_VERSION,
+                expected_input_hash=sha256_canonical(prepared_input.input_value),
+                expected_reference_id=record_batch_id,
+                context=context,
+                resolver=self._project_ledger,
+                committer=committer.commit_feishu_result_slot,
+                claim_token=claim_token,
+                expected_task=_task_value(job.task_type),
+                run_id=job.run_id,
+                chat_id=job.chat_id or "",
+                sender_id=job.sender_id or "",
+                execute=lambda: execute_port.execute_in_project_unregistered(
+                    prepared_input,
+                    context=context,
+                ),
+            )
+            analysis_input = ToolInvocation(
+                tool_name=task,
+                input_value={
+                    "upstream_result_id": prepared.result_id,
+                    "route_role": role.value,
+                },
+            )
+            analysis = _resolve_or_execute_slot(
+                job=job,
+                slot="ANALYSIS",
+                result_id=job.analysis_result_id,
+                expected_tool_name=task.value,
+                expected_tool_version=(
+                    ADVANCED_RUL_PREDICTION_TOOL_VERSION
+                    if task is StandardToolName.PREDICT_CYCLE_LIFE
+                    else ADVANCED_SOH_PREDICTION_TOOL_VERSION
+                ),
+                expected_input_hash=sha256_canonical(analysis_input.input_value),
+                expected_reference_id=prepared.result_id,
+                context=context,
+                resolver=self._project_ledger,
+                committer=committer.commit_feishu_result_slot,
+                claim_token=claim_token,
+                expected_task=task.value,
+                run_id=job.run_id,
+                chat_id=job.chat_id or "",
+                sender_id=job.sender_id or "",
+                execute=lambda: execute_port.execute_in_project_unregistered(
+                    analysis_input,
+                    context=context,
+                ),
+            )
+            report_input = self._audited_report_input(analysis)
+            report = _resolve_or_execute_slot(
+                job=job,
+                slot="REPORT",
+                result_id=job.report_result_id,
+                expected_tool_name=StandardToolName.GENERATE_AUDITED_REPORT.value,
+                expected_tool_version=AUDITED_REPORT_TOOL_VERSION,
+                expected_input_hash=sha256_canonical(
+                    report_input.model_dump(mode="json")
+                ),
+                expected_reference_id=analysis.result_id,
+                context=context,
+                resolver=self._project_ledger,
+                committer=committer.commit_feishu_result_slot,
+                claim_token=claim_token,
+                expected_task=task.value,
+                run_id=job.run_id,
+                chat_id=job.chat_id or "",
+                sender_id=job.sender_id or "",
+                execute=lambda: self._audited_report_unregistered(
+                    analysis,
+                    report_input=report_input,
+                ),
+            )
+            expected_version = (
+                ADVANCED_RUL_PREDICTION_TOOL_VERSION
+                if task is StandardToolName.PREDICT_CYCLE_LIFE
+                else ADVANCED_SOH_PREDICTION_TOOL_VERSION
+            )
+            if analysis.tool_version != expected_version:
+                raise ValueError("project model ToolResult contract is invalid")
+        except FeishuProjectModelRejected:
+            raise
+        except (LookupError, RuntimeError, TypeError, ValueError) as exc:
+            raise FeishuProjectModelRejected(
+                "PROJECT_MODEL_EXECUTION_REJECTED",
+                "reviewed project model execution was rejected",
+            ) from exc
+        return FeishuProjectModelExecution(
+            record_batch_id=record_batch_id,
+            prepared_input_result_id=prepared.result_id,
+            analysis_result=analysis,
+            report_result=report,
+            slots_committed=True,
+        )
+
+    def _audited_report_input(
+        self,
+        analysis: ToolResult,
+    ) -> GenerateAuditedReportToolInput:
+        if analysis.tool_name == StandardToolName.PREDICT_CYCLE_LIFE.value:
+            paths = (
+                "values.artifact.cycle_life_prediction.predicted_cycle",
+                "values.artifact.derived_remaining_cycles",
+            )
+        elif analysis.tool_name == StandardToolName.PREDICT_SOH_TRAJECTORY.value:
+            paths = _soh_report_paths(analysis)
+        else:
+            raise ValueError("project report task is unsupported")
+        return GenerateAuditedReportToolInput(
+            report_kind=ReportKind.LIFETIME_DECISION,
+            claims=(
+                AuditedReportClaimReference(
+                    claim_kind=ReportClaimKind.LIFETIME_PREDICTION,
+                    numeric_evidence=tuple(
+                        NumericEvidenceReference(
+                            result_id=analysis.result_id,
+                            json_path=path,
+                        )
+                        for path in paths
+                    ),
+                ),
+            ),
+            upstream_result_ids=(analysis.result_id,),
+        )
+
+    def _audited_report_unregistered(
+        self,
+        analysis: ToolResult,
+        *,
+        report_input: GenerateAuditedReportToolInput | None = None,
+    ) -> ToolResult:
+        resolved_input = report_input or self._audited_report_input(analysis)
+        return execute_generate_audited_report_tool(
+            resolved_input,
+            audit_ledger=AuditLedger((analysis,)),
+            clock=self._clock,
+        )
+
+
+def _resolve_or_execute_slot(
+    *,
+    job: FeishuAnalysisJobRecord,
+    slot: str,
+    result_id: str | None,
+    expected_tool_name: str,
+    expected_tool_version: str,
+    expected_input_hash: str,
+    expected_reference_id: str,
+    context: VerifiedProjectInvocationContext,
+    resolver: ProjectResultLedger,
+    committer: Callable[..., ToolResult],
+    claim_token: str,
+    expected_task: str,
+    run_id: str,
+    chat_id: str,
+    sender_id: str,
+    execute: Callable[[], ToolResult],
+) -> ToolResult:
+    if result_id is not None:
+        restored = ToolResult.model_validate(
+            resolver.resolve_registered_result(context, result_id).model_dump(
+                mode="json"
+            )
+        )
+        _validate_slot_result(
+            restored,
+            slot=slot,
+            expected_tool_name=expected_tool_name,
+            expected_tool_version=expected_tool_version,
+            expected_input_hash=expected_input_hash,
+            expected_reference_id=expected_reference_id,
+        )
+        return restored
+    computed = ToolResult.model_validate(execute().model_dump(mode="json"))
+    _validate_slot_result(
+        computed,
+        slot=slot,
+        expected_tool_name=expected_tool_name,
+        expected_tool_version=expected_tool_version,
+        expected_input_hash=expected_input_hash,
+        expected_reference_id=expected_reference_id,
+    )
+    return ToolResult.model_validate(
+        committer(
+            context=context,
+            job_id=job.job_id,
+            claim_token=claim_token,
+            slot=slot,
+            expected_task=expected_task,
+            run_id=run_id,
+            chat_id=chat_id,
+            sender_id=sender_id,
+            result=computed,
+        ).model_dump(mode="json")
+    )
+
+
+def _validate_slot_result(
+    result: ToolResult,
+    *,
+    slot: str,
+    expected_tool_name: str,
+    expected_tool_version: str,
+    expected_input_hash: str,
+    expected_reference_id: str,
+) -> None:
+    if (
+        result.tool_name != expected_tool_name
+        or result.tool_version != expected_tool_version
+        or result.input_hash != expected_input_hash
+    ):
+        raise ValueError("Feishu result slot contract is invalid")
+    if slot == "REPORT":
+        if result.values.get("upstream_result_ids") != [expected_reference_id]:
+            raise ValueError("Feishu report slot is not bound to the analysis result")
+        return
+    artifact = result.values.get("artifact")
+    if not isinstance(artifact, dict):
+        raise ValueError("Feishu result slot artifact is invalid")
+    reference_field = "record_batch_id" if slot == "PREPARED" else "upstream_result_id"
+    if artifact.get(reference_field) != expected_reference_id:
+        raise ValueError("Feishu result slot reference is invalid")
+
 
 def _rul_role(cutoff_cycle: int) -> AdvancedModelRouteRole:
     if cutoff_cycle == 20:
@@ -314,6 +652,46 @@ def _rul_role(cutoff_cycle: int) -> AdvancedModelRouteRole:
     raise FeishuProjectModelRejected(
         "PROJECT_MODEL_CUTOFF_NOT_SUPPORTED",
         "Advanced RUL requires cutoff 20, 50, 100, or 150",
+    )
+
+
+def _project_model_role(
+    *,
+    task: StandardToolName,
+    cutoff_cycle: int,
+) -> AdvancedModelRouteRole:
+    if task is StandardToolName.PREDICT_CYCLE_LIFE:
+        return _rul_role(cutoff_cycle)
+    if task is StandardToolName.PREDICT_SOH_TRAJECTORY and cutoff_cycle in {
+        20,
+        50,
+        100,
+        150,
+    }:
+        return AdvancedModelRouteRole.MEAN_ACCURACY
+    raise FeishuProjectModelRejected(
+        "PROJECT_MODEL_CUTOFF_NOT_SUPPORTED",
+        "Advanced SOH requires cutoff 20, 50, 100, or 150",
+    )
+
+
+def _soh_report_paths(analysis: ToolResult) -> tuple[str, str]:
+    artifact = analysis.values.get("artifact")
+    if not isinstance(artifact, dict):
+        raise ValueError("Advanced SOH report artifact is invalid")
+    cycles = artifact.get("prediction_cycles")
+    predicted_soh = artifact.get("predicted_soh")
+    if (
+        not isinstance(cycles, list)
+        or not isinstance(predicted_soh, list)
+        or not cycles
+        or len(cycles) != len(predicted_soh)
+    ):
+        raise ValueError("Advanced SOH report trajectory is invalid")
+    last_index = len(predicted_soh) - 1
+    return (
+        "values.artifact.horizon_end_cycle",
+        f"values.artifact.predicted_soh.{last_index}",
     )
 
 

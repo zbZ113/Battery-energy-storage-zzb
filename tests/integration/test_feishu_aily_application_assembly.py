@@ -27,6 +27,7 @@ from quanxin_life.audit import SqlProjectAuditLedger
 from quanxin_life.core import CellMetadata, ProvenanceRecord, SourceKind
 from quanxin_life.features import EarlyCycleFeatureConfig
 from quanxin_life.infrastructure.feishu_queue import FEISHU_ANALYSIS_TASK
+from quanxin_life.integrations.feishu.soh_plot import FeishuSohPlotter
 from quanxin_life.persistence import Base, create_session_factory
 
 NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
@@ -122,6 +123,10 @@ def test_feishu_aily_assembly_shares_one_persistent_boundary(tmp_path) -> None:
     assert components.worker._store is components.job_store
     assert components.aily_task_gateway._job_store is components.job_store
     assert components.worker._result_resolver is components.audit_ledger
+    assert isinstance(
+        components.worker._delivery._feishu_delivery._analysis_plotter,
+        FeishuSohPlotter,
+    )
     assert components.aily_http_adapter is not None
     assert components.feishu_http_adapter is not None
     assert FEISHU_ANALYSIS_TASK not in celery_app.tasks

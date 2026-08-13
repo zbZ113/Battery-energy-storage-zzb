@@ -297,8 +297,6 @@ class AuditedCardBuilder:
                 authorization=authorization,
                 image_key=image_key,
             )
-        if image_key is not None:
-            raise AuditedCardError("images are only supported for scenario result cards")
         if (
             result.tool_name == "predict_cycle_life"
             and result.tool_version == "advanced-rul-prediction-tool-v1"
@@ -307,6 +305,17 @@ class AuditedCardBuilder:
                 result=result,
                 authorization=authorization,
             )
+        if (
+            result.tool_name == "predict_soh_trajectory"
+            and result.tool_version == "advanced-soh-prediction-tool-v1"
+        ):
+            return _build_soh_result_card(
+                result=result,
+                authorization=authorization,
+                image_key=image_key,
+            )
+        if image_key is not None:
+            raise AuditedCardError("images are only supported for plotted result cards")
         policy = _CARD_POLICIES.get((result.tool_name, result.tool_version))
         if policy is None:
             raise AuditedCardError("ToolResult version has no allowlisted card paths")
@@ -432,6 +441,93 @@ def _build_cycle_life_result_card(
         "header": {
             "template": "green",
             "title": {"tag": "plain_text", "content": "电芯寿命分析"},
+        },
+        "elements": elements,
+    }
+
+
+def _build_soh_result_card(
+    *,
+    result: ToolResult,
+    authorization: AuditedResultAuthorization,
+    image_key: str | None,
+) -> dict[str, Any]:
+    mapping = result.model_dump(mode="json")
+    artifact = result.values.get("artifact")
+    if not isinstance(artifact, Mapping):
+        raise AuditedCardError("SOH artifact is invalid")
+    cycles = artifact.get("prediction_cycles")
+    predicted_soh = artifact.get("predicted_soh")
+    if (
+        not isinstance(cycles, list)
+        or not isinstance(predicted_soh, list)
+        or not cycles
+        or len(cycles) != len(predicted_soh)
+        or cycles[-1] != artifact.get("horizon_end_cycle")
+    ):
+        raise AuditedCardError("SOH trajectory is invalid")
+    last_index = len(predicted_soh) - 1
+    cell_id = _resolve_scalar(mapping, "values.artifact.cell_id")
+    if not isinstance(cell_id, str):
+        raise AuditedCardError("SOH cell identity is invalid")
+    fields = [
+        _display_field("电芯", cell_id, is_short=True),
+        _display_field(
+            "已观测循环",
+            _format_count(_resolve_scalar(mapping, "values.artifact.cutoff_cycle")),
+            is_short=True,
+        ),
+        _display_field(
+            "预测边界循环",
+            _format_count(
+                _resolve_scalar(mapping, "values.artifact.horizon_end_cycle")
+            ),
+            is_short=True,
+        ),
+        _display_field(
+            "边界周期 SOH",
+            _format_scalar(
+                _resolve_scalar(
+                    mapping,
+                    f"values.artifact.predicted_soh.{last_index}",
+                )
+            ),
+            is_short=True,
+        ),
+    ]
+    evidence = _EVIDENCE_PRESENTATION.get(
+        authorization.evidence_level.value,
+        "受审计证据",
+    )
+    elements: list[dict[str, Any]] = []
+    if image_key is not None:
+        elements.append(
+            {
+                "tag": "img",
+                "img_key": _identifier(image_key, field_name="image_key"),
+                "alt": {"tag": "plain_text", "content": "有限时域 SOH 轨迹"},
+                "mode": "fit_horizontal",
+                "preview": True,
+            }
+        )
+    elements.extend([
+        {"tag": "div", "fields": fields},
+        _paragraph(
+            "**结果说明**\n"
+            f"证据类型: {evidence}\n"
+            "该轨迹仅覆盖至第 500 个循环, 不是 15 至 25 年自然年寿命推演。"
+        ),
+        _paragraph(
+            "**不确定性边界**\n"
+            "当前未提供统计区间; 如需区间, 必须使用已登记的校准 ToolResult。"
+        ),
+    ])
+    elements.extend(_warning_elements(result.warnings))
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "green",
+            "title": {"tag": "plain_text", "content": "有限时域 SOH 分析"},
         },
         "elements": elements,
     }

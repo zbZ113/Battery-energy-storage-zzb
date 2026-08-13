@@ -90,6 +90,18 @@ class _ModelAuthorizer:
         )
 
 
+class _SohAuthorizer:
+    def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
+        assert result.tool_name == "predict_soh_trajectory"
+        return AuditedResultAuthorization(
+            allowed=True,
+            route_id="matr-soh-active-route",
+            activation_status="ACTIVE",
+            evidence_level=EvidenceLevel.MODEL_INFERENCE,
+            supported_domain="activated project-bound MATR finite SOH route",
+        )
+
+
 def _builder(
     ledger: AuditLedger,
     *,
@@ -134,6 +146,35 @@ def _cycle_life_result() -> ToolResult:
             },
         },
         uncertainty=None,
+        warnings=[],
+        provenance=list(_provenance()),
+        created_at=NOW,
+    )
+
+
+def _soh_result() -> ToolResult:
+    return ToolResult(
+        result_id=str(uuid4()),
+        tool_name="predict_soh_trajectory",
+        tool_version="advanced-soh-prediction-tool-v1",
+        model_version="matr-hybridpatch-cutoff-50-seed-38",
+        data_version="matr-three-batch-v1",
+        feature_version="cyclepatch-multichannel-v1",
+        input_hash="c" * 64,
+        values={
+            "artifact_type": "quanxin_life.advanced_soh_trajectory.v1",
+            "artifact": {
+                "cell_id": "MATR_b3c34",
+                "cutoff_cycle": 50,
+                "prediction_cycles": [51, 500],
+                "predicted_soh": [0.99, 0.87],
+                "horizon_end_cycle": 500,
+            },
+        },
+        uncertainty={
+            "finite_horizon_only": True,
+            "conformal_interval_included": False,
+        },
         warnings=[],
         provenance=list(_provenance()),
         created_at=NOW,
@@ -191,6 +232,31 @@ def test_cycle_life_card_is_a_chinese_engineering_analysis_sheet() -> None:
     assert "15 年" not in rendered
     assert "20 年" not in rendered
     assert "25 年" not in rendered
+
+
+def test_soh_card_explains_the_finite_cycle_boundary_without_confidence_claims() -> None:
+    result = _soh_result()
+    card = AuditedCardBuilder(
+        AuditLedger((result,)),
+        authorizer=_SohAuthorizer(),  # type: ignore[arg-type]
+        binding_verifier=_BindingVerifier(),
+    ).build_result_card(run_id="run-safe", result_id=result.result_id)
+
+    rendered = json.dumps(card, ensure_ascii=False)
+
+    assert "有限时域 SOH 分析" in rendered
+    assert "MATR_b3c34" in rendered
+    assert "已观测循环" in rendered
+    assert "50" in rendered
+    assert "预测边界循环" in rendered
+    assert "500" in rendered
+    assert "边界周期 SOH" in rendered
+    assert "0.87" in rendered
+    assert "仅覆盖至第 500 个循环" in rendered
+    assert "15 年" not in rendered
+    assert "可信度" not in rendered
+    assert result.result_id not in rendered
+    assert result.model_version not in rendered
 
 
 def test_audited_card_public_api_rejects_caller_supplied_numeric_value() -> None:

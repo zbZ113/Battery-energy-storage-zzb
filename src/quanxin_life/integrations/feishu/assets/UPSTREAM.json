@@ -1,0 +1,19 @@
+{
+  "asset_id": "quanxin-soh-sans-v1",
+  "family": "Noto Sans SC",
+  "upstream_version": "2.004-H2",
+  "license": "SIL Open Font License 1.1",
+  "source_css_api": "https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400&text=<fixed-soh-label-set>&display=swap",
+  "source_font_url_version": "fonts.gstatic.com/l/font v40",
+  "source_font_sha256": "dad06a4039f91bc22683352ead0fa1b63e710fbb90dc64be123ba6798d95b894",
+  "source_font_size_bytes": 26060,
+  "modified_family": "Quanxin SOH Sans",
+  "modifications": [
+    "Subset to printable ASCII and the fixed Chinese labels used by feishu-soh-plot-v1",
+    "Rename the modified font to avoid the upstream Reserved Font Name"
+  ],
+  "fonttools_version": "4.63.0",
+  "output_sha256": "cd42dca9abc49fc97b6e5426afd8bcf87b6b002ace89bb1d03e9b2f4ecfa32d5",
+  "output_size_bytes": 26068,
+  "retrieved_at_utc": "2026-08-13T15:18:00Z"
+}

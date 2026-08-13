@@ -22,6 +22,11 @@ from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
     ADVANCED_RUL_PREDICTION_TOOL_VERSION,
 )
+from quanxin_life.tools.advanced_soh_prediction import (
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_TOOL_VERSION,
+    AdvancedSOHInference,
+)
 from quanxin_life.tools.blast_scenarios import (
     COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
     PROJECT_STORAGE_LIFETIME_TOOL_VERSION,
@@ -47,6 +52,9 @@ _ADVANCED_RUL_SHA_FIELDS = (
     "artifact_manifest_sha256",
     "ledger_head_sha256",
 )
+_ADVANCED_SOH_DOMAIN = "activated project-bound MATR finite SOH route"
+_ADVANCED_SOH_UNRESOLVED_ROUTE = "unresolved-advanced-soh-route"
+_ADVANCED_SOH_SHA_FIELDS = _ADVANCED_RUL_SHA_FIELDS
 
 
 class _AuthorizationBase(TypedDict):
@@ -128,7 +136,7 @@ class BlastScenarioResultAuthorizer:
 
 
 class AuditedScenarioResultAuthorizer:
-    """Authorize audited scenario and active Advanced RUL results."""
+    """Authorize audited scenario and active Advanced RUL/SOH results."""
 
     def __init__(
         self,
@@ -148,6 +156,8 @@ class AuditedScenarioResultAuthorizer:
             return self._scenario_authorizer.authorize(result)
         if result.tool_name == "predict_cycle_life":
             return _authorize_advanced_rul(result)
+        if result.tool_name == "predict_soh_trajectory":
+            return _authorize_advanced_soh(result)
         if (
             result.tool_name != "generate_audited_report"
             or result.tool_version != AUDITED_REPORT_TOOL_VERSION
@@ -179,6 +189,16 @@ class AuditedScenarioResultAuthorizer:
             ):
                 return _advanced_rul_rejected(
                     "ADVANCED_RUL_REPORT_CONTRACT_MISMATCH",
+                    route_id=authorization.route_id,
+                )
+        elif upstream.tool_name == "predict_soh_trajectory":
+            authorization = _authorize_advanced_soh(upstream)
+            if authorization.allowed and not _matches_advanced_soh_report(
+                result,
+                upstream,
+            ):
+                return _advanced_soh_rejected(
+                    "ADVANCED_SOH_REPORT_CONTRACT_MISMATCH",
                     route_id=authorization.route_id,
                 )
         else:
@@ -257,6 +277,69 @@ def _authorize_advanced_rul(result: ToolResult) -> AuditedResultAuthorization:
     )
 
 
+def _authorize_advanced_soh(result: ToolResult) -> AuditedResultAuthorization:
+    try:
+        checked = ToolResult.model_validate(result.model_dump(mode="json"))
+        artifact_value = checked.values.get("artifact")
+        if not isinstance(artifact_value, Mapping):
+            raise ValueError("Advanced SOH artifact is invalid")
+        artifact = artifact_value
+        inference = AdvancedSOHInference.model_validate(
+            {
+                **{
+                    name: artifact.get(name)
+                    for name in AdvancedSOHInference.model_fields
+                },
+                "data_version": checked.data_version,
+                "feature_version": checked.feature_version,
+                "model_version": checked.model_version,
+            }
+        )
+        artifact_id = _uuid(artifact.get("artifact_id"))
+        decision_event_id = _uuid(artifact.get("decision_event_id"))
+        _uuid(artifact.get("record_batch_id"))
+        _uuid(artifact.get("upstream_result_id"))
+    except (AttributeError, TypeError, ValueError):
+        return _advanced_soh_rejected("ADVANCED_SOH_RESULT_CONTRACT_MISMATCH")
+    uncertainty = checked.uncertainty
+    if (
+        checked.tool_version != ADVANCED_SOH_PREDICTION_TOOL_VERSION
+        or checked.values.get("artifact_type")
+        != ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE
+        or inference.task is not AdvancedModelTask.SOH
+        or inference.output_target != "soh_trajectory"
+        or inference.route_role
+        not in {
+            AdvancedModelRouteRole.MEAN_ACCURACY,
+            AdvancedModelRouteRole.TAIL_EFFICIENCY,
+        }
+        or artifact.get("horizon_end_cycle") != inference.prediction_cycles[-1]
+        or inference.prediction_cycles[-1] != 500
+        or checked.model_version != inference.model_version
+        or checked.data_version != inference.data_version
+        or checked.feature_version != inference.feature_version
+        or not isinstance(uncertainty, Mapping)
+        or uncertainty.get("finite_horizon_only") is not True
+        or uncertainty.get("conformal_interval_included") is not False
+        or not _positive_int(artifact.get("ledger_sequence_number"))
+        or any(not _sha256(artifact.get(name)) for name in _ADVANCED_SOH_SHA_FIELDS)
+        or not _matches_advanced_model_provenance(
+            checked,
+            artifact_id=artifact_id,
+            artifact_manifest_sha256=artifact.get("artifact_manifest_sha256"),
+        )
+    ):
+        return _advanced_soh_rejected("ADVANCED_SOH_RESULT_CONTRACT_MISMATCH")
+    return AuditedResultAuthorization(
+        allowed=True,
+        route_id=decision_event_id,
+        activation_status="ACTIVE",
+        evidence_level=EvidenceLevel.MODEL_INFERENCE,
+        supported_domain=_ADVANCED_SOH_DOMAIN,
+        rejection_reason=None,
+    )
+
+
 def _matches_advanced_rul_report(report: ToolResult, upstream: ToolResult) -> bool:
     context = report.values.get("upstream_context")
     if not isinstance(context, list) or len(context) != 1:
@@ -277,6 +360,10 @@ def _matches_advanced_rul_report(report: ToolResult, upstream: ToolResult) -> bo
     )
 
 
+def _matches_advanced_soh_report(report: ToolResult, upstream: ToolResult) -> bool:
+    return _matches_advanced_rul_report(report, upstream)
+
+
 def _approved_rul_role(cutoff_cycle: int, role: AdvancedModelRouteRole) -> bool:
     if cutoff_cycle == 20:
         return role is AdvancedModelRouteRole.DEFAULT
@@ -287,6 +374,19 @@ def _approved_rul_role(cutoff_cycle: int, role: AdvancedModelRouteRole) -> bool:
 
 
 def _matches_advanced_rul_provenance(
+    result: ToolResult,
+    *,
+    artifact_id: str,
+    artifact_manifest_sha256: object,
+) -> bool:
+    return _matches_advanced_model_provenance(
+        result,
+        artifact_id=artifact_id,
+        artifact_manifest_sha256=artifact_manifest_sha256,
+    )
+
+
+def _matches_advanced_model_provenance(
     result: ToolResult,
     *,
     artifact_id: str,
@@ -330,6 +430,21 @@ def _advanced_rul_rejected(
         activation_status="NOT_ACTIVATED",
         evidence_level=EvidenceLevel.MODEL_INFERENCE,
         supported_domain=_ADVANCED_RUL_DOMAIN,
+        rejection_reason=reason,
+    )
+
+
+def _advanced_soh_rejected(
+    reason: str,
+    *,
+    route_id: str = _ADVANCED_SOH_UNRESOLVED_ROUTE,
+) -> AuditedResultAuthorization:
+    return AuditedResultAuthorization(
+        allowed=False,
+        route_id=route_id,
+        activation_status="NOT_ACTIVATED",
+        evidence_level=EvidenceLevel.MODEL_INFERENCE,
+        supported_domain=_ADVANCED_SOH_DOMAIN,
         rejection_reason=reason,
     )
 

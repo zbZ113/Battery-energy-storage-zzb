@@ -1271,6 +1271,16 @@ class FeishuEventReceipt(Base):
             "AND length(csv_mapping_evidence_sha256) = 64)",
             name="ck_feishu_event_receipt_csv_mapping_evidence_contract",
         ),
+        CheckConstraint(
+            "(analysis_image_key IS NULL AND "
+            "analysis_image_renderer_version IS NULL AND "
+            "analysis_image_sha256 IS NULL) OR "
+            "(analysis_image_key IS NOT NULL AND "
+            "analysis_image_renderer_version IS NOT NULL AND "
+            "analysis_image_sha256 IS NOT NULL AND "
+            "length(analysis_image_sha256) = 64)",
+            name="ck_feishu_event_receipt_analysis_image_provenance",
+        ),
         Index("ix_feishu_receipts_received_at", "received_at"),
         Index("ix_feishu_receipts_job_status_updated", "job_status", "job_updated_at"),
         Index("ix_feishu_receipts_scenario_context_id", "scenario_context_id"),
@@ -1320,9 +1330,13 @@ class FeishuEventReceipt(Base):
     csv_mapping_evidence_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     csv_mapping_evidence_sha256: Mapped[str | None] = mapped_column(String(64))
     validation_result_id: Mapped[str | None] = mapped_column(String(64))
+    prepared_input_result_id: Mapped[str | None] = mapped_column(String(64))
     analysis_result_id: Mapped[str | None] = mapped_column(String(64))
     report_result_id: Mapped[str | None] = mapped_column(String(64))
     scenario_image_key: Mapped[str | None] = mapped_column(String(200))
+    analysis_image_key: Mapped[str | None] = mapped_column(String(200))
+    analysis_image_renderer_version: Mapped[str | None] = mapped_column(String(100))
+    analysis_image_sha256: Mapped[str | None] = mapped_column(String(64))
     result_card_message_id: Mapped[str | None] = mapped_column(String(200))
     report_file_key: Mapped[str | None] = mapped_column(String(200))
     report_message_id: Mapped[str | None] = mapped_column(String(200))

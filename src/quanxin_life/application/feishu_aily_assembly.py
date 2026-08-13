@@ -93,6 +93,7 @@ from quanxin_life.integrations.feishu.security import (
     FeishuWebhookSecrets,
     FeishuWebhookVerifier,
 )
+from quanxin_life.integrations.feishu.soh_plot import FeishuSohPlotter
 from quanxin_life.integrations.feishu.sqlalchemy_receipts import (
     SqlAlchemyFeishuReceiptStore,
 )
@@ -419,6 +420,7 @@ def create_feishu_aily_components(
         ),
         result_authorizer=authorizer,
         scenario_plotter=FeishuScenarioPlotter(),
+        analysis_plotter=FeishuSohPlotter(),
     )
     aily_delivery = AilyAnalysisJobDelivery(
         bitable_writer=bitable_writer,

@@ -16,7 +16,7 @@ from quanxin_life.application.feishu_project_models import (
 )
 from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
 from quanxin_life.application.invocation_context import ProjectInvocationContextService
-from quanxin_life.audit import SqlAuditLedger, SqlProjectAuditLedger
+from quanxin_life.audit import AuditLedgerError, SqlAuditLedger, SqlProjectAuditLedger
 from quanxin_life.core import (
     AdvancedModelRouteRole,
     CellMetadata,
@@ -51,6 +51,10 @@ from quanxin_life.tools.advanced_input import (
     ADVANCED_INPUT_EVIDENCE_TYPE,
     PREPARE_ADVANCED_INPUT_TOOL_VERSION,
 )
+from quanxin_life.tools.advanced_soh_prediction import (
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_TOOL_VERSION,
+)
 
 NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
 SOURCE_SHA256 = "a" * 64
@@ -61,6 +65,11 @@ class _Job:
     task_type: object
     chat_id: str | None = "oc-approved"
     sender_id: str | None = "ou-approved"
+    job_id: str = ""
+    run_id: str = ""
+    prepared_input_result_id: str | None = None
+    analysis_result_id: str | None = None
+    report_result_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,12 +352,72 @@ def test_result_resolver_restores_only_a_durably_bound_feishu_project_result() -
         resolver.resolve_registered_result(result.result_id)
 
 
+def test_result_resolver_restores_a_prepared_input_slot() -> None:
+    fixture = _fixture()
+    context = fixture.context_service.resolve_feishu(
+        chat_id="oc-approved",
+        sender_open_id="ou-approved",
+    )
+    prepared = fixture.project_ledger.register_result(
+        context,
+        ToolResult(
+            result_id=str(uuid4()),
+            tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+            tool_version=PREPARE_ADVANCED_INPUT_TOOL_VERSION,
+            model_version="advanced-input-transform-v1",
+            data_version="matr-v1",
+            feature_version="multichannel-cycle-v1",
+            input_hash=sha256_canonical({"record_batch_id": fixture.record_batch_id}),
+            values={"artifact": {"record_batch_id": fixture.record_batch_id}},
+            provenance=list(_registration().provenance),
+            created_at=NOW,
+        ),
+    )
+    job_id = str(uuid4())
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="evt-prepared-result",
+                event_type="im.message.receive_v1",
+                payload_sha256="7" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="FEISHU",
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                prepared_input_result_id=prepared.result_id,
+                job_attempt_count=1,
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+
+    resolver = FeishuProjectResultResolver(
+        session_factory=fixture.sessions,
+        global_resolver=SqlAuditLedger(fixture.sessions, clock=lambda: NOW),
+        context_service=fixture.context_service,
+        project_ledger=fixture.project_ledger,
+    )
+
+    assert resolver.resolve_registered_result(prepared.result_id) == prepared
+
+
 class _ProjectToolService:
     def __init__(self, ledger: SqlProjectAuditLedger) -> None:
         self.ledger = ledger
         self.calls: list[ToolInvocation] = []
 
-    def invoke_in_project(self, invocation: ToolInvocation, *, context: object) -> ToolResult:
+    def _execute(self, invocation: ToolInvocation, *, context: object) -> ToolResult:
         self.calls.append(invocation)
         if invocation.tool_name is StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES:
             result = ToolResult(
@@ -366,7 +435,7 @@ class _ProjectToolService:
                 provenance=list(_registration().provenance),
                 created_at=NOW,
             )
-        else:
+        elif invocation.tool_name is StandardToolName.PREDICT_CYCLE_LIFE:
             result = ToolResult(
                 result_id=str(uuid4()),
                 tool_name=StandardToolName.PREDICT_CYCLE_LIFE.value,
@@ -379,6 +448,9 @@ class _ProjectToolService:
                     "artifact_type": ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
                     "artifact": {
                         "record_batch_id": fixture_record_batch_id(context),
+                        "upstream_result_id": invocation.input_value[
+                            "upstream_result_id"
+                        ],
                         "cycle_life_prediction": {"predicted_cycle": 720.0},
                         "derived_remaining_cycles": 700.0,
                         "route_role": invocation.input_value["route_role"],
@@ -387,7 +459,54 @@ class _ProjectToolService:
                 provenance=list(_registration().provenance),
                 created_at=NOW,
             )
+        else:
+            assert invocation.tool_name is StandardToolName.PREDICT_SOH_TRAJECTORY
+            result = ToolResult(
+                result_id=str(uuid4()),
+                tool_name=StandardToolName.PREDICT_SOH_TRAJECTORY.value,
+                tool_version=ADVANCED_SOH_PREDICTION_TOOL_VERSION,
+                model_version="reviewed-soh-model-v1",
+                data_version="matr-v1",
+                feature_version="multichannel-cycle-v1",
+                input_hash=sha256_canonical(invocation.input_value),
+                values={
+                    "artifact_type": ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+                    "artifact": {
+                        "record_batch_id": fixture_record_batch_id(context),
+                        "upstream_result_id": invocation.input_value[
+                            "upstream_result_id"
+                        ],
+                        "dataset_id": "MATR",
+                        "cell_id": "MATR_b3c34",
+                        "cutoff_cycle": 20,
+                        "prediction_cycles": [21, 500],
+                        "predicted_soh": [0.99, 0.88],
+                        "horizon_end_cycle": 500,
+                        "route_role": invocation.input_value["route_role"],
+                    },
+                },
+                uncertainty={
+                    "finite_horizon_only": True,
+                    "conformal_interval_included": False,
+                },
+                provenance=list(_registration().provenance),
+                created_at=NOW,
+            )
+        return result
+
+    def invoke_in_project(self, invocation: ToolInvocation, *, context: object) -> ToolResult:
+        result = self._execute(invocation, context=context)
         return self.ledger.register_result(context, result)  # type: ignore[arg-type]
+
+
+class _AtomicProjectToolService(_ProjectToolService):
+    def execute_in_project_unregistered(
+        self,
+        invocation: ToolInvocation,
+        *,
+        context: object,
+    ) -> ToolResult:
+        return self._execute(invocation, context=context)
 
 
 def fixture_record_batch_id(context: object) -> str:
@@ -450,3 +569,708 @@ def test_executor_uses_project_tools_and_registers_a_fixed_audited_report(
         assert report_binding is not None
         assert report_binding.binding_schema_version == "project-tool-result-binding-v3"
         assert report_binding.feishu_binding_id == fixture.binding_id
+
+
+def test_executor_runs_project_bound_finite_soh_with_explicit_mean_role() -> None:
+    fixture = _fixture(cutoff_cycle=20)
+    _RECORD_BATCH_IDS[fixture.project_id] = fixture.record_batch_id
+    service = _ProjectToolService(fixture.project_ledger)
+    executor = FeishuProjectModelExecutor(
+        context_service=fixture.context_service,
+        batch_resolver=FeishuProjectRecordBatchResolver(fixture.sessions),
+        project_tool_service=service,
+        project_ledger=fixture.project_ledger,
+        clock=lambda: NOW,
+    )
+
+    execution = executor.execute(
+        _Job(task_type=StandardToolName.PREDICT_SOH_TRAJECTORY),
+        _registration(cutoff_cycle=20),
+    )
+
+    assert [call.tool_name for call in service.calls] == [
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+        StandardToolName.PREDICT_SOH_TRAJECTORY,
+    ]
+    assert service.calls[1].input_value == {
+        "upstream_result_id": execution.prepared_input_result_id,
+        "route_role": AdvancedModelRouteRole.MEAN_ACCURACY.value,
+    }
+    assert execution.analysis_result.tool_name == "predict_soh_trajectory"
+    assert execution.analysis_result.tool_version == ADVANCED_SOH_PREDICTION_TOOL_VERSION
+    assert execution.report_result.values["upstream_result_ids"] == [
+        execution.analysis_result.result_id
+    ]
+
+
+def test_atomic_executor_commits_each_slot_and_marks_the_execution_complete() -> None:
+    fixture = _fixture(cutoff_cycle=20)
+    _RECORD_BATCH_IDS[fixture.project_id] = fixture.record_batch_id
+    service = _AtomicProjectToolService(fixture.project_ledger)
+    executor = FeishuProjectModelExecutor(
+        context_service=fixture.context_service,
+        batch_resolver=FeishuProjectRecordBatchResolver(fixture.sessions),
+        project_tool_service=service,
+        project_ledger=fixture.project_ledger,
+        clock=lambda: NOW,
+    )
+    job_id = str(uuid4())
+    claim_token = "f" * 64
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="evt-atomic-executor",
+                event_type="im.message.receive_v1",
+                payload_sha256="e" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="FEISHU",
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type=StandardToolName.PREDICT_SOH_TRAJECTORY.value,
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                job_claim_token=claim_token,
+                job_attempt_count=1,
+                job_lease_expires_at=NOW.replace(hour=13),
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+
+    execution = executor.execute(
+        _Job(
+            task_type=StandardToolName.PREDICT_SOH_TRAJECTORY,
+            job_id=job_id,
+            run_id=job_id,
+        ),
+        _registration(cutoff_cycle=20),
+        claim_token=claim_token,
+    )
+
+    assert execution.slots_committed is True
+    assert [call.tool_name for call in service.calls] == [
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+        StandardToolName.PREDICT_SOH_TRAJECTORY,
+    ]
+    with session_scope(fixture.sessions) as session:
+        receipt = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == job_id)
+        )
+        assert receipt is not None
+        assert receipt.prepared_input_result_id == execution.prepared_input_result_id
+        assert receipt.analysis_result_id == execution.analysis_result.result_id
+        assert receipt.report_result_id == execution.report_result.result_id
+
+
+class _InjectedProcessCrash(BaseException):
+    pass
+
+
+@pytest.mark.parametrize("crash_slot", ("PREPARED", "ANALYSIS", "REPORT"))
+def test_atomic_executor_resumes_after_each_committed_slot_without_rerunning(
+    crash_slot: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(cutoff_cycle=20)
+    _RECORD_BATCH_IDS[fixture.project_id] = fixture.record_batch_id
+    service = _AtomicProjectToolService(fixture.project_ledger)
+    executor = FeishuProjectModelExecutor(
+        context_service=fixture.context_service,
+        batch_resolver=FeishuProjectRecordBatchResolver(fixture.sessions),
+        project_tool_service=service,
+        project_ledger=fixture.project_ledger,
+        clock=lambda: NOW,
+    )
+    job_id = str(uuid4())
+    first_claim = "f" * 64
+    second_claim = "a" * 64
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id=f"evt-crash-after-{crash_slot.casefold()}",
+                event_type="im.message.receive_v1",
+                payload_sha256="e" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="FEISHU",
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type=StandardToolName.PREDICT_SOH_TRAJECTORY.value,
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                job_claim_token=first_claim,
+                job_attempt_count=1,
+                job_lease_expires_at=NOW.replace(hour=13),
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+    original_commit = fixture.project_ledger.commit_feishu_result_slot
+    original_report = executor._audited_report_unregistered
+    report_calls: list[str] = []
+
+    def crash_after_commit(**kwargs: object) -> ToolResult:
+        committed = original_commit(**kwargs)  # type: ignore[arg-type]
+        if kwargs["slot"] == crash_slot:
+            raise _InjectedProcessCrash
+        return committed
+
+    def count_report(
+        analysis: ToolResult,
+        **kwargs: object,
+    ) -> ToolResult:
+        report_calls.append(analysis.result_id)
+        return original_report(analysis, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        fixture.project_ledger,
+        "commit_feishu_result_slot",
+        crash_after_commit,
+    )
+    monkeypatch.setattr(executor, "_audited_report_unregistered", count_report)
+    first_job = _Job(
+        task_type=StandardToolName.PREDICT_SOH_TRAJECTORY,
+        job_id=job_id,
+        run_id=job_id,
+    )
+
+    with pytest.raises(_InjectedProcessCrash):
+        executor.execute(
+            first_job,
+            _registration(cutoff_cycle=20),
+            claim_token=first_claim,
+        )
+
+    with session_scope(fixture.sessions) as session:
+        receipt = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == job_id)
+        )
+        assert receipt is not None
+        assert receipt.prepared_input_result_id is not None
+        if crash_slot in {"ANALYSIS", "REPORT"}:
+            assert receipt.analysis_result_id is not None
+        else:
+            assert receipt.analysis_result_id is None
+        if crash_slot == "REPORT":
+            assert receipt.report_result_id is not None
+        else:
+            assert receipt.report_result_id is None
+        receipt.job_claim_token = second_claim
+        receipt.job_attempt_count = 2
+        receipt.job_lease_expires_at = NOW.replace(hour=13)
+        recovery_job = _Job(
+            task_type=StandardToolName.PREDICT_SOH_TRAJECTORY,
+            job_id=job_id,
+            run_id=job_id,
+            prepared_input_result_id=receipt.prepared_input_result_id,
+            analysis_result_id=receipt.analysis_result_id,
+            report_result_id=receipt.report_result_id,
+        )
+
+    monkeypatch.setattr(
+        fixture.project_ledger,
+        "commit_feishu_result_slot",
+        original_commit,
+    )
+    execution = executor.execute(
+        recovery_job,
+        _registration(cutoff_cycle=20),
+        claim_token=second_claim,
+    )
+
+    assert execution.slots_committed is True
+    assert [call.tool_name for call in service.calls] == [
+        StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
+        StandardToolName.PREDICT_SOH_TRAJECTORY,
+    ]
+    assert report_calls == [execution.analysis_result.result_id]
+    with session_scope(fixture.sessions) as session:
+        receipt = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == job_id)
+        )
+        assert receipt is not None
+        assert receipt.prepared_input_result_id == execution.prepared_input_result_id
+        assert receipt.analysis_result_id == execution.analysis_result.result_id
+        assert receipt.report_result_id == execution.report_result.result_id
+
+
+def test_feishu_project_result_slot_commit_is_idempotent_and_fenced() -> None:
+    fixture = _fixture()
+    context = fixture.context_service.resolve_feishu(
+        chat_id="oc-approved",
+        sender_open_id="ou-approved",
+    )
+    job_id = str(uuid4())
+    claim_token = "f" * 64
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="evt-atomic-slot",
+                event_type="im.message.receive_v1",
+                payload_sha256="e" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="FEISHU",
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                job_claim_token=claim_token,
+                job_attempt_count=1,
+                job_lease_expires_at=NOW.replace(hour=13),
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+    prepared = ToolResult(
+        result_id=str(uuid4()),
+        tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+        tool_version=PREPARE_ADVANCED_INPUT_TOOL_VERSION,
+        model_version="advanced-input-transform-v1",
+        data_version="matr-v1",
+        feature_version="multichannel-cycle-v1",
+        input_hash="1" * 64,
+        values={"artifact": {"record_batch_id": fixture.record_batch_id}},
+        provenance=list(_registration().provenance),
+        created_at=NOW,
+    )
+
+    first = fixture.project_ledger.commit_feishu_result_slot(
+        context=context,
+        job_id=job_id,
+        claim_token=claim_token,
+        slot="PREPARED",
+        expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+        run_id=job_id,
+        chat_id="oc-approved",
+        sender_id="ou-approved",
+        result=prepared,
+    )
+    second = fixture.project_ledger.commit_feishu_result_slot(
+        context=context,
+        job_id=job_id,
+        claim_token=claim_token,
+        slot="PREPARED",
+        expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+        run_id=job_id,
+        chat_id="oc-approved",
+        sender_id="ou-approved",
+        result=prepared,
+    )
+
+    assert first == prepared
+    assert second == prepared
+    with session_scope(fixture.sessions) as session:
+        row = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == job_id)
+        )
+        assert row is not None
+        assert row.prepared_input_result_id == prepared.result_id
+        assert (
+            session.scalar(
+                select(ProjectToolResultBindingRecord).where(
+                    ProjectToolResultBindingRecord.result_id == prepared.result_id
+                )
+            )
+            is not None
+        )
+
+    with pytest.raises(AuditLedgerError, match="stale"):
+        fixture.project_ledger.commit_feishu_result_slot(
+            context=context,
+            job_id=job_id,
+            claim_token="a" * 64,
+            slot="PREPARED",
+            expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+            run_id=job_id,
+            chat_id="oc-approved",
+            sender_id="ou-approved",
+            result=prepared.model_copy(update={"result_id": str(uuid4())}),
+        )
+
+
+def test_feishu_project_result_slot_uses_the_ledger_commit_time_for_the_lease() -> None:
+    fixture = _fixture()
+    context = fixture.context_service.resolve_feishu(
+        chat_id="oc-approved",
+        sender_open_id="ou-approved",
+    )
+    job_id = str(uuid4())
+    claim_token = "f" * 64
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="evt-expired-atomic-slot",
+                event_type="im.message.receive_v1",
+                payload_sha256="e" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="FEISHU",
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                job_claim_token=claim_token,
+                job_attempt_count=1,
+                job_lease_expires_at=NOW.replace(hour=13),
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+    ledger = SqlProjectAuditLedger(
+        fixture.sessions,
+        context_validator=fixture.context_service,
+        clock=lambda: NOW.replace(hour=14),
+    )
+    prepared = ToolResult(
+        result_id=str(uuid4()),
+        tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+        tool_version=PREPARE_ADVANCED_INPUT_TOOL_VERSION,
+        model_version="advanced-input-transform-v1",
+        data_version="matr-v1",
+        feature_version="multichannel-cycle-v1",
+        input_hash="1" * 64,
+        values={"artifact": {"record_batch_id": fixture.record_batch_id}},
+        provenance=list(_registration().provenance),
+        created_at=NOW,
+    )
+
+    with pytest.raises(AuditLedgerError, match="stale"):
+        ledger.commit_feishu_result_slot(
+            context=context,
+            job_id=job_id,
+            claim_token=claim_token,
+            slot="PREPARED",
+            expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+            run_id=job_id,
+            chat_id="oc-approved",
+            sender_id="ou-approved",
+            result=prepared,
+        )
+
+
+@pytest.mark.parametrize(
+    ("slot", "tool_name"),
+    (
+        ("PREPARED", StandardToolName.PREDICT_CYCLE_LIFE.value),
+        ("ANALYSIS", StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value),
+        ("REPORT", StandardToolName.PREDICT_CYCLE_LIFE.value),
+    ),
+)
+def test_feishu_project_result_slot_rejects_the_wrong_tool(
+    slot: str,
+    tool_name: str,
+) -> None:
+    fixture = _fixture()
+    context = fixture.context_service.resolve_feishu(
+        chat_id="oc-approved",
+        sender_open_id="ou-approved",
+    )
+    job_id = str(uuid4())
+    claim_token = "f" * 64
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id=f"evt-wrong-{slot.casefold()}",
+                event_type="im.message.receive_v1",
+                payload_sha256="e" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="FEISHU",
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                job_claim_token=claim_token,
+                job_attempt_count=1,
+                job_lease_expires_at=NOW.replace(hour=13),
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+    result = ToolResult(
+        result_id=str(uuid4()),
+        tool_name=tool_name,
+        tool_version="test-tool-v1",
+        model_version="test-model-v1",
+        data_version="matr-v1",
+        feature_version="multichannel-cycle-v1",
+        input_hash="1" * 64,
+        values={},
+        provenance=list(_registration().provenance),
+        created_at=NOW,
+    )
+
+    with pytest.raises(AuditLedgerError, match="tool"):
+        fixture.project_ledger.commit_feishu_result_slot(
+            context=context,
+            job_id=job_id,
+            claim_token=claim_token,
+            slot=slot,
+            expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+            run_id=job_id,
+            chat_id="oc-approved",
+            sender_id="ou-approved",
+            result=result,
+        )
+
+
+def test_feishu_project_result_slot_rejects_non_hex_claim_and_non_feishu_origin() -> None:
+    fixture = _fixture()
+    context = fixture.context_service.resolve_feishu(
+        chat_id="oc-approved",
+        sender_open_id="ou-approved",
+    )
+    job_id = str(uuid4())
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="evt-non-feishu-slot",
+                event_type="aily.analysis.requested",
+                payload_sha256="e" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="AILY",
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                job_claim_token="g" * 64,
+                job_attempt_count=1,
+                job_lease_expires_at=NOW.replace(hour=13),
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+    prepared = ToolResult(
+        result_id=str(uuid4()),
+        tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+        tool_version=PREPARE_ADVANCED_INPUT_TOOL_VERSION,
+        model_version="advanced-input-transform-v1",
+        data_version="matr-v1",
+        feature_version="multichannel-cycle-v1",
+        input_hash="1" * 64,
+        values={"artifact": {"record_batch_id": fixture.record_batch_id}},
+        provenance=list(_registration().provenance),
+        created_at=NOW,
+    )
+
+    with pytest.raises(AuditLedgerError, match="claim token"):
+        fixture.project_ledger.commit_feishu_result_slot(
+            context=context,
+            job_id=job_id,
+            claim_token="g" * 64,
+            slot="PREPARED",
+            expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+            run_id=job_id,
+            chat_id="oc-approved",
+            sender_id="ou-approved",
+            result=prepared,
+        )
+
+    with session_scope(fixture.sessions) as session:
+        receipt = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == job_id)
+        )
+        assert receipt is not None
+        receipt.job_claim_token = "f" * 64
+
+    with pytest.raises(AuditLedgerError, match="stale"):
+        fixture.project_ledger.commit_feishu_result_slot(
+            context=context,
+            job_id=job_id,
+            claim_token="f" * 64,
+            slot="PREPARED",
+            expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+            run_id=job_id,
+            chat_id="oc-approved",
+            sender_id="ou-approved",
+            result=prepared,
+        )
+
+
+def test_feishu_project_result_slot_rejects_unsupported_analysis_task() -> None:
+    fixture = _fixture()
+    context = fixture.context_service.resolve_feishu(
+        chat_id="oc-approved",
+        sender_open_id="ou-approved",
+    )
+    job_id = str(uuid4())
+    claim_token = "f" * 64
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="evt-unsupported-slot-task",
+                event_type="im.message.receive_v1",
+                payload_sha256="e" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="FEISHU",
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type="made_up_analysis_task",
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                job_claim_token=claim_token,
+                job_attempt_count=1,
+                job_lease_expires_at=NOW.replace(hour=13),
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+    result = ToolResult(
+        result_id=str(uuid4()),
+        tool_name="made_up_analysis_task",
+        tool_version="test-tool-v1",
+        model_version="test-model-v1",
+        data_version="matr-v1",
+        feature_version="multichannel-cycle-v1",
+        input_hash="1" * 64,
+        values={},
+        provenance=list(_registration().provenance),
+        created_at=NOW,
+    )
+
+    with pytest.raises(AuditLedgerError, match="task"):
+        fixture.project_ledger.commit_feishu_result_slot(
+            context=context,
+            job_id=job_id,
+            claim_token=claim_token,
+            slot="ANALYSIS",
+            expected_task="made_up_analysis_task",
+            run_id=job_id,
+            chat_id="oc-approved",
+            sender_id="ou-approved",
+            result=result,
+        )
+
+def test_feishu_project_result_slot_retry_requires_the_exact_project_binding() -> None:
+    fixture = _fixture()
+    context = fixture.context_service.resolve_feishu(
+        chat_id="oc-approved",
+        sender_open_id="ou-approved",
+    )
+    job_id = str(uuid4())
+    claim_token = "f" * 64
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="evt-missing-binding-slot",
+                event_type="im.message.receive_v1",
+                payload_sha256="e" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="FEISHU",
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                job_claim_token=claim_token,
+                job_attempt_count=1,
+                job_lease_expires_at=NOW.replace(hour=13),
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+    prepared = ToolResult(
+        result_id=str(uuid4()),
+        tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+        tool_version=PREPARE_ADVANCED_INPUT_TOOL_VERSION,
+        model_version="advanced-input-transform-v1",
+        data_version="matr-v1",
+        feature_version="multichannel-cycle-v1",
+        input_hash="1" * 64,
+        values={"artifact": {"record_batch_id": fixture.record_batch_id}},
+        provenance=list(_registration().provenance),
+        created_at=NOW,
+    )
+    fixture.project_ledger.commit_feishu_result_slot(
+        context=context,
+        job_id=job_id,
+        claim_token=claim_token,
+        slot="PREPARED",
+        expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+        run_id=job_id,
+        chat_id="oc-approved",
+        sender_id="ou-approved",
+        result=prepared,
+    )
+    with session_scope(fixture.sessions) as session:
+        binding = session.get(ProjectToolResultBindingRecord, prepared.result_id)
+        assert binding is not None
+        session.delete(binding)
+
+    with pytest.raises(AuditLedgerError, match="binding"):
+        fixture.project_ledger.commit_feishu_result_slot(
+            context=context,
+            job_id=job_id,
+            claim_token=claim_token,
+            slot="PREPARED",
+            expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+            run_id=job_id,
+            chat_id="oc-approved",
+            sender_id="ou-approved",
+            result=prepared,
+        )

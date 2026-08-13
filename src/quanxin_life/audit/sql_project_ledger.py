@@ -49,6 +49,7 @@ from quanxin_life.persistence.models import (
     ApprovalAction,
     ApprovalRequestRow,
     FeishuBindingRow,
+    FeishuEventReceipt,
     ModelManifest,
     ModelRouteActivationEvent,
     ModelRouteActivationStreamHead,
@@ -73,6 +74,12 @@ if TYPE_CHECKING:
 PROJECT_RESULT_BINDING_SCHEMA_VERSION = "project-tool-result-binding-v1"
 AGENT_PROJECT_RESULT_BINDING_SCHEMA_VERSION = "project-tool-result-binding-v2"
 FEISHU_PROJECT_RESULT_BINDING_SCHEMA_VERSION = "project-tool-result-binding-v3"
+_FEISHU_PROJECT_ANALYSIS_TASKS = frozenset(
+    {
+        "predict_cycle_life",
+        "predict_soh_trajectory",
+    }
+)
 ADVANCED_CALIBRATION_SAMPLE_MANIFEST_SCHEMA_VERSION = (
     "advanced-calibration-sample-manifest-v1"
 )
@@ -206,6 +213,196 @@ class SqlProjectAuditLedger:
         except SQLAlchemyError as exc:
             raise AuditLedgerError("project ToolResult persistence failed") from exc
         return ToolResult.model_validate(normalized.model_dump(mode="json"))
+
+    def commit_feishu_result_slot(
+        self,
+        *,
+        context: VerifiedProjectInvocationContext,
+        job_id: str,
+        claim_token: str,
+        slot: str,
+        expected_task: str,
+        run_id: str,
+        chat_id: str,
+        sender_id: str,
+        result: ToolResult,
+    ) -> ToolResult:
+        """Atomically bind one Feishu project result and its receipt slot."""
+
+        verified = self._require_context(context)
+        from quanxin_life.application.invocation_context import ProjectInvocationSource
+
+        if verified.invocation_source is not ProjectInvocationSource.FEISHU:
+            raise AuditLedgerError("Feishu result slots require a Feishu context")
+        if slot not in {"PREPARED", "ANALYSIS", "REPORT"}:
+            raise AuditLedgerError("Feishu result slot is invalid")
+        if expected_task not in _FEISHU_PROJECT_ANALYSIS_TASKS:
+            raise AuditLedgerError("Feishu result slot task is unsupported")
+        if not job_id or not run_id or not chat_id or not sender_id:
+            raise AuditLedgerError("Feishu result slot identity is incomplete")
+        if (
+            not isinstance(claim_token, str)
+            or len(claim_token) != 64
+            or claim_token.casefold() != claim_token
+            or any(character not in "0123456789abcdef" for character in claim_token)
+        ):
+            raise AuditLedgerError("Feishu result slot claim token is invalid")
+        normalized = self._normalized_result(result)
+        created_at = self._utc(self._clock())
+        expected_tool_name = {
+            "PREPARED": "extract_early_cycle_features",
+            "ANALYSIS": expected_task,
+            "REPORT": "generate_audited_report",
+        }[slot]
+        if normalized.tool_name != expected_tool_name:
+            raise AuditLedgerError("Feishu result slot tool is invalid")
+        result_sha256 = sha256_canonical(normalized.model_dump(mode="json"))
+        binding_values = self._binding_values(
+            verified,
+            normalized,
+            result_sha256=result_sha256,
+            created_at=created_at,
+        )
+        slot_field = {
+            "PREPARED": "prepared_input_result_id",
+            "ANALYSIS": "analysis_result_id",
+            "REPORT": "report_result_id",
+        }[slot]
+        try:
+            with session_scope(self._session_factory) as session:
+                receipt = session.scalar(
+                    select(FeishuEventReceipt)
+                    .where(FeishuEventReceipt.job_id == job_id)
+                    .with_for_update()
+                )
+                if receipt is None:
+                    raise AuditLedgerError("Feishu result slot job was not found")
+                lease = receipt.job_lease_expires_at
+                if (
+                    receipt.job_origin != "FEISHU"
+                    or receipt.job_status != "RUNNING"
+                    or receipt.job_claim_token != claim_token
+                    or lease is None
+                    or self._utc(lease) <= created_at
+                    or receipt.run_id != run_id
+                    or receipt.task_type != expected_task
+                    or receipt.chat_id != chat_id
+                    or receipt.sender_id != sender_id
+                ):
+                    raise AuditLedgerError("Feishu result slot claim is stale")
+                existing_id = getattr(receipt, slot_field)
+                if existing_id is not None:
+                    if existing_id != normalized.result_id:
+                        raise AuditLedgerError(
+                            "Feishu result slot already contains another result"
+                        )
+                    existing = self._load_result_in_session(session, existing_id)
+                    if existing != normalized:
+                        raise AuditLedgerError(
+                            "Feishu result slot contains conflicting result content"
+                        )
+                    existing_binding = session.get(
+                        ProjectToolResultBindingRecord,
+                        existing_id,
+                    )
+                    if existing_binding is None:
+                        raise AuditLedgerError(
+                            "Feishu result slot project binding is missing"
+                        )
+                    self._verify_binding(existing_binding, existing)
+                    if (
+                        existing_binding.project_id != verified.project_id
+                        or existing_binding.actor_user_id != verified.actor_user_id
+                        or existing_binding.actor_role != verified.actor_role.value
+                        or existing_binding.invocation_source != "FEISHU"
+                        or existing_binding.feishu_binding_id
+                        != verified.feishu_binding_id
+                    ):
+                        raise AuditLedgerError(
+                            "Feishu result slot project binding is invalid"
+                        )
+                    return ToolResult.model_validate(existing.model_dump(mode="json"))
+                if (
+                    session.get(ToolResultRecord, normalized.result_id) is not None
+                    or session.get(
+                        ProjectToolResultBindingRecord, normalized.result_id
+                    )
+                    is not None
+                ):
+                    raise DuplicateAuditResultError(
+                        f"duplicate ToolResult result_id: {normalized.result_id}"
+                    )
+                self._insert_project_result(
+                    session,
+                    result=normalized,
+                    binding_values=binding_values,
+                )
+                setattr(receipt, slot_field, normalized.result_id)
+                receipt.job_updated_at = created_at
+                session.flush()
+        except (AuditLedgerError, DuplicateAuditResultError):
+            raise
+        except IntegrityError as exc:
+            raise AuditLedgerError("Feishu result slot persistence integrity failed") from exc
+        except SQLAlchemyError as exc:
+            raise AuditLedgerError("Feishu result slot persistence failed") from exc
+        return ToolResult.model_validate(normalized.model_dump(mode="json"))
+
+    def _insert_project_result(
+        self,
+        session: Session,
+        *,
+        result: ToolResult,
+        binding_values: dict[str, object],
+    ) -> None:
+        row = ToolResultRecord(
+            id=result.result_id,
+            run_id=None,
+            agent_step_id=None,
+            tool_name=result.tool_name,
+            tool_version=result.tool_version,
+            model_version=result.model_version,
+            data_version=result.data_version,
+            feature_version=result.feature_version,
+            input_hash=result.input_hash,
+            values_json=dict(result.values),
+            uncertainty_json=(
+                dict(result.uncertainty) if result.uncertainty is not None else None
+            ),
+            warnings_json=list(result.warnings),
+            created_at=result.created_at,
+        )
+        session.add(row)
+        session.flush((row,))
+        for item in result.provenance:
+            session.add(
+                ProvenanceRecordRow(
+                    id=str(uuid4()),
+                    tool_result_id=result.result_id,
+                    source_id=item.source_id,
+                    source_kind=item.source_kind.value,
+                    uri=item.uri,
+                    sha256=item.sha256,
+                    description=item.description,
+                    created_at=item.created_at,
+                )
+            )
+        session.add(ProjectToolResultBindingRecord(**binding_values))
+        session.flush()
+
+    @staticmethod
+    def _load_result_in_session(session: Session, result_id: str) -> ToolResult:
+        row = session.get(ToolResultRecord, result_id)
+        if row is None:
+            raise AuditLedgerError("Feishu result slot points to a missing result")
+        provenance = tuple(
+            session.scalars(
+                select(ProvenanceRecordRow).where(
+                    ProvenanceRecordRow.tool_result_id == result_id
+                )
+            ).all()
+        )
+        return SqlProjectAuditLedger._result_from_rows(row, provenance)
 
     def commit_advanced_calibration_materialization(
         self,

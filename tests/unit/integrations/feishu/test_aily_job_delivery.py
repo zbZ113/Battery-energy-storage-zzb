@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
+
 from quanxin_life.core import EvidenceLevel, ProvenanceRecord, SourceKind, ToolResult
 from quanxin_life.integrations.feishu.aily_tasks import AilyAnalysisJobDelivery
 from quanxin_life.integrations.feishu.bitable import (
@@ -10,6 +12,9 @@ from quanxin_life.integrations.feishu.bitable import (
     BitableWriteResult,
 )
 from quanxin_life.integrations.feishu.cards import AuditedResultAuthorization
+from quanxin_life.integrations.feishu.delivery_contract import (
+    FeishuDeliveryResultContractError,
+)
 from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobOrigin,
     FeishuAnalysisJobRecord,
@@ -35,7 +40,10 @@ class _Bitable:
 
 class _Authorizer:
     def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
-        assert result.tool_name == "compare_operation_scenarios"
+        assert result.tool_name in {
+            "compare_operation_scenarios",
+            "generate_audited_report",
+        }
         return AuditedResultAuthorization(
             allowed=True,
             route_id="blast-lite-lfp-gr-250ah-prismatic-2019-v1",
@@ -66,9 +74,16 @@ def _job() -> FeishuAnalysisJobRecord:
         cell_reference="cell-250ah",
         input_file_sha256="2" * 64,
         validation_result_id=str(uuid4()),
+        prepared_input_result_id=None,
         analysis_result_id=str(uuid4()),
         report_result_id=str(uuid4()),
         scenario_image_key=None,
+        analysis_image_key=None,
+        analysis_image_renderer_version=None,
+        analysis_image_sha256=None,
+        csv_mapping_status=None,
+        csv_mapping_evidence=None,
+        csv_mapping_evidence_sha256=None,
         result_card_message_id=None,
         report_file_key=None,
         report_message_id=None,
@@ -132,7 +147,10 @@ def _report(job: FeishuAnalysisJobRecord) -> ToolResult:
         data_version="scenario-data-v1",
         feature_version="operation-scenario-contract-v1",
         input_hash="6" * 64,
-        values={"report_kind": "storage_lifetime_scenario"},
+        values={
+            "report_kind": "storage_lifetime_scenario",
+            "upstream_result_ids": [job.analysis_result_id],
+        },
         warnings=[],
         provenance=[
             ProvenanceRecord(
@@ -182,6 +200,32 @@ def test_aily_success_delivery_writes_only_scalar_metadata_and_report_link() -> 
     rendered = repr(fields).casefold()
     assert "natural_years" not in rendered
     assert "soh" not in rendered
+
+
+def test_aily_success_delivery_rejects_unbound_report_before_bitable_write() -> None:
+    bitable = _Bitable()
+    delivery = AilyAnalysisJobDelivery(
+        bitable_writer=bitable,
+        result_authorizer=_Authorizer(),
+    )
+    job = _job()
+    analysis = _result(job)
+    report = _report(job).model_copy(
+        update={"values": {"upstream_result_ids": [str(uuid4())]}}
+    )
+
+    with pytest.raises(
+        FeishuDeliveryResultContractError,
+        match="exact analysis result",
+    ):
+        delivery.deliver_success(
+            job=job,
+            analysis_result=analysis,
+            report_result=report,
+            checkpoint=lambda _progress: None,
+        )
+
+    assert bitable.fields == []
 
 
 def test_aily_rejection_delivery_needs_no_chat_target() -> None:

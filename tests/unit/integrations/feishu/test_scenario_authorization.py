@@ -19,6 +19,10 @@ from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
     ADVANCED_RUL_PREDICTION_TOOL_VERSION,
 )
+from quanxin_life.tools.advanced_soh_prediction import (
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_TOOL_VERSION,
+)
 from quanxin_life.tools.audited_report import (
     AuditedReportClaimReference,
     GenerateAuditedReportToolInput,
@@ -353,3 +357,88 @@ def test_audited_authorizer_rejects_incomplete_advanced_rul_evidence() -> None:
 
     assert authorization.allowed is False
     assert authorization.rejection_reason == "ADVANCED_RUL_RESULT_CONTRACT_MISMATCH"
+
+
+def _advanced_soh_result() -> ToolResult:
+    artifact_id = str(uuid4())
+    decision_event_id = str(uuid4())
+    return ToolResult(
+        result_id=str(uuid4()),
+        tool_name="predict_soh_trajectory",
+        tool_version=ADVANCED_SOH_PREDICTION_TOOL_VERSION,
+        model_version="hybridpatch-v2-cutoff-50-seed-38",
+        data_version="matr-three-batch-v1",
+        feature_version="cyclepatch-multichannel-v1",
+        input_hash="7" * 64,
+        values={
+            "artifact_type": ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+            "artifact": {
+                "record_batch_id": str(uuid4()),
+                "dataset_id": "MATR",
+                "cell_id": "MATR_b3c34",
+                "cutoff_cycle": 50,
+                "prediction_cycles": [51, 500],
+                "predicted_soh": [0.99, 0.87],
+                "horizon_end_cycle": 500,
+                "upstream_result_id": str(uuid4()),
+                "raw_sequence_input_sha256": "1" * 64,
+                "transform_config_sha256": "2" * 64,
+                "source_manifest_hash": "3" * 64,
+                "split_version": "matr-cell-split-v1",
+                "normalization_statistics_sha256": "4" * 64,
+                "task": "SOH",
+                "route_role": "MEAN_ACCURACY",
+                "output_target": "soh_trajectory",
+                "artifact_kind": "hybridpatch_v2",
+                "artifact_id": artifact_id,
+                "artifact_manifest_sha256": "5" * 64,
+                "decision_event_id": decision_event_id,
+                "ledger_sequence_number": 7,
+                "ledger_head_sha256": "6" * 64,
+            },
+        },
+        uncertainty={
+            "finite_horizon_only": True,
+            "conformal_interval_included": False,
+        },
+        warnings=[],
+        provenance=[
+            ProvenanceRecord(
+                source_id=f"advanced-model-{artifact_id}",
+                source_kind=SourceKind.PREDICTED,
+                uri=f"artifact://advanced-model/{artifact_id}",
+                sha256="5" * 64,
+                description="Verified active Advanced SOH runtime used for inference",
+                created_at=NOW,
+            )
+        ],
+        created_at=NOW,
+    )
+
+
+def test_audited_authorizer_accepts_only_complete_finite_soh_evidence() -> None:
+    result = _advanced_soh_result()
+    authorizer = AuditedScenarioResultAuthorizer(
+        result_resolver=AuditLedger((result,)),
+    )
+
+    allowed = authorizer.authorize(result)
+    tampered = authorizer.authorize(
+        result.model_copy(
+            update={
+                "values": {
+                    **result.values,
+                    "artifact": {
+                        **result.values["artifact"],
+                        "prediction_cycles": [51, 499],
+                    },
+                }
+            }
+        )
+    )
+
+    assert allowed.allowed is True
+    assert allowed.activation_status == "ACTIVE"
+    assert allowed.evidence_level is EvidenceLevel.MODEL_INFERENCE
+    assert tampered.allowed is False
+    assert tampered.rejection_reason == "ADVANCED_SOH_RESULT_CONTRACT_MISMATCH"

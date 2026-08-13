@@ -95,6 +95,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "quanxin_life.scenarios" = ["manifests/*.json"]
 "quanxin_life._vendor.blast_lite" = ["LICENSE", "NOTICE", "UPSTREAM.json"]
+"quanxin_life.integrations.feishu" = ["assets/*.json", "assets/*.ttf", "assets/*.txt"]
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --import-mode=importlib"

@@ -183,7 +183,7 @@ docs/integrations/aily-system-prompt.md
 正式 API/Worker 使用 `deploy.competition_api:app` 与 `deploy.competition_worker:app`，
 基础 `deploy/competition.compose.yaml` 默认不挂载任何 Feishu/Aily secret。只有显式合并
 `deploy/competition.feishu-aily.override.yaml` 才会统一装配 migrate、API 与 Worker。先执行
-Alembic migration 到唯一 head `0023`，再启动 API 与 Worker。启用时设置以下非秘密身份：
+Alembic migration 到唯一 head `0025`，再启动 API 与 Worker。启用时设置以下非秘密身份：
 
 ```text
 FEISHU_APP_ID

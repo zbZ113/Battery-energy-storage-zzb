@@ -50,6 +50,10 @@ from .client import (
     FeishuHttpResponse,
     FeishuTransportError,
 )
+from .delivery_contract import (
+    FeishuDeliveryResultContractError,
+    validate_delivery_results,
+)
 from .events import FeishuReceiptClaimStatus
 from .report_delivery import (
     FeishuReportDelivery,
@@ -159,9 +163,13 @@ class FeishuAnalysisJobRecord:
     csv_mapping_evidence: dict[str, object] | None
     csv_mapping_evidence_sha256: str | None
     validation_result_id: str | None
+    prepared_input_result_id: str | None
     analysis_result_id: str | None
     report_result_id: str | None
     scenario_image_key: str | None
+    analysis_image_key: str | None
+    analysis_image_renderer_version: str | None
+    analysis_image_sha256: str | None
     result_card_message_id: str | None
     report_file_key: str | None
     report_message_id: str | None
@@ -188,11 +196,15 @@ class FeishuProjectModelExecution:
     prepared_input_result_id: str
     analysis_result: ToolResult
     report_result: ToolResult
+    slots_committed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class FeishuJobDeliveryProgress:
     scenario_image_key: str | None = None
+    analysis_image_key: str | None = None
+    analysis_image_renderer_version: str | None = None
+    analysis_image_sha256: str | None = None
     result_card_message_id: str | None = None
     report_file_key: str | None = None
     report_message_id: str | None = None
@@ -229,6 +241,8 @@ class FeishuProjectModelExecutorPort(Protocol):
         self,
         job: FeishuAnalysisJobRecord,
         registration: CanonicalCsvBatchRegistration,
+        *,
+        claim_token: str | None = None,
     ) -> FeishuProjectModelExecution: ...
 
 
@@ -338,6 +352,12 @@ class FeishuDeliveryClient(Protocol):
 
 
 class FeishuScenarioPlotRenderer(Protocol):
+    def render(self, result: ToolResult) -> FeishuScenarioPlotArtifact: ...
+
+
+class FeishuAnalysisPlotRenderer(Protocol):
+    renderer_version: str
+
     def render(self, result: ToolResult) -> FeishuScenarioPlotArtifact: ...
 
 
@@ -821,6 +841,7 @@ class SqlAlchemyFeishuJobStore:
         job_id: str,
         claim_token: str,
         validation_result_id: str | None = None,
+        prepared_input_result_id: str | None = None,
         analysis_result_id: str | None = None,
         report_result_id: str | None = None,
         updated_at: datetime,
@@ -828,6 +849,8 @@ class SqlAlchemyFeishuJobStore:
         values: dict[str, object] = {}
         if validation_result_id is not None:
             values["validation_result_id"] = validation_result_id
+        if prepared_input_result_id is not None:
+            values["prepared_input_result_id"] = prepared_input_result_id
         if analysis_result_id is not None:
             values["analysis_result_id"] = analysis_result_id
         if report_result_id is not None:
@@ -846,6 +869,9 @@ class SqlAlchemyFeishuJobStore:
         claim_token: str,
         updated_at: datetime,
         scenario_image_key: str | None = None,
+        analysis_image_key: str | None = None,
+        analysis_image_renderer_version: str | None = None,
+        analysis_image_sha256: str | None = None,
         result_card_message_id: str | None = None,
         report_file_key: str | None = None,
         report_message_id: str | None = None,
@@ -854,12 +880,37 @@ class SqlAlchemyFeishuJobStore:
     ) -> None:
         references = {
             "scenario_image_key": scenario_image_key,
+            "analysis_image_key": analysis_image_key,
             "result_card_message_id": result_card_message_id,
             "report_file_key": report_file_key,
             "report_message_id": report_message_id,
             "report_card_message_id": report_card_message_id,
             "bitable_record_id": bitable_record_id,
         }
+        image_provenance = (
+            analysis_image_key,
+            analysis_image_renderer_version,
+            analysis_image_sha256,
+        )
+        if any(value is not None for value in image_provenance):
+            if any(value is None for value in image_provenance):
+                raise ValueError("analysis image provenance is incomplete")
+            assert analysis_image_renderer_version is not None
+            assert analysis_image_sha256 is not None
+            _delivery_reference(
+                analysis_image_renderer_version,
+                field_name="analysis_image_renderer_version",
+            )
+            _sha256_reference(
+                analysis_image_sha256,
+                field_name="analysis_image_sha256",
+            )
+            references.update(
+                {
+                    "analysis_image_renderer_version": analysis_image_renderer_version,
+                    "analysis_image_sha256": analysis_image_sha256,
+                }
+            )
         values = {
             field_name: _delivery_reference(value, field_name=field_name)
             for field_name, value in references.items()
@@ -941,6 +992,7 @@ class SqlAlchemyFeishuJobStore:
                 return False
             return result_id in {
                 row.validation_result_id,
+                row.prepared_input_result_id,
                 row.analysis_result_id,
                 row.report_result_id,
             }
@@ -1054,9 +1106,13 @@ class SqlAlchemyFeishuJobStore:
             csv_mapping_evidence=mapping_evidence,
             csv_mapping_evidence_sha256=row.csv_mapping_evidence_sha256,
             validation_result_id=row.validation_result_id,
+            prepared_input_result_id=row.prepared_input_result_id,
             analysis_result_id=row.analysis_result_id,
             report_result_id=row.report_result_id,
             scenario_image_key=row.scenario_image_key,
+            analysis_image_key=row.analysis_image_key,
+            analysis_image_renderer_version=row.analysis_image_renderer_version,
+            analysis_image_sha256=row.analysis_image_sha256,
             result_card_message_id=row.result_card_message_id,
             report_file_key=row.report_file_key,
             report_message_id=row.report_message_id,
@@ -1275,6 +1331,7 @@ class FeishuAnalysisJobDelivery:
             Callable[[FeishuReportDeliveryReceipt], str] | None
         ) = None,
         scenario_plotter: FeishuScenarioPlotRenderer | None = None,
+        analysis_plotter: FeishuAnalysisPlotRenderer | None = None,
     ) -> None:
         self._client = client
         self._card_builder = card_builder
@@ -1283,6 +1340,7 @@ class FeishuAnalysisJobDelivery:
         self._result_authorizer = result_authorizer
         self._report_link_factory = report_link_factory
         self._scenario_plotter = scenario_plotter
+        self._analysis_plotter = analysis_plotter
 
     def deliver_rejection(
         self,
@@ -1343,9 +1401,14 @@ class FeishuAnalysisJobDelivery:
         checkpoint: Callable[[FeishuJobDeliveryProgress], None] | None = None,
     ) -> FeishuJobDeliveryReceipt:
         chat_id, receive_id_type = _delivery_target(job)
-        authorization = self._result_authorizer.authorize(analysis_result)
-        if not authorization.allowed:
-            raise ValueError("audited result is not authorized for delivery")
+        authorization = validate_delivery_results(
+            task=job.task_type,
+            expected_analysis_result_id=job.analysis_result_id,
+            expected_report_result_id=job.report_result_id,
+            analysis_result=analysis_result,
+            report_result=report_result,
+            authorizer=self._result_authorizer,
+        )
         if job.result_card_message_id is None:
             if job.task_type in _SCENARIO_TASKS:
                 image_key = job.scenario_image_key
@@ -1371,6 +1434,78 @@ class FeishuAnalysisJobDelivery:
                     _emit_delivery_progress(
                         checkpoint,
                         FeishuJobDeliveryProgress(scenario_image_key=image_key),
+                    )
+                result_card = self._card_builder.build_result_card(
+                    run_id=job.run_id,
+                    result_id=analysis_result.result_id,
+                    image_key=image_key,
+                )
+            elif job.task_type is FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY:
+                image_key = job.analysis_image_key
+                stored_provenance = (
+                    job.analysis_image_key,
+                    job.analysis_image_renderer_version,
+                    job.analysis_image_sha256,
+                )
+                if any(value is not None for value in stored_provenance) and any(
+                    value is None for value in stored_provenance
+                ):
+                    raise ValueError("analysis image provenance is incomplete")
+                if image_key is None:
+                    if self._analysis_plotter is None:
+                        raise ValueError("SOH delivery requires a plot renderer")
+                    plot = self._analysis_plotter.render(analysis_result)
+                    if plot.source_result_id != analysis_result.result_id:
+                        raise ValueError(
+                            "analysis plot source does not match the analysis result"
+                        )
+                    if sha256(plot.payload).hexdigest() != plot.sha256:
+                        raise ValueError("analysis plot SHA-256 verification failed")
+                    renderer_version = getattr(
+                        self._analysis_plotter,
+                        "renderer_version",
+                        "",
+                    )
+                    _delivery_reference(
+                        renderer_version,
+                        field_name="analysis_image_renderer_version",
+                    )
+                    _sha256_reference(
+                        plot.sha256,
+                        field_name="analysis_image_sha256",
+                    )
+                    uploaded_image = self._client.upload_image(
+                        payload=plot.payload,
+                        content_type=plot.media_type,
+                        filename=plot.filename,
+                    )
+                    image_key = _delivery_reference(
+                        uploaded_image.get("image_key"),
+                        field_name="image_key",
+                    )
+                    _emit_delivery_progress(
+                        checkpoint,
+                        FeishuJobDeliveryProgress(
+                            analysis_image_key=image_key,
+                            analysis_image_renderer_version=renderer_version,
+                            analysis_image_sha256=plot.sha256,
+                        ),
+                    )
+                else:
+                    expected_renderer_version = getattr(
+                        self._analysis_plotter,
+                        "renderer_version",
+                        "",
+                    )
+                    if (
+                        job.analysis_image_renderer_version != expected_renderer_version
+                    ):
+                        raise ValueError(
+                            "analysis image provenance renderer version mismatch"
+                        )
+                    _sha256_reference(
+                        job.analysis_image_sha256,
+                        field_name="analysis_image_sha256",
                     )
                 result_card = self._card_builder.build_result_card(
                     run_id=job.run_id,
@@ -1912,7 +2047,11 @@ class FeishuAnalysisJobWorker:
         if (
             self._project_model_executor is not None
             and registration is not None
-            and job.task_type is FeishuAnalysisTask.PREDICT_CYCLE_LIFE
+            and job.task_type
+            in {
+                FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+                FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+            }
         ):
             return self._execute_project_model(
                 job=job,
@@ -2035,7 +2174,11 @@ class FeishuAnalysisJobWorker:
             updated_at=self._now(),
         )
         try:
-            execution = executor.execute(job, registration)
+            execution = executor.execute(
+                job,
+                registration,
+                claim_token=claim_token,
+            )
             analysis = ToolResult.model_validate(
                 execution.analysis_result.model_dump(mode="json")
             )
@@ -2056,13 +2199,15 @@ class FeishuAnalysisJobWorker:
                 "PROJECT_MODEL_EXECUTION_REJECTED",
                 validation.result_id,
             )
-        self._store.checkpoint_results(
-            job_id=job.job_id,
-            claim_token=claim_token,
-            analysis_result_id=analysis.result_id,
-            report_result_id=report.result_id,
-            updated_at=self._now(),
-        )
+        if not execution.slots_committed:
+            self._store.checkpoint_results(
+                job_id=job.job_id,
+                claim_token=claim_token,
+                prepared_input_result_id=execution.prepared_input_result_id,
+                analysis_result_id=analysis.result_id,
+                report_result_id=report.result_id,
+                updated_at=self._now(),
+            )
         job = self._store.get(job.job_id)
         rejection_reason = _analysis_rejection_reason(analysis)
         if rejection_reason is not None:
@@ -2092,6 +2237,13 @@ class FeishuAnalysisJobWorker:
                     claim_token,
                     progress,
                 ),
+            )
+        except FeishuDeliveryResultContractError:
+            return self._reject(
+                job,
+                claim_token,
+                "DELIVERY_RESULT_CONTRACT_REJECTED",
+                analysis.result_id,
             )
         except Exception as exc:
             self._retry(job, claim_token, "DELIVERY_RETRYABLE")
@@ -2205,6 +2357,9 @@ class FeishuAnalysisJobWorker:
             job_id=job.job_id,
             claim_token=claim_token,
             scenario_image_key=progress.scenario_image_key,
+            analysis_image_key=progress.analysis_image_key,
+            analysis_image_renderer_version=progress.analysis_image_renderer_version,
+            analysis_image_sha256=progress.analysis_image_sha256,
             result_card_message_id=progress.result_card_message_id,
             report_file_key=progress.report_file_key,
             report_message_id=progress.report_message_id,
@@ -2267,6 +2422,16 @@ def _delivery_reference(value: object, *, field_name: str) -> str:
         or any(ord(character) < 32 for character in normalized)
     ):
         raise ValueError(f"Feishu delivery {field_name} is invalid")
+    return normalized
+
+
+def _sha256_reference(value: object, *, field_name: str) -> str:
+    normalized = value.strip().lower() if isinstance(value, str) else ""
+    if (
+        len(normalized) != 64
+        or any(character not in "0123456789abcdef" for character in normalized)
+    ):
+        raise ValueError(f"{field_name} must be a lowercase SHA-256 digest")
     return normalized
 
 

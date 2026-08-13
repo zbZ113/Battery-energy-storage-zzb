@@ -258,6 +258,9 @@ def test_live_worker_checkpoints_delivery_references_for_retry_replay() -> None:
         job_id=job_id,
         claim_token=owned.claim_token,
         scenario_image_key="img-result",
+        analysis_image_key="img-analysis",
+        analysis_image_renderer_version="feishu-soh-plot-v1",
+        analysis_image_sha256="a" * 64,
         result_card_message_id="om-result-card",
         report_file_key="file-report",
         report_message_id="om-report-file",
@@ -268,11 +271,42 @@ def test_live_worker_checkpoints_delivery_references_for_retry_replay() -> None:
 
     snapshot = jobs.get(job_id)
     assert snapshot.scenario_image_key == "img-result"
+    assert snapshot.analysis_image_key == "img-analysis"
+    assert snapshot.analysis_image_renderer_version == "feishu-soh-plot-v1"
+    assert snapshot.analysis_image_sha256 == "a" * 64
     assert snapshot.result_card_message_id == "om-result-card"
     assert snapshot.report_file_key == "file-report"
     assert snapshot.report_message_id == "om-report-file"
     assert snapshot.report_card_message_id == "om-report-card"
     assert snapshot.bitable_record_id == "rec-run"
+
+
+def test_job_store_rejects_partial_analysis_image_provenance() -> None:
+    receipts, jobs, _session_factory = _fixture()
+    claim = receipts.claim(
+        event_id="evt-job-1",
+        event_type="im.message.receive_v1",
+        payload_sha256="a" * 64,
+        received_at=NOW,
+    )
+    assert claim.claim_token is not None
+    queue = _Queue()
+    SqlAlchemyFeishuJobRouter(
+        jobs,
+        queue=queue,
+        task_resolver=lambda event: FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        clock=lambda: NOW,
+    ).route_event(event=_reference(), claim_token=claim.claim_token)
+    owned = jobs.claim(job_id=queue.job_ids[0], claimed_at=NOW)
+    assert owned.claim_token is not None
+
+    with pytest.raises(ValueError, match="image provenance is incomplete"):
+        jobs.checkpoint_delivery(
+            job_id=queue.job_ids[0],
+            claim_token=owned.claim_token,
+            analysis_image_key="img-analysis",
+            updated_at=NOW,
+        )
 
 
 def test_route_rejection_replay_creates_one_new_auditable_job() -> None:
