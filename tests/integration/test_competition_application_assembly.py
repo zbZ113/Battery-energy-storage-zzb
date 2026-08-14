@@ -55,15 +55,18 @@ def _stub_dependencies() -> CompetitionToolDependencies:
     )
 
 
-def test_competition_registry_discovers_every_standard_tool_once() -> None:
+def test_competition_registry_discovers_every_global_standard_tool_once() -> None:
     registry = create_competition_tool_registry(_stub_dependencies())
 
     schemas = registry.list_schemas()
     names = tuple(schema.tool_name for schema in schemas)
+    expected_names = set(StandardToolName) - {
+        StandardToolName.MAKE_ENGINEERING_RECOMMENDATION
+    }
 
-    assert len(schemas) == len(StandardToolName) == 17
+    assert len(schemas) == len(expected_names)
     assert len(set(names)) == len(names)
-    assert set(names) == set(StandardToolName)
+    assert set(names) == expected_names
     assert all(schema.input_schema for schema in schemas)
 
 

@@ -41,6 +41,7 @@ class StandardToolName(StrEnum):
     CHECK_OPERATING_CONDITION = "check_operating_condition"
     RECOMMEND_NEXT_EXPERIMENT = "recommend_next_experiment"
     MAKE_BATCH_DECISION = "make_batch_decision"
+    MAKE_ENGINEERING_RECOMMENDATION = "make_engineering_recommendation"
     RETRIEVE_BATTERY_EVIDENCE = "retrieve_battery_evidence"
     GENERATE_AUDITED_REPORT = "generate_audited_report"
 
