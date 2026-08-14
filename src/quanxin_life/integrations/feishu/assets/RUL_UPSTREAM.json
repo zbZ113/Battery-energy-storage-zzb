@@ -1,0 +1,19 @@
+{
+  "asset_id": "quanxin-rul-sans-v1",
+  "family": "Noto Sans SC",
+  "upstream_version": "2.004-H2",
+  "license": "SIL Open Font License 1.1",
+  "source_css_api": "https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400&text=<printable-ascii-and-fixed-rul-label-set>&display=swap",
+  "source_font_url_version": "fonts.gstatic.com/l/font v40",
+  "source_font_sha256": "e4a4171a18cda47df2d317ebefb8810596c3986398d7f2604d33fc92049d930c",
+  "source_font_size_bytes": 23304,
+  "modified_family": "Quanxin RUL Sans",
+  "modifications": [
+    "Subset by the Google Fonts text API to printable ASCII and the fixed Chinese labels used by feishu-rul-summary-plot-v1",
+    "Rename the modified font to avoid the upstream Reserved Font Name"
+  ],
+  "fonttools_version": "4.63.0",
+  "output_sha256": "940ccb354f0d125ad6970449553b1fcf12641ee294514c2569ec05ee35ecb57e",
+  "output_size_bytes": 23328,
+  "retrieved_at_utc": "2026-08-14T13:54:09Z"
+}

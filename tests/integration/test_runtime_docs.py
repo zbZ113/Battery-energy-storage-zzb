@@ -69,7 +69,7 @@ def test_feishu_aily_docs_cover_the_audited_blast_scenario_flow() -> None:
         "durable job",
         "Fake Feishu scenario E2E",
         "deploy.competition_api:app",
-        "0025",
+        "0027",
         "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
         "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
         "feishu_app_secret",
@@ -82,7 +82,7 @@ def test_feishu_aily_docs_cover_the_audited_blast_scenario_flow() -> None:
     assert "project_storage_lifetime" in readme
     assert "REGISTERED_CANDIDATE" in readme
     assert "deploy.competition_api:app" in readme
-    assert "0025" in readme
+    assert "0027" in readme
     assert "Fake Aily scenario E2E" in readme
 
 

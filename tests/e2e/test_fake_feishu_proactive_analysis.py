@@ -27,8 +27,13 @@ from quanxin_life.core import (
     sha256_canonical,
 )
 from quanxin_life.features import EarlyCycleFeatureConfig
+from quanxin_life.integrations.feishu.analysis_plots import FeishuAnalysisPlotter
 from quanxin_life.integrations.feishu.attachments import FeishuAttachmentPolicy
-from quanxin_life.integrations.feishu.bitable import FeishuBitableWriter
+from quanxin_life.integrations.feishu.bitable import (
+    CHINESE_ANALYSIS_BITABLE_PROFILE,
+    BitableMediaUploader,
+    FeishuBitableWriter,
+)
 from quanxin_life.integrations.feishu.cards import (
     AuditedCardBuilder,
     AuditedResultAuthorization,
@@ -62,14 +67,12 @@ from quanxin_life.integrations.feishu.scenario_authorization import (
 from quanxin_life.integrations.feishu.scenario_contexts import (
     SqlAlchemyFeishuScenarioContextStore,
 )
-from quanxin_life.integrations.feishu.scenario_plot import FeishuScenarioPlotter
 from quanxin_life.integrations.feishu.scenario_reports import (
     FeishuScenarioReportResultFactory,
 )
 from quanxin_life.integrations.feishu.sibling_planner import (
     ProactiveFeishuSiblingPlanner,
 )
-from quanxin_life.integrations.feishu.soh_plot import FeishuSohPlotter
 from quanxin_life.integrations.feishu.sqlalchemy_receipts import (
     SqlAlchemyFeishuReceiptStore,
 )
@@ -280,6 +283,12 @@ def test_one_upload_proactively_delivers_independent_rul_soh_and_blast_results()
     assert outcome["job_count"] == 3
     assert outcome["result_count"] == 3
     assert outcome["bitable_records"] == 3
+    assert outcome["media_uploads"] == 3
+    assert outcome["curve_templates"] == {
+        FeishuAnalysisTask.PREDICT_CYCLE_LIFE: "CYCLE_LIFE_SUMMARY",
+        FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY: "FINITE_SOH_CURVE",
+        FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS: "SCENARIO_COMPARISON",
+    }
     scenario = outcome["results"][FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS]
     assert scenario.tool_name == StandardToolName.COMPARE_OPERATION_SCENARIOS.value
     assert {
@@ -306,6 +315,11 @@ def test_missing_profile_child_does_not_erase_rul_or_soh_success() -> None:
     assert outcome["job_count"] == 3
     assert outcome["result_count"] == 2
     assert outcome["bitable_records"] == 3
+    assert outcome["media_uploads"] == 2
+    assert outcome["curve_templates"] == {
+        FeishuAnalysisTask.PREDICT_CYCLE_LIFE: "CYCLE_LIFE_SUMMARY",
+        FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY: "FINITE_SOH_CURVE",
+    }
     assert outcome["scenario_error"] == "SCENARIO_PARAMETERS_REQUIRED"
     assert outcome["scenario_profile_sha256"] is None
 
@@ -372,6 +386,7 @@ def _run_proactive_pipeline(*, with_profile: bool) -> dict[str, object]:
         input_binder=_ScenarioInputBinder(),
     )
     authorizer = _ControlledDeliveryAuthorizer(ledger)
+    analysis_plotter = FeishuAnalysisPlotter()
     delivery = FeishuAnalysisJobDelivery(
         client=client,
         card_builder=AuditedCardBuilder(
@@ -383,6 +398,7 @@ def _run_proactive_pipeline(*, with_profile: bool) -> dict[str, object]:
             client,
             app_token="app-proactive",
             table_id="tbl-proactive",
+            field_profile=CHINESE_ANALYSIS_BITABLE_PROFILE,
         ),
         report_delivery=FeishuReportDelivery(
             AuditedReportArtifactExporter(ledger),
@@ -390,8 +406,13 @@ def _run_proactive_pipeline(*, with_profile: bool) -> dict[str, object]:
             result_resolver=ledger,
         ),
         result_authorizer=authorizer,
-        scenario_plotter=FeishuScenarioPlotter(),
-        analysis_plotter=FeishuSohPlotter(),
+        scenario_plotter=analysis_plotter,
+        analysis_plotter=analysis_plotter,
+        bitable_curve_plotter=analysis_plotter,
+        bitable_media_uploader=BitableMediaUploader(
+            client,
+            app_token="app-proactive",
+        ),
     )
     project_executor = _ControlledProjectModelExecutor(ledger)
     registration = _registration()
@@ -499,6 +520,16 @@ def _run_proactive_pipeline(*, with_profile: bool) -> dict[str, object]:
     ]
     state = sandbox.get("/sandbox/state").json()
     scenario_record = typed_records[FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS]
+    curve_templates = {
+        task: record.bitable_curve_template
+        for task, record in typed_records.items()
+        if record.bitable_curve_template is not None
+    }
+    assert all(
+        record.bitable_curve_source_result_id == record.analysis_result_id
+        for record in typed_records.values()
+        if record.bitable_curve_source_result_id is not None
+    )
     return {
         "statuses": statuses,
         "download_count": sum(
@@ -509,6 +540,11 @@ def _run_proactive_pipeline(*, with_profile: bool) -> dict[str, object]:
         "job_count": len(rows),
         "result_count": len(results),
         "bitable_records": state["bitable_records"],
+        "media_uploads": sum(
+            urlsplit(request.url).path == "/open-apis/drive/v1/medias/upload_all"
+            for request in transport.requests
+        ),
+        "curve_templates": curve_templates,
         "results": results,
         "authorizer": authorizer,
         "scenario_error": scenario_record.job_last_error_code,

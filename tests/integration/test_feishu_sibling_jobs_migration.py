@@ -41,7 +41,9 @@ def test_0026_adds_sibling_job_provenance_and_empty_downgrade_is_safe(
             item["name"]
             for item in inspect(engine).get_indexes("feishu_event_receipts")
         }
+        command.upgrade(config, "0027")
         command.check(config)
+        command.downgrade(config, "0026")
         command.downgrade(config, "0025")
         remaining = {
             column["name"]

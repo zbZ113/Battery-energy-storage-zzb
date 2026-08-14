@@ -19,6 +19,7 @@ class _SandboxState:
     bitable_records: dict[tuple[str, str, str], dict[str, object]] = field(
         default_factory=dict
     )
+    bitable_media: set[str] = field(default_factory=set)
     lock: RLock = field(default_factory=RLock)
 
 
@@ -120,6 +121,17 @@ def create_fake_feishu_sandbox_app() -> FastAPI:
             raise HTTPException(status_code=422, detail="sandbox_upload_empty")
         return _ok({"image_key": _next_reference("image", len(state.resources) + 1)})
 
+    @app.post("/open-apis/drive/v1/medias/upload_all")
+    async def upload_bitable_media(request: Request) -> dict[str, object]:
+        _require_sandbox_bearer(request)
+        payload = await request.body()
+        if not payload:
+            raise HTTPException(status_code=422, detail="sandbox_upload_empty")
+        with state.lock:
+            file_token = _next_reference("media", len(state.bitable_media) + 1)
+            state.bitable_media.add(file_token)
+        return _ok({"file_token": file_token})
+
     @app.get(
         "/open-apis/im/v1/messages/{message_id}/resources/{file_key}"
     )
@@ -149,7 +161,7 @@ def create_fake_feishu_sandbox_app() -> FastAPI:
     ) -> dict[str, object]:
         _require_sandbox_bearer(request)
         payload = await _json_object(request)
-        run_id = _run_id_filter(payload.get("filter"))
+        run_field_name, run_id = _run_id_filter(payload.get("filter"))
         prefix = (
             _reference(app_token, "app_token"),
             _reference(table_id, "table_id"),
@@ -158,7 +170,8 @@ def create_fake_feishu_sandbox_app() -> FastAPI:
             items = [
                 dict(record)
                 for key, record in state.bitable_records.items()
-                if key[:2] == prefix and _record_matches_run(record, run_id)
+                if key[:2] == prefix
+                and _record_matches_run(record, run_field_name, run_id)
             ]
         return _ok({"items": items, "has_more": False})
 
@@ -243,19 +256,38 @@ def _message_reference(payload: dict[str, Any]) -> dict[str, str]:
 
 
 def _scalar_fields(value: object) -> dict[str, object]:
-    if not isinstance(value, dict) or any(
-        isinstance(item, list | dict) for item in value.values()
-    ):
+    if not isinstance(value, dict):
         raise HTTPException(status_code=422, detail="sandbox_bitable_fields_invalid")
-    return dict(value)
+    normalized: dict[str, object] = {}
+    for field_name, item in value.items():
+        checked_name = _field_name(field_name)
+        if isinstance(item, dict):
+            raise HTTPException(
+                status_code=422,
+                detail="sandbox_bitable_fields_invalid",
+            )
+        if isinstance(item, list):
+            if not _is_attachment_value(item):
+                raise HTTPException(
+                    status_code=422,
+                    detail="sandbox_bitable_fields_invalid",
+                )
+            normalized[checked_name] = [dict(entry) for entry in item]
+        else:
+            normalized[checked_name] = item
+    return normalized
 
 
-def _record_matches_run(record: dict[str, object], run_id: str) -> bool:
+def _record_matches_run(
+    record: dict[str, object],
+    field_name: str,
+    run_id: str,
+) -> bool:
     fields = record.get("fields")
-    return isinstance(fields, dict) and fields.get("run_id") == run_id
+    return isinstance(fields, dict) and fields.get(field_name) == run_id
 
 
-def _run_id_filter(value: object) -> str:
+def _run_id_filter(value: object) -> tuple[str, str]:
     if not isinstance(value, dict):
         raise HTTPException(status_code=422, detail="sandbox_filter_invalid")
     conditions = value.get("conditions")
@@ -269,13 +301,39 @@ def _run_id_filter(value: object) -> str:
     condition = conditions[0]
     items = condition.get("value")
     if (
-        condition.get("field_name") != "run_id"
-        or condition.get("operator") != "is"
+        condition.get("operator") != "is"
         or not isinstance(items, list)
         or len(items) != 1
     ):
         raise HTTPException(status_code=422, detail="sandbox_filter_invalid")
-    return _reference(items[0], "run_id")
+    return (
+        _field_name(condition.get("field_name")),
+        _reference(items[0], "run_id"),
+    )
+
+
+def _is_attachment_value(value: list[object]) -> bool:
+    if not value:
+        return False
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"file_token"}:
+            return False
+        try:
+            _reference(item.get("file_token"), "file_token")
+        except HTTPException:
+            return False
+    return True
+
+
+def _field_name(value: object) -> str:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if (
+        not normalized
+        or len(normalized) > 100
+        or any(ord(character) < 32 for character in normalized)
+    ):
+        raise HTTPException(status_code=422, detail="sandbox_field_name_invalid")
+    return normalized
 
 
 def _reference(value: object, field_name: str) -> str:

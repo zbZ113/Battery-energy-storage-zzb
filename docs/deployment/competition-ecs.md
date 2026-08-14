@@ -293,7 +293,7 @@ docker compose \
 DATABASE_MIGRATIONS_OK
 ```
 
-随后检查数据库 `alembic_version` 为 `0025`。API、Worker 和 migrate 使用同一组 strict
+随后检查数据库 `alembic_version` 为 `0027`。API、Worker 和 migrate 使用同一组 strict
 settings；若 Feishu/Aily 已启用但任一 secret file 或非秘密身份缺失，三个入口都会
 fail closed，不应通过临时删除设置绕过。
 

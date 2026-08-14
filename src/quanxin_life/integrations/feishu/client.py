@@ -301,6 +301,36 @@ class FeishuClient:
             ),
         )
 
+    def upload_bitable_media(
+        self,
+        *,
+        app_token: str,
+        filename: str,
+        content_type: str,
+        payload: bytes,
+    ) -> dict[str, object]:
+        checked_filename = _filename(filename)
+        if not isinstance(payload, bytes) or not 0 < len(payload) <= 20 * 1024 * 1024:
+            raise ValueError("Bitable media payload size is invalid")
+        return self._request_json(
+            "POST",
+            "/drive/v1/medias/upload_all",
+            form={
+                "file_name": checked_filename,
+                "parent_type": "bitable_image",
+                "parent_node": _identifier(app_token, "app_token"),
+                "size": str(len(payload)),
+            },
+            files=(
+                FeishuMultipartFile(
+                    field_name="file",
+                    filename=checked_filename,
+                    content_type=_content_type(content_type),
+                    payload=payload,
+                ),
+            ),
+        )
+
     def download_message_resource(
         self,
         *,
@@ -341,7 +371,7 @@ class FeishuClient:
         field_name: str,
         field_value: str,
     ) -> dict[str, object]:
-        checked_field_name = _identifier(field_name, "field_name")
+        checked_field_name = _bitable_field_name(field_name)
         checked_field_value = _identifier(field_value, "field_value")
         return self._request_json(
             "POST",
@@ -623,6 +653,18 @@ def _identifier(value: str, field_name: str) -> str:
     normalized = value.strip() if isinstance(value, str) else ""
     if _IDENTIFIER.fullmatch(normalized) is None:
         raise ValueError(f"{field_name} must be a safe machine identifier")
+    return normalized
+
+
+def _bitable_field_name(value: str) -> str:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if (
+        not normalized
+        or len(normalized) > 100
+        or normalized != value
+        or any(ord(character) < 32 for character in normalized)
+    ):
+        raise ValueError("field_name must be a safe Bitable field name")
     return normalized
 
 

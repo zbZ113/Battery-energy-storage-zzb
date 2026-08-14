@@ -427,6 +427,12 @@ def test_live_worker_checkpoints_delivery_references_for_retry_replay() -> None:
     job_id = queue.job_ids[0]
     owned = jobs.claim(job_id=job_id, claimed_at=NOW)
     assert owned.claim_token is not None
+    jobs.checkpoint_results(
+        job_id=job_id,
+        claim_token=owned.claim_token,
+        analysis_result_id="result-analysis",
+        updated_at=NOW,
+    )
 
     jobs.checkpoint_delivery(
         job_id=job_id,
@@ -435,6 +441,11 @@ def test_live_worker_checkpoints_delivery_references_for_retry_replay() -> None:
         analysis_image_key="img-analysis",
         analysis_image_renderer_version="feishu-soh-plot-v1",
         analysis_image_sha256="a" * 64,
+        bitable_curve_file_token="file-curve",
+        bitable_curve_source_result_id="result-analysis",
+        bitable_curve_renderer_version="feishu-rul-summary-v1",
+        bitable_curve_sha256="b" * 64,
+        bitable_curve_template="RUL_LIFETIME_SUMMARY",
         result_card_message_id="om-result-card",
         report_file_key="file-report",
         report_message_id="om-report-file",
@@ -448,11 +459,38 @@ def test_live_worker_checkpoints_delivery_references_for_retry_replay() -> None:
     assert snapshot.analysis_image_key == "img-analysis"
     assert snapshot.analysis_image_renderer_version == "feishu-soh-plot-v1"
     assert snapshot.analysis_image_sha256 == "a" * 64
+    assert snapshot.bitable_curve_file_token == "file-curve"
+    assert snapshot.bitable_curve_source_result_id == "result-analysis"
+    assert snapshot.bitable_curve_renderer_version == "feishu-rul-summary-v1"
+    assert snapshot.bitable_curve_sha256 == "b" * 64
+    assert snapshot.bitable_curve_template == "RUL_LIFETIME_SUMMARY"
     assert snapshot.result_card_message_id == "om-result-card"
     assert snapshot.report_file_key == "file-report"
     assert snapshot.report_message_id == "om-report-file"
     assert snapshot.report_card_message_id == "om-report-card"
     assert snapshot.bitable_record_id == "rec-run"
+
+    jobs.checkpoint_delivery(
+        job_id=job_id,
+        claim_token=owned.claim_token,
+        bitable_curve_file_token="file-curve",
+        bitable_curve_source_result_id="result-analysis",
+        bitable_curve_renderer_version="feishu-rul-summary-v1",
+        bitable_curve_sha256="b" * 64,
+        bitable_curve_template="RUL_LIFETIME_SUMMARY",
+        updated_at=NOW,
+    )
+    with pytest.raises(ValueError, match="already checkpointed"):
+        jobs.checkpoint_delivery(
+            job_id=job_id,
+            claim_token=owned.claim_token,
+            bitable_curve_file_token="file-replacement",
+            bitable_curve_source_result_id="result-analysis",
+            bitable_curve_renderer_version="feishu-rul-summary-v1",
+            bitable_curve_sha256="b" * 64,
+            bitable_curve_template="RUL_LIFETIME_SUMMARY",
+            updated_at=NOW,
+        )
 
 
 def test_job_store_rejects_partial_analysis_image_provenance() -> None:
@@ -479,6 +517,53 @@ def test_job_store_rejects_partial_analysis_image_provenance() -> None:
             job_id=queue.job_ids[0],
             claim_token=owned.claim_token,
             analysis_image_key="img-analysis",
+            updated_at=NOW,
+        )
+
+
+def test_job_store_rejects_partial_or_mismatched_bitable_curve_evidence() -> None:
+    receipts, jobs, _session_factory = _fixture()
+    claim = receipts.claim(
+        event_id="evt-job-1",
+        event_type="im.message.receive_v1",
+        payload_sha256="a" * 64,
+        received_at=NOW,
+    )
+    assert claim.claim_token is not None
+    queue = _Queue()
+    SqlAlchemyFeishuJobRouter(
+        jobs,
+        queue=queue,
+        task_resolver=lambda event: FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        clock=lambda: NOW,
+    ).route_event(event=_reference(), claim_token=claim.claim_token)
+    job_id = queue.job_ids[0]
+    owned = jobs.claim(job_id=job_id, claimed_at=NOW)
+    assert owned.claim_token is not None
+    jobs.checkpoint_results(
+        job_id=job_id,
+        claim_token=owned.claim_token,
+        analysis_result_id="result-analysis",
+        updated_at=NOW,
+    )
+
+    with pytest.raises(ValueError, match="Bitable curve evidence is incomplete"):
+        jobs.checkpoint_delivery(
+            job_id=job_id,
+            claim_token=owned.claim_token,
+            bitable_curve_file_token="file-curve",
+            updated_at=NOW,
+        )
+
+    with pytest.raises(ValueError, match="source result does not match"):
+        jobs.checkpoint_delivery(
+            job_id=job_id,
+            claim_token=owned.claim_token,
+            bitable_curve_file_token="file-curve",
+            bitable_curve_source_result_id="result-other",
+            bitable_curve_renderer_version="feishu-rul-summary-v1",
+            bitable_curve_sha256="b" * 64,
+            bitable_curve_template="RUL_LIFETIME_SUMMARY",
             updated_at=NOW,
         )
 

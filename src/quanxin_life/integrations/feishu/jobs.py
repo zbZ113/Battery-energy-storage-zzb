@@ -32,12 +32,14 @@ from quanxin_life.persistence.database import SessionFactory
 from quanxin_life.persistence.models import FeishuEventReceipt
 from quanxin_life.tools.early_cycle_features import VerifiedEarlyCycleBatch
 
+from .analysis_bitable import build_audited_analysis_bitable_fields
+from .analysis_plots import FeishuAnalysisPlotArtifact
 from .attachments import (
     FeishuAttachmentError,
     FeishuAttachmentPolicy,
     VerifiedFeishuAttachment,
 )
-from .bitable import FeishuBitableWriter
+from .bitable import BitableAttachment, FeishuBitableWriter
 from .cards import (
     AuditedCardBuilder,
     AuditedResultAuthorizer,
@@ -195,6 +197,11 @@ class FeishuAnalysisJobRecord:
     default_scenario_profile_id: str | None = None
     default_scenario_profile_version: str | None = None
     default_scenario_profile_sha256: str | None = None
+    bitable_curve_file_token: str | None = None
+    bitable_curve_source_result_id: str | None = None
+    bitable_curve_renderer_version: str | None = None
+    bitable_curve_sha256: str | None = None
+    bitable_curve_template: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +225,11 @@ class FeishuJobDeliveryProgress:
     analysis_image_key: str | None = None
     analysis_image_renderer_version: str | None = None
     analysis_image_sha256: str | None = None
+    bitable_curve_file_token: str | None = None
+    bitable_curve_source_result_id: str | None = None
+    bitable_curve_renderer_version: str | None = None
+    bitable_curve_sha256: str | None = None
+    bitable_curve_template: str | None = None
     result_card_message_id: str | None = None
     report_file_key: str | None = None
     report_message_id: str | None = None
@@ -389,6 +401,21 @@ class FeishuAnalysisPlotRenderer(Protocol):
     renderer_version: str
 
     def render(self, result: ToolResult) -> FeishuScenarioPlotArtifact: ...
+
+
+class FeishuBitableCurvePlotRenderer(Protocol):
+    def render(self, result: ToolResult) -> FeishuAnalysisPlotArtifact: ...
+
+
+class FeishuBitableMediaUploader(Protocol):
+    def upload_image(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        payload: bytes,
+        expected_sha256: str,
+    ) -> BitableAttachment: ...
 
 
 class SqlAlchemyFeishuJobStore:
@@ -1166,6 +1193,11 @@ class SqlAlchemyFeishuJobStore:
         analysis_image_key: str | None = None,
         analysis_image_renderer_version: str | None = None,
         analysis_image_sha256: str | None = None,
+        bitable_curve_file_token: str | None = None,
+        bitable_curve_source_result_id: str | None = None,
+        bitable_curve_renderer_version: str | None = None,
+        bitable_curve_sha256: str | None = None,
+        bitable_curve_template: str | None = None,
         result_card_message_id: str | None = None,
         report_file_key: str | None = None,
         report_message_id: str | None = None,
@@ -1205,6 +1237,65 @@ class SqlAlchemyFeishuJobStore:
                     "analysis_image_sha256": analysis_image_sha256,
                 }
             )
+        bitable_curve_evidence = (
+            bitable_curve_file_token,
+            bitable_curve_source_result_id,
+            bitable_curve_renderer_version,
+            bitable_curve_sha256,
+            bitable_curve_template,
+        )
+        if any(value is not None for value in bitable_curve_evidence):
+            if any(value is None for value in bitable_curve_evidence):
+                raise ValueError("Bitable curve evidence is incomplete")
+            assert bitable_curve_file_token is not None
+            assert bitable_curve_source_result_id is not None
+            assert bitable_curve_renderer_version is not None
+            assert bitable_curve_sha256 is not None
+            assert bitable_curve_template is not None
+            source_result_id = _delivery_reference(
+                bitable_curve_source_result_id,
+                field_name="bitable_curve_source_result_id",
+            )
+            if len(source_result_id) > 64:
+                raise ValueError("Bitable curve source result ID is too long")
+            current = self.get(job_id)
+            if current.analysis_result_id != source_result_id:
+                raise ValueError("Bitable curve source result does not match analysis")
+            curve_references = {
+                "bitable_curve_file_token": _delivery_reference(
+                    bitable_curve_file_token,
+                    field_name="bitable_curve_file_token",
+                ),
+                "bitable_curve_source_result_id": source_result_id,
+                "bitable_curve_renderer_version": _delivery_reference(
+                    bitable_curve_renderer_version,
+                    field_name="bitable_curve_renderer_version",
+                ),
+                "bitable_curve_sha256": _sha256_reference(
+                    bitable_curve_sha256,
+                    field_name="bitable_curve_sha256",
+                ),
+                "bitable_curve_template": _delivery_reference(
+                    bitable_curve_template,
+                    field_name="bitable_curve_template",
+                ),
+            }
+            current_curve = {
+                "bitable_curve_file_token": current.bitable_curve_file_token,
+                "bitable_curve_source_result_id": (
+                    current.bitable_curve_source_result_id
+                ),
+                "bitable_curve_renderer_version": (
+                    current.bitable_curve_renderer_version
+                ),
+                "bitable_curve_sha256": current.bitable_curve_sha256,
+                "bitable_curve_template": current.bitable_curve_template,
+            }
+            if current.bitable_curve_file_token is not None and (
+                current_curve != curve_references
+            ):
+                raise ValueError("Bitable curve evidence is already checkpointed")
+            references.update(curve_references)
         values = {
             field_name: _delivery_reference(value, field_name=field_name)
             for field_name, value in references.items()
@@ -1378,6 +1469,26 @@ class SqlAlchemyFeishuJobStore:
             ).model_dump(mode="json")
             if sha256_canonical(mapping_evidence) != row.csv_mapping_evidence_sha256:
                 raise ValueError("Feishu CSV mapping evidence SHA-256 does not match")
+        bitable_curve_evidence = (
+            row.bitable_curve_file_token,
+            row.bitable_curve_source_result_id,
+            row.bitable_curve_renderer_version,
+            row.bitable_curve_sha256,
+            row.bitable_curve_template,
+        )
+        if any(item is not None for item in bitable_curve_evidence) and any(
+            item is None for item in bitable_curve_evidence
+        ):
+            raise ValueError("Feishu Bitable curve evidence is incomplete")
+        if row.bitable_curve_sha256 is not None:
+            _sha256_reference(
+                row.bitable_curve_sha256,
+                field_name="bitable_curve_sha256",
+            )
+            if row.bitable_curve_source_result_id != row.analysis_result_id:
+                raise ValueError(
+                    "Feishu Bitable curve source result does not match analysis"
+                )
         return FeishuAnalysisJobRecord(
             job_id=row.job_id,
             run_id=row.run_id,
@@ -1408,6 +1519,11 @@ class SqlAlchemyFeishuJobStore:
             analysis_image_key=row.analysis_image_key,
             analysis_image_renderer_version=row.analysis_image_renderer_version,
             analysis_image_sha256=row.analysis_image_sha256,
+            bitable_curve_file_token=row.bitable_curve_file_token,
+            bitable_curve_source_result_id=row.bitable_curve_source_result_id,
+            bitable_curve_renderer_version=row.bitable_curve_renderer_version,
+            bitable_curve_sha256=row.bitable_curve_sha256,
+            bitable_curve_template=row.bitable_curve_template,
             result_card_message_id=row.result_card_message_id,
             report_file_key=row.report_file_key,
             report_message_id=row.report_message_id,
@@ -1815,6 +1931,8 @@ class FeishuAnalysisJobDelivery:
         ) = None,
         scenario_plotter: FeishuScenarioPlotRenderer | None = None,
         analysis_plotter: FeishuAnalysisPlotRenderer | None = None,
+        bitable_curve_plotter: FeishuBitableCurvePlotRenderer | None = None,
+        bitable_media_uploader: FeishuBitableMediaUploader | None = None,
     ) -> None:
         self._client = client
         self._card_builder = card_builder
@@ -1824,6 +1942,8 @@ class FeishuAnalysisJobDelivery:
         self._report_link_factory = report_link_factory
         self._scenario_plotter = scenario_plotter
         self._analysis_plotter = analysis_plotter
+        self._bitable_curve_plotter = bitable_curve_plotter
+        self._bitable_media_uploader = bitable_media_uploader
 
     def deliver_rejection(
         self,
@@ -1869,6 +1989,7 @@ class FeishuAnalysisJobDelivery:
                 FeishuJobDeliveryProgress(bitable_record_id=bitable_record_id),
             )
         else:
+            assert job.bitable_record_id is not None
             bitable_record_id = job.bitable_record_id
         return FeishuJobDeliveryReceipt(
             bitable_record_id=bitable_record_id,
@@ -1944,10 +2065,10 @@ class FeishuAnalysisJobDelivery:
                         )
                     if sha256(plot.payload).hexdigest() != plot.sha256:
                         raise ValueError("analysis plot SHA-256 verification failed")
-                    renderer_version = getattr(
-                        self._analysis_plotter,
-                        "renderer_version",
-                        "",
+                    renderer_version = (
+                        plot.renderer_version
+                        if isinstance(plot, FeishuAnalysisPlotArtifact)
+                        else self._analysis_plotter.renderer_version
                     )
                     _delivery_reference(
                         renderer_version,
@@ -1975,10 +2096,13 @@ class FeishuAnalysisJobDelivery:
                         ),
                     )
                 else:
-                    expected_renderer_version = getattr(
-                        self._analysis_plotter,
-                        "renderer_version",
-                        "",
+                    if self._analysis_plotter is None:
+                        raise ValueError("SOH delivery requires a plot renderer")
+                    replayed_plot = self._analysis_plotter.render(analysis_result)
+                    expected_renderer_version = (
+                        replayed_plot.renderer_version
+                        if isinstance(replayed_plot, FeishuAnalysisPlotArtifact)
+                        else self._analysis_plotter.renderer_version
                     )
                     if (
                         job.analysis_image_renderer_version != expected_renderer_version
@@ -1990,6 +2114,10 @@ class FeishuAnalysisJobDelivery:
                         job.analysis_image_sha256,
                         field_name="analysis_image_sha256",
                     )
+                    if replayed_plot.sha256 != job.analysis_image_sha256:
+                        raise ValueError(
+                            "analysis image provenance SHA-256 mismatch"
+                        )
                 result_card = self._card_builder.build_result_card(
                     run_id=job.run_id,
                     result_id=analysis_result.result_id,
@@ -2051,7 +2179,17 @@ class FeishuAnalysisJobDelivery:
                     )
                 ),
             )
-        if job.bitable_record_id is None:
+        should_write_bitable = job.bitable_record_id is None or (
+            job.bitable_curve_file_token is None
+            and self._bitable_curve_plotter is not None
+            and self._bitable_media_uploader is not None
+        )
+        if should_write_bitable:
+            curve_fields = self._bitable_curve_fields(
+                job=job,
+                analysis_result=analysis_result,
+                checkpoint=checkpoint,
+            )
             fields = self._base_bitable_fields(job, task_status="SUCCEEDED")
             fields.update(
                 {
@@ -2063,7 +2201,9 @@ class FeishuAnalysisJobDelivery:
                     "evidence_level": authorization.evidence_level.value,
                 }
             )
+            fields.update(build_audited_analysis_bitable_fields(analysis_result))
             fields.update(_scenario_bitable_metadata(job, analysis_result))
+            fields.update(curve_fields)
             if analysis_result.warnings:
                 fields["warnings"] = "\n".join(analysis_result.warnings)
             if self._report_link_factory is not None:
@@ -2075,10 +2215,26 @@ class FeishuAnalysisJobDelivery:
                 FeishuJobDeliveryProgress(bitable_record_id=bitable_record_id),
             )
         else:
+            assert job.bitable_record_id is not None
             bitable_record_id = job.bitable_record_id
         return FeishuJobDeliveryReceipt(
             bitable_record_id=bitable_record_id,
             report_file_key=report_receipt.file_key,
+        )
+
+    def _bitable_curve_fields(
+        self,
+        *,
+        job: FeishuAnalysisJobRecord,
+        analysis_result: ToolResult,
+        checkpoint: Callable[[FeishuJobDeliveryProgress], None] | None,
+    ) -> dict[str, object]:
+        return prepare_audited_bitable_curve_fields(
+            job=job,
+            analysis_result=analysis_result,
+            analysis_plotter=self._bitable_curve_plotter,
+            bitable_media_uploader=self._bitable_media_uploader,
+            checkpoint=checkpoint,
         )
 
     @staticmethod
@@ -2992,6 +3148,15 @@ class FeishuAnalysisJobWorker:
             analysis_image_key=progress.analysis_image_key,
             analysis_image_renderer_version=progress.analysis_image_renderer_version,
             analysis_image_sha256=progress.analysis_image_sha256,
+            bitable_curve_file_token=progress.bitable_curve_file_token,
+            bitable_curve_source_result_id=(
+                progress.bitable_curve_source_result_id
+            ),
+            bitable_curve_renderer_version=(
+                progress.bitable_curve_renderer_version
+            ),
+            bitable_curve_sha256=progress.bitable_curve_sha256,
+            bitable_curve_template=progress.bitable_curve_template,
             result_card_message_id=progress.result_card_message_id,
             report_file_key=progress.report_file_key,
             report_message_id=progress.report_message_id,
@@ -3120,6 +3285,106 @@ def _emit_delivery_progress(
         checkpoint(progress)
 
 
+def prepare_audited_bitable_curve_fields(
+    *,
+    job: FeishuAnalysisJobRecord,
+    analysis_result: ToolResult,
+    analysis_plotter: FeishuBitableCurvePlotRenderer | None,
+    bitable_media_uploader: FeishuBitableMediaUploader | None,
+    checkpoint: Callable[[FeishuJobDeliveryProgress], None] | None,
+) -> dict[str, object]:
+    """Render or restore one audited Bitable image attachment."""
+
+    stored = (
+        job.bitable_curve_file_token,
+        job.bitable_curve_source_result_id,
+        job.bitable_curve_renderer_version,
+        job.bitable_curve_sha256,
+        job.bitable_curve_template,
+    )
+    if any(value is not None for value in stored) and any(
+        value is None for value in stored
+    ):
+        raise ValueError("Bitable curve evidence is incomplete")
+    if job.bitable_curve_file_token is None and (
+        analysis_plotter is None or bitable_media_uploader is None
+    ):
+        return {}
+    plot: FeishuAnalysisPlotArtifact | None = None
+    if analysis_plotter is not None:
+        rendered_plot = analysis_plotter.render(analysis_result)
+        if rendered_plot.source_result_id != analysis_result.result_id:
+            raise ValueError("Bitable curve source does not match the analysis result")
+        if sha256(rendered_plot.payload).hexdigest() != rendered_plot.sha256:
+            raise ValueError("Bitable curve SHA-256 verification failed")
+        if not isinstance(rendered_plot, FeishuAnalysisPlotArtifact):
+            raise ValueError(
+                "Bitable curve renderer did not return an audited template artifact"
+            )
+        plot = rendered_plot
+    if job.bitable_curve_file_token is not None:
+        assert job.bitable_curve_source_result_id is not None
+        assert job.bitable_curve_renderer_version is not None
+        assert job.bitable_curve_sha256 is not None
+        assert job.bitable_curve_template is not None
+        if job.bitable_curve_source_result_id != analysis_result.result_id:
+            raise ValueError("Bitable curve source does not match the analysis result")
+        _sha256_reference(
+            job.bitable_curve_sha256,
+            field_name="bitable_curve_sha256",
+        )
+        if plot is not None and (
+            job.bitable_curve_renderer_version != plot.renderer_version
+            or job.bitable_curve_sha256 != plot.sha256
+            or job.bitable_curve_template != plot.template.value
+        ):
+            raise ValueError("Bitable curve provenance does not match renderer")
+        return {
+            "curve_attachment": BitableAttachment(
+                file_token=job.bitable_curve_file_token
+            ),
+            "curve_source_result_id": job.bitable_curve_source_result_id,
+            "curve_renderer_version": job.bitable_curve_renderer_version,
+            "curve_sha256": job.bitable_curve_sha256,
+            "curve_template": job.bitable_curve_template,
+        }
+    if plot is None or bitable_media_uploader is None:
+        return {}
+    if checkpoint is None:
+        raise ValueError("Bitable curve upload requires a durable checkpoint")
+    renderer_version = _delivery_reference(
+        plot.renderer_version,
+        field_name="bitable_curve_renderer_version",
+    )
+    template = _delivery_reference(
+        plot.template.value,
+        field_name="bitable_curve_template",
+    )
+    attachment = bitable_media_uploader.upload_image(
+        filename=plot.filename,
+        content_type=plot.media_type,
+        payload=plot.payload,
+        expected_sha256=plot.sha256,
+    )
+    _emit_delivery_progress(
+        checkpoint,
+        FeishuJobDeliveryProgress(
+            bitable_curve_file_token=attachment.file_token,
+            bitable_curve_source_result_id=analysis_result.result_id,
+            bitable_curve_renderer_version=renderer_version,
+            bitable_curve_sha256=plot.sha256,
+            bitable_curve_template=template,
+        ),
+    )
+    return {
+        "curve_attachment": attachment,
+        "curve_source_result_id": analysis_result.result_id,
+        "curve_renderer_version": renderer_version,
+        "curve_sha256": plot.sha256,
+        "curve_template": template,
+    }
+
+
 def _scenario_bitable_metadata(
     job: FeishuAnalysisJobRecord,
     result: ToolResult,
@@ -3233,6 +3498,7 @@ __all__ = [
     "FeishuAnalysisJobStage",
     "FeishuAnalysisJobStatus",
     "FeishuAnalysisJobWorker",
+    "FeishuBitableCurvePlotRenderer",
     "FeishuJobBusyError",
     "FeishuJobClaim",
     "FeishuJobClaimStatus",
@@ -3254,5 +3520,6 @@ __all__ = [
     "SqlAlchemyFeishuJobRouter",
     "SqlAlchemyFeishuJobStore",
     "SqlAlchemyFeishuSiblingJobService",
+    "prepare_audited_bitable_curve_fields",
     "validate_feishu_job_id",
 ]

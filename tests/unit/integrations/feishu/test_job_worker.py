@@ -210,7 +210,12 @@ class _Delivery:
             self.fail_success_once = False
             checkpoint(
                 FeishuJobDeliveryProgress(
-                    result_card_message_id="om-checkpointed-result-card"
+                    result_card_message_id="om-checkpointed-result-card",
+                    bitable_curve_file_token="file-checkpointed-curve",
+                    bitable_curve_source_result_id=analysis_result.result_id,
+                    bitable_curve_renderer_version="test-rul-renderer-v1",
+                    bitable_curve_sha256="e" * 64,
+                    bitable_curve_template="CYCLE_LIFE_SUMMARY",
                 )
             )
             raise FeishuTransportError("delivery timeout")
@@ -1254,6 +1259,11 @@ def test_worker_restart_resumes_checkpointed_results_without_rerunning_tool() ->
     assert checkpoint.analysis_result_id is not None
     assert checkpoint.report_result_id is not None
     assert checkpoint.result_card_message_id == "om-checkpointed-result-card"
+    assert checkpoint.bitable_curve_file_token == "file-checkpointed-curve"
+    assert checkpoint.bitable_curve_source_result_id == checkpoint.analysis_result_id
+    assert checkpoint.bitable_curve_renderer_version == "test-rul-renderer-v1"
+    assert checkpoint.bitable_curve_sha256 == "e" * 64
+    assert checkpoint.bitable_curve_template == "CYCLE_LIFE_SUMMARY"
     assert checkpoint.csv_mapping_status == "MAPPED"
     assert checkpoint.csv_mapping_evidence_sha256 == sha256_canonical(
         checkpoint.csv_mapping_evidence

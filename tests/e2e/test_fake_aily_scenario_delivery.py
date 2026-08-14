@@ -291,6 +291,10 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
     assert job.record_batch_id == batch_id
     assert job.analysis_result_id is not None
     assert job.report_result_id is not None
+    assert job.bitable_curve_file_token is not None
+    assert job.bitable_curve_source_result_id == job.analysis_result_id
+    assert job.bitable_curve_renderer_version == "feishu-scenario-plot-v2"
+    assert job.bitable_curve_template == "SCENARIO_COMPARISON"
     result_response = client.get(
         f"/v1/aily/analysis-tasks/{run_id}/results/{job.analysis_result_id}",
         headers=headers,
@@ -314,16 +318,31 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
         "bitable_records": 1,
     }
     fields = _created_bitable_fields(transport)
-    assert fields["run_id"] == run_id
-    assert fields["primary_result_id"] == job.analysis_result_id
-    assert fields["scenario_id"] == "baseline"
-    assert fields["scenario_version"] == "baseline-v1"
-    assert fields["evidence_level"] == "PHYSICS_REFERENCE"
-    assert fields["report_link"] == (
+    assert fields["任务ID"] == run_id
+    assert fields["结果ID"] == job.analysis_result_id
+    assert fields["工况ID"] == "baseline"
+    assert fields["工况版本"] == "baseline-v1"
+    assert fields["证据类型"] == "物理参考推演"
+    assert fields["分析摘要"] == "已完成参考工况退化对比"
+    assert fields["适用边界"] == (
+        "结果为物理参考工况。不是目标电芯个体寿命结论"
+    )
+    assert fields["详细报告"] == (
         f"https://integration.example.test/v1/aily/analysis-tasks/{run_id}"
         f"/reports/{job.report_result_id}"
     )
-    assert all(not isinstance(value, list | dict) for value in fields.values())
+    assert fields["分析曲线"] == [
+        {"file_token": job.bitable_curve_file_token}
+    ]
+    assert fields["曲线来源结果ID"] == job.analysis_result_id
+    assert fields["曲线渲染器版本"] == job.bitable_curve_renderer_version
+    assert fields["曲线SHA256"] == job.bitable_curve_sha256
+    assert fields["曲线模板"] == "SCENARIO_COMPARISON"
+    assert all(
+        not isinstance(value, list | dict)
+        for key, value in fields.items()
+        if key != "分析曲线"
+    )
     assert "natural_years" not in repr(fields)
     assert "soh" not in repr(fields).casefold()
     assert all(
@@ -334,6 +353,10 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
         }
         for request in transport.requests
     )
+    assert sum(
+        urlsplit(request.url).path == "/open-apis/drive/v1/medias/upload_all"
+        for request in transport.requests
+    ) == 1
     assert identities.calls == [(SOURCE_RUN_ID, batch_id)] * 6
 
 

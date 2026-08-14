@@ -120,31 +120,46 @@ result_id#values.approved.path
 
 ## 多维表格
 
-使用 `run_id` 作为幂等键。建议字段如下：
+远端表使用固定的 `quanxin-analysis-zh-cn/v1` 中文字段配置；内部英文键不会作为飞书列名。使用“任务ID”作为幂等键。工程师优先查看以下业务列：
 
-| 字段 | 类型 | 说明 |
+| 中文字段 | 飞书字段类型 | 说明 |
 |---|---|---|
-| `run_id` | 文本，唯一 | 幂等键 |
-| `task_type` | 文本/单选 | 稳定业务工具名 |
-| `task_status` | 文本/单选 | 任务状态 |
-| `data_batch_id` | 文本 | RecordBatch 引用 |
-| `input_file_sha256` | 文本 | 输入文件 SHA-256 |
-| `cell_reference` | 文本 | cell 或批次引用，不写大数组 |
-| `scenario_context_id` | 文本 | 受控场景输入引用 |
-| `scenario_id` | 文本 | 基准或主场景标识 |
-| `scenario_version` | 文本 | 场景版本 |
-| `primary_result_id` | 文本 | 主要 ToolResult 引用 |
-| `model_route` | 文本 | 服务器端路由引用 |
-| `model_version` | 文本 | 模型版本 |
-| `data_version` | 文本 | 数据版本 |
-| `feature_version` | 文本 | 特征版本 |
-| `evidence_level` | 文本/单选 | 证据等级 |
-| `warnings` | 多行文本 | 原样警告 |
-| `report_link` | URL | 受控报告链接 |
-| `created_at_utc` | 日期时间 | UTC |
-| `updated_at_utc` | 日期时间 | UTC |
+| 任务ID | 文本，唯一 | `run_id` 幂等键 |
+| 分析类型 | 单选/文本 | 个体早期循环寿命预测、有限循环 SOH 轨迹预测或参考工况对比 |
+| 任务状态 | 单选/文本 | 中文任务状态 |
+| 电芯名称 | 文本 | ToolResult 内已核验的电芯标识 |
+| 化学体系 | 文本 | 例如 LFP/graphite；缺失时不推测 |
+| 标称容量 | 文本 | 已登记容量及 Ah 单位 |
+| 数据来源 | 文本 | 已登记数据集名称 |
+| 测试规格 | 多行文本 | 已登记试验协议说明 |
+| 已观测循环数 | 文本 | RUL/SOH ToolResult 中的截止循环 |
+| 预计总循环寿命 | 文本 | 仅用于个体早期循环寿命结果 |
+| 预计剩余循环寿命 | 文本 | 仅用于个体早期循环寿命结果 |
+| SOH预测边界循环 | 文本 | 有限周期 SOH 工具的最后预测循环 |
+| 边界循环SOH | 文本 | 有限周期 SOH 曲线最后一点的 ToolResult 值 |
+| 工况ID / 工况版本 | 文本 | 参考工况身份，不写完整轨迹 |
+| 分析摘要 | 多行文本 | 固定中文工具结论，不由 LLM补写数字 |
+| 适用边界 | 多行文本 | 循环寿命、有限 SOH 或物理参考工况的使用限制 |
+| 分析曲线 | **附件** | RUL 寿命构成图、有限 SOH 曲线或 BLAST 参考工况曲线 |
+| 详细报告 | URL | 受控报告链接；需要调用方具备相应授权 |
 
-Writer 先查询 `run_id`：无记录则创建，一条则更新，多条或分页无法证明唯一性时拒绝。单进程内使用锁避免并发覆盖；多副本生产部署还应在持久化任务层按 `run_id` 串行化，并配置飞书端唯一性治理。轨迹数组、预测数组和大体积制品保存在审计制品存储中，表格只写引用。
+以下技术证据列放在业务列之后，可在工程复核时展开：
+
+| 中文字段 | 飞书字段类型 | 说明 |
+|---|---|---|
+| 数据批次ID / 输入文件SHA256 / 电芯引用 | 文本 | 数据身份与文件证据 |
+| 工况上下文ID | 文本 | 受控场景输入引用 |
+| 结果ID | 文本 | 主要 ToolResult 引用 |
+| 模型路线 / 模型版本 / 数据版本 / 特征版本 | 文本 | 数值来源版本 |
+| 证据类型 | 单选/文本 | 模型推理、物理参考推演等受控中文标签 |
+| 技术警告代码 | 多行文本 | 原始机器警告，仅作为第二层证据 |
+| 曲线来源结果ID | 文本 | 必须等于当前分析结果 ID |
+| 曲线渲染器版本 / 曲线模板 / 曲线SHA256 | 文本 | 图片可复现证据 |
+| 创建时间UTC / 更新时间UTC | 日期时间 | UTC |
+
+“分析曲线”必须配置为飞书附件字段。Worker 通过 `/drive/v1/medias/upload_all` 使用 `parent_type=bitable_image` 上传图片，并把返回的 `file_token` 写成 `[{"file_token": "..."}]`；消息卡片使用的 `image_key` 不能复用。图片上传后先把 `file_token`、来源结果、渲染器、模板和 SHA-256 持久化，再幂等写表；重启后复用该 checkpoint，不重复上传。
+
+Writer 先按“任务ID”查询：无记录则创建，一条则更新，多条或分页无法证明唯一性时拒绝。轨迹数组、预测数组和大体积制品保存在审计制品存储中，表格只保存标量摘要、附件和证据引用。RUL 结果生成“已观测循环 + 预计剩余循环”的构成图，不伪造退化曲线；SOH 图只覆盖工具的有限循环范围；BLAST 图始终标为独立参考工况，不能解释为目标电芯个体自然年寿命。
 
 ## 报告交付
 
@@ -187,7 +202,7 @@ docs/integrations/aily-system-prompt.md
 正式 API/Worker 使用 `deploy.competition_api:app` 与 `deploy.competition_worker:app`，
 基础 `deploy/competition.compose.yaml` 默认不挂载任何 Feishu/Aily secret。只有显式合并
 `deploy/competition.feishu-aily.override.yaml` 才会统一装配 migrate、API 与 Worker。先执行
-Alembic migration 到唯一 head `0025`，再启动 API 与 Worker。启用时设置以下非秘密身份：
+Alembic migration 到唯一 head `0027`，再启动 API 与 Worker。启用时设置以下非秘密身份：
 
 ```text
 FEISHU_APP_ID

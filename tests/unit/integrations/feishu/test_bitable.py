@@ -4,11 +4,15 @@ import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta, timezone
+from hashlib import sha256
 
 import pytest
 
 from quanxin_life.integrations.feishu.bitable import (
+    CHINESE_ANALYSIS_BITABLE_PROFILE,
+    BitableAttachment,
     BitableConflictError,
+    BitableMediaUploader,
     BitableProtocolError,
     BitableValidationError,
     BitableWriteAction,
@@ -158,6 +162,150 @@ def test_upsert_accepts_only_scalar_scenario_references() -> None:
     assert stored["scenario_id"] == "baseline"
     assert stored["scenario_version"] == "baseline-v1"
     assert all(not isinstance(value, list | dict) for value in stored.values())
+
+
+def test_chinese_profile_maps_business_fields_and_audited_attachment() -> None:
+    class ChineseClient(_FakeBitableClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.search_field_names: list[str] = []
+            self.remote_fields: dict[str, object] = {}
+
+        def search_bitable_records(
+            self,
+            *,
+            app_token: str,
+            table_id: str,
+            field_name: str,
+            field_value: str,
+        ) -> dict[str, object]:
+            del app_token, table_id
+            self.search_field_names.append(field_name)
+            self.searches.append(field_value)
+            return {"items": []}
+
+        def create_bitable_record(
+            self,
+            *,
+            app_token: str,
+            table_id: str,
+            fields: Mapping[str, object],
+        ) -> dict[str, object]:
+            del app_token, table_id
+            self.remote_fields = dict(fields)
+            return {"record": {"record_id": "rec_chinese"}}
+
+    client = ChineseClient()
+    writer = FeishuBitableWriter(
+        client,
+        app_token="app_table",
+        table_id="tbl_runs",
+        field_profile=CHINESE_ANALYSIS_BITABLE_PROFILE,
+    )
+
+    writer.upsert(
+        _fields(
+            task_status="SUCCEEDED",
+            analysis_summary="已完成有限循环 SOH 轨迹分析",
+            curve_attachment=BitableAttachment(file_token="file_curve_safe"),
+            curve_source_result_id="result-safe",
+            curve_renderer_version="feishu-soh-plot-v1",
+            curve_sha256="b" * 64,
+            curve_template="FINITE_SOH_CURVE",
+        )
+    )
+
+    assert client.search_field_names == ["任务ID"]
+    assert client.remote_fields["任务ID"] == "run-safe"
+    assert client.remote_fields["分析类型"] == "个体早期循环寿命预测"
+    assert client.remote_fields["任务状态"] == "已完成"
+    assert client.remote_fields["证据类型"] == "模型推理"
+    assert client.remote_fields["分析摘要"] == "已完成有限循环 SOH 轨迹分析"
+    assert client.remote_fields["分析曲线"] == [
+        {"file_token": "file_curve_safe"}
+    ]
+    assert client.remote_fields["曲线来源结果ID"] == "result-safe"
+    assert client.remote_fields["曲线渲染器版本"] == "feishu-soh-plot-v1"
+    assert client.remote_fields["曲线SHA256"] == "b" * 64
+    assert client.remote_fields["曲线模板"] == "FINITE_SOH_CURVE"
+
+
+def test_bitable_media_uploader_binds_payload_sha_and_table_token() -> None:
+    class MediaClient:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def upload_bitable_media(self, **kwargs: object) -> dict[str, object]:
+            self.calls.append(dict(kwargs))
+            return {"file_token": "file_curve_safe"}
+
+    client = MediaClient()
+    uploader = BitableMediaUploader(client, app_token="app_table")
+    payload = b"audited-curve"
+
+    attachment = uploader.upload_image(
+        filename="soh-curve.png",
+        content_type="image/png",
+        payload=payload,
+        expected_sha256=sha256(payload).hexdigest(),
+    )
+
+    assert attachment == BitableAttachment(file_token="file_curve_safe")
+    assert client.calls == [
+        {
+            "app_token": "app_table",
+            "filename": "soh-curve.png",
+            "content_type": "image/png",
+            "payload": payload,
+        }
+    ]
+    with pytest.raises(BitableValidationError, match="SHA-256"):
+        uploader.upload_image(
+            filename="soh-curve.png",
+            content_type="image/png",
+            payload=payload,
+            expected_sha256="0" * 64,
+        )
+    assert len(client.calls) == 1
+
+
+def test_upsert_rejects_explicit_null_curve_evidence_before_remote_calls() -> None:
+    client = _FakeBitableClient()
+
+    with pytest.raises(BitableValidationError, match="curve evidence is incomplete"):
+        _writer(client).upsert(
+            _fields(
+                curve_attachment=None,
+                curve_source_result_id=None,
+                curve_renderer_version=None,
+                curve_sha256=None,
+                curve_template=None,
+            )
+        )
+
+    assert client.searches == []
+    assert client.created == 0
+    assert client.updated == 0
+
+
+def test_upsert_rejects_curve_source_not_bound_to_primary_result() -> None:
+    client = _FakeBitableClient()
+
+    with pytest.raises(BitableValidationError, match="primary result"):
+        _writer(client).upsert(
+            _fields(
+                primary_result_id="result-a",
+                curve_attachment=BitableAttachment(file_token="file-curve"),
+                curve_source_result_id="result-b",
+                curve_renderer_version="feishu-rul-summary-v1",
+                curve_sha256="b" * 64,
+                curve_template="CYCLE_LIFE_SUMMARY",
+            )
+        )
+
+    assert client.searches == []
+    assert client.created == 0
+    assert client.updated == 0
 
 
 def test_upsert_rejects_duplicate_remote_run_records_without_writing() -> None:

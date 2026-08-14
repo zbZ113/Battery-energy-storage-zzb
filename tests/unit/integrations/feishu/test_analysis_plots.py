@@ -32,27 +32,32 @@ def test_selects_and_renders_only_the_controlled_template_for_each_result_type()
     assert scenario_plan.template is AnalysisPlotTemplate.SCENARIO_COMPARISON
     assert scenario_plan.image_required is True
     assert cycle_plan.template is AnalysisPlotTemplate.CYCLE_LIFE_SUMMARY
-    assert cycle_plan.image_required is False
+    assert cycle_plan.image_required is True
 
     soh_plot = plotter.render(_soh_result())
     scenario_plot = plotter.render(_scenario_result())
+    cycle_plot = plotter.render(_cycle_life_result())
 
     assert soh_plot.template is AnalysisPlotTemplate.FINITE_SOH_CURVE
     assert scenario_plot.template is AnalysisPlotTemplate.SCENARIO_COMPARISON
+    assert cycle_plot.template is AnalysisPlotTemplate.CYCLE_LIFE_SUMMARY
     assert soh_plot.payload.startswith(b"\x89PNG\r\n\x1a\n")
     assert scenario_plot.payload.startswith(b"\x89PNG\r\n\x1a\n")
+    assert cycle_plot.payload.startswith(b"\x89PNG\r\n\x1a\n")
     assert soh_plot.sha256 == sha256(soh_plot.payload).hexdigest()
     assert scenario_plot.sha256 == sha256(scenario_plot.payload).hexdigest()
+    assert cycle_plot.sha256 == sha256(cycle_plot.payload).hexdigest()
     assert soh_plot.renderer_version
     assert scenario_plot.renderer_version
+    assert cycle_plot.renderer_version
 
 
 def test_rejects_incompatible_or_unneeded_template_requests_without_reading_numbers() -> None:
     plotter = FeishuAnalysisPlotter()
     cycle = _cycle_life_result()
 
-    with pytest.raises(FeishuAnalysisPlotError, match="does not require"):
-        plotter.render(cycle)
+    with pytest.raises(FeishuAnalysisPlotError, match="not allowed"):
+        plotter.render(cycle, template=AnalysisPlotTemplate.FINITE_SOH_CURVE)
     with pytest.raises(FeishuAnalysisPlotError, match="not allowed"):
         plotter.render(
             _soh_result(),

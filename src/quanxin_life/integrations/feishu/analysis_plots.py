@@ -27,6 +27,7 @@ from quanxin_life.tools.cell_metadata_evidence import (
     validate_versioned_cell_metadata_evidence,
 )
 
+from .rul_plot import FeishuRulSummaryPlotter
 from .scenario_plot import (
     FeishuScenarioPlotArtifact,
     FeishuScenarioPlotter,
@@ -71,9 +72,11 @@ class FeishuAnalysisPlotter:
     def __init__(
         self,
         *,
+        rul_plotter: FeishuRulSummaryPlotter | None = None,
         soh_plotter: FeishuSohPlotter | None = None,
         scenario_plotter: FeishuScenarioPlotter | None = None,
     ) -> None:
+        self._rul_plotter = rul_plotter or FeishuRulSummaryPlotter()
         self._soh_plotter = soh_plotter or FeishuSohPlotter()
         self._scenario_plotter = scenario_plotter or FeishuScenarioPlotter()
 
@@ -119,7 +122,7 @@ class FeishuAnalysisPlotter:
             )
             return AnalysisPlotPlan(
                 template=AnalysisPlotTemplate.CYCLE_LIFE_SUMMARY,
-                image_required=False,
+                image_required=True,
             )
         raise FeishuAnalysisPlotError(
             "ToolResult does not have a reviewed analysis plot template"
@@ -160,7 +163,10 @@ class FeishuAnalysisPlotter:
             raise FeishuAnalysisPlotError(
                 f"template {template.value} is not allowed for this ToolResult"
             )
-        if plan.template is AnalysisPlotTemplate.FINITE_SOH_CURVE:
+        if plan.template is AnalysisPlotTemplate.CYCLE_LIFE_SUMMARY:
+            rendered = self._rul_plotter.render(checked)
+            renderer_version = self._rul_plotter.renderer_version
+        elif plan.template is AnalysisPlotTemplate.FINITE_SOH_CURVE:
             rendered = self._soh_plotter.render(checked)
             renderer_version = self._soh_plotter.renderer_version
         else:

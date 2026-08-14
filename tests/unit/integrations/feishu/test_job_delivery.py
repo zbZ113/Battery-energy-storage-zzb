@@ -7,7 +7,12 @@ from hashlib import sha256
 import pytest
 
 from quanxin_life.core import EvidenceLevel, ProvenanceRecord, SourceKind, ToolResult
+from quanxin_life.integrations.feishu.analysis_plots import (
+    AnalysisPlotTemplate,
+    FeishuAnalysisPlotArtifact,
+)
 from quanxin_life.integrations.feishu.bitable import (
+    BitableAttachment,
     BitableWriteAction,
     BitableWriteResult,
 )
@@ -29,6 +34,9 @@ from quanxin_life.integrations.feishu.scenario_plot import (
 )
 from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
 from quanxin_life.reporting import ReportArtifactFormat
+from quanxin_life.tools.blast_scenarios import (
+    COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
+)
 
 NOW = datetime(2026, 8, 11, 6, 0, tzinfo=UTC)
 
@@ -171,15 +179,45 @@ class _ScenarioPlotter:
 class _SohPlotter:
     renderer_version = "test-soh-renderer-v1"
 
-    def render(self, result: ToolResult) -> FeishuScenarioPlotArtifact:
+    def render(self, result: ToolResult) -> FeishuAnalysisPlotArtifact:
         payload = b"\x89PNG\r\n\x1a\nsoh-controlled"
-        return FeishuScenarioPlotArtifact(
+        return FeishuAnalysisPlotArtifact(
             source_result_id=result.result_id,
             filename=f"soh-{result.result_id}.png",
             media_type="image/png",
             payload=payload,
             sha256=sha256(payload).hexdigest(),
+            template=AnalysisPlotTemplate.FINITE_SOH_CURVE,
+            renderer_version=self.renderer_version,
         )
+
+
+class _RulPlotter:
+    renderer_version = "test-rul-renderer-v1"
+
+    def render(self, result: ToolResult) -> FeishuAnalysisPlotArtifact:
+        payload = b"\x89PNG\r\n\x1a\nrul-controlled"
+        return FeishuAnalysisPlotArtifact(
+            source_result_id=result.result_id,
+            filename=f"rul-{result.result_id}.png",
+            media_type="image/png",
+            payload=payload,
+            sha256=sha256(payload).hexdigest(),
+            template=AnalysisPlotTemplate.CYCLE_LIFE_SUMMARY,
+            renderer_version=self.renderer_version,
+        )
+
+
+class _MediaUploader:
+    def __init__(self, events: list[str] | None = None) -> None:
+        self.calls: list[dict[str, object]] = []
+        self._events = events
+
+    def upload_image(self, **kwargs: object) -> BitableAttachment:
+        self.calls.append(dict(kwargs))
+        if self._events is not None:
+            self._events.append("media-upload")
+        return BitableAttachment(file_token="file-curve")
 
 
 def _job(
@@ -236,24 +274,78 @@ def _result(
     tool_name: str,
     upstream_result_id: str | None = None,
 ) -> ToolResult:
-    return ToolResult(
-        result_id=result_id,
-        tool_name=tool_name,
-        tool_version=(
-            "advanced-rul-prediction-tool-v1"
-            if tool_name == "predict_cycle_life"
-            else "audited-report-tool-v1"
-        ),
-        model_version="model-v1",
-        data_version="data-v1",
-        feature_version="feature-v1",
-        input_hash="c" * 64,
-        values=(
+    if tool_name == "predict_cycle_life":
+        tool_version = "advanced-rul-prediction-tool-v1"
+        values: dict[str, object] = {
+            "artifact_type": "quanxin_life.advanced_rul_prediction.v2",
+            "artifact": {
+                "cell_metadata": {
+                    "dataset_id": "MATR",
+                    "cell_id": "MATR_b3c34",
+                    "raw_cell_id": "b3c34",
+                    "chemistry": "LFP/graphite",
+                    "nominal_capacity_ah": 1.1,
+                    "reference_capacity_ah": 1.0,
+                    "eol_threshold": 0.8,
+                    "protocol_id": "MATR-standard",
+                    "protocol_description": "公开 MATR 小容量 LFP 循环测试",
+                    "source_uri": "trusted-store://matr/b3c34",
+                    "source_sha256": "d" * 64,
+                    "schema_version": "cell-metadata-v1",
+                    "adapter_version": "matr-adapter-v1",
+                },
+                "dataset_id": "MATR",
+                "cell_id": "MATR_b3c34",
+                "cutoff_cycle": 50,
+                "cycle_life_prediction": {"predicted_cycle": 1074.5},
+                "derived_remaining_cycles": 1024.5,
+            },
+        }
+    elif tool_name == "predict_soh_trajectory":
+        tool_version = "advanced-soh-prediction-tool-v1"
+        values = {
+            "artifact_type": "quanxin_life.advanced_soh_trajectory.v2",
+            "artifact": {
+                "cell_metadata": {
+                    "dataset_id": "MATR",
+                    "cell_id": "MATR_b3c34",
+                    "raw_cell_id": "b3c34",
+                    "chemistry": "LFP/graphite",
+                    "nominal_capacity_ah": 1.1,
+                    "reference_capacity_ah": 1.0,
+                    "eol_threshold": 0.8,
+                    "protocol_id": "MATR-standard",
+                    "protocol_description": "公开 MATR 小容量 LFP 循环测试",
+                    "source_uri": "trusted-store://matr/b3c34",
+                    "source_sha256": "d" * 64,
+                    "schema_version": "cell-metadata-v1",
+                    "adapter_version": "matr-adapter-v1",
+                },
+                "dataset_id": "MATR",
+                "cell_id": "MATR_b3c34",
+                "cutoff_cycle": 50,
+                "prediction_cycles": [51, 500],
+                "predicted_soh": [0.99, 0.87],
+                "horizon_end_cycle": 500,
+            },
+        }
+    else:
+        tool_version = "audited-report-tool-v1"
+        values = (
             {"upstream_result_ids": [upstream_result_id]}
             if tool_name == "generate_audited_report"
             and upstream_result_id is not None
             else {"registered": True}
-        ),
+        )
+    return ToolResult(
+        result_id=result_id,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        model_version="model-v1",
+        data_version="data-v1",
+        feature_version="feature-v1",
+        input_hash="c" * 64,
+        values=values,
         warnings=["TRACEABLE_WARNING"],
         provenance=[
             ProvenanceRecord(
@@ -443,7 +535,7 @@ def test_scenario_delivery_uploads_curve_and_writes_scalar_context_metadata() ->
         tool_name="compare_operation_scenarios",
     ).model_copy(
         update={
-            "tool_version": "compare-operation-scenarios-tool-v1",
+            "tool_version": COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
             "values": {
                 "artifact": {
                     "status": "COMPLETED",
@@ -587,6 +679,114 @@ def test_soh_delivery_reuses_complete_image_provenance_without_render_or_upload(
         )
 
     assert client.images == []
+
+
+def test_success_delivery_checkpoints_curve_before_writing_engineering_row() -> None:
+    events: list[str] = []
+    progress: list[FeishuJobDeliveryProgress] = []
+
+    class OrderedBitable(_Bitable):
+        def upsert(self, fields: dict[str, object]) -> BitableWriteResult:
+            assert any(
+                item.bitable_curve_file_token == "file-curve" for item in progress
+            )
+            events.append("bitable-upsert")
+            return super().upsert(fields)
+
+    bitable = OrderedBitable()
+    media = _MediaUploader(events)
+    delivery = FeishuAnalysisJobDelivery(
+        client=_Client(),
+        card_builder=_CardBuilder(),
+        bitable_writer=bitable,
+        report_delivery=_ReportDelivery(),
+        result_authorizer=_Authorizer(),
+        bitable_curve_plotter=_RulPlotter(),
+        bitable_media_uploader=media,
+    )
+    job = _job()
+    analysis = _result(
+        result_id=job.analysis_result_id or "",
+        tool_name="predict_cycle_life",
+    )
+    report = _result(
+        result_id=job.report_result_id or "",
+        tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
+    )
+
+    def checkpoint(item: FeishuJobDeliveryProgress) -> None:
+        progress.append(item)
+        if item.bitable_curve_file_token is not None:
+            events.append("curve-checkpoint")
+
+    delivery.deliver_success(
+        job=job,
+        analysis_result=analysis,
+        report_result=report,
+        checkpoint=checkpoint,
+    )
+
+    assert events == ["media-upload", "curve-checkpoint", "bitable-upsert"]
+    assert len(media.calls) == 1
+    fields = bitable.fields[0]
+    assert fields["analysis_summary"] == "已完成个体早期循环寿命预测"
+    assert fields["predicted_total_cycles"] == "1074.5"
+    assert fields["predicted_remaining_cycles"] == "1024.5"
+    assert fields["curve_attachment"] == BitableAttachment(
+        file_token="file-curve"
+    )
+    assert fields["curve_source_result_id"] == analysis.result_id
+    assert fields["curve_renderer_version"] == "test-rul-renderer-v1"
+    assert fields["curve_sha256"] == sha256(
+        b"\x89PNG\r\n\x1a\nrul-controlled"
+    ).hexdigest()
+    assert fields["curve_template"] == "CYCLE_LIFE_SUMMARY"
+    assert all(not isinstance(value, list | dict) for value in fields.values())
+
+
+def test_success_delivery_reuses_checkpointed_curve_after_write_failure() -> None:
+    media = _MediaUploader()
+    bitable = _Bitable()
+    delivery = FeishuAnalysisJobDelivery(
+        client=_Client(),
+        card_builder=_CardBuilder(),
+        bitable_writer=bitable,
+        report_delivery=_ReportDelivery(),
+        result_authorizer=_Authorizer(),
+        bitable_curve_plotter=_RulPlotter(),
+        bitable_media_uploader=media,
+    )
+    job = replace(
+        _job(),
+        bitable_curve_file_token="file-curve",
+        bitable_curve_source_result_id="a03018dd-7a76-42bf-a506-4dc571ddca7e",
+        bitable_curve_renderer_version="test-rul-renderer-v1",
+        bitable_curve_sha256=sha256(
+            b"\x89PNG\r\n\x1a\nrul-controlled"
+        ).hexdigest(),
+        bitable_curve_template="CYCLE_LIFE_SUMMARY",
+    )
+    analysis = _result(
+        result_id=job.analysis_result_id or "",
+        tool_name="predict_cycle_life",
+    )
+    report = _result(
+        result_id=job.report_result_id or "",
+        tool_name="generate_audited_report",
+        upstream_result_id=analysis.result_id,
+    )
+
+    delivery.deliver_success(
+        job=job,
+        analysis_result=analysis,
+        report_result=report,
+    )
+
+    assert media.calls == []
+    assert bitable.fields[0]["curve_attachment"] == BitableAttachment(
+        file_token="file-curve"
+    )
 
 
 def test_success_delivery_replay_skips_checkpointed_external_actions() -> None:

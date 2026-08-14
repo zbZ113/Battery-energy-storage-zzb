@@ -167,6 +167,35 @@ def test_token_and_read_only_search_retain_bounded_retries() -> None:
     assert transport.requests[3].url == transport.requests[2].url
 
 
+def test_upload_bitable_image_uses_the_drive_media_contract() -> None:
+    transport = FakeFeishuTransport(
+        responses=[_token_response(), _ok({"file_token": "file_curve_safe"})]
+    )
+
+    result = _client(transport).upload_bitable_media(
+        app_token="app_table",
+        filename="soh-curve.png",
+        content_type="image/png",
+        payload=b"audited-curve",
+    )
+
+    assert result == {"file_token": "file_curve_safe"}
+    request = transport.requests[-1]
+    assert request.method == "POST"
+    assert request.url.endswith("/drive/v1/medias/upload_all")
+    assert request.form == {
+        "file_name": "soh-curve.png",
+        "parent_type": "bitable_image",
+        "parent_node": "app_table",
+        "size": str(len(b"audited-curve")),
+    }
+    assert len(request.files) == 1
+    assert request.files[0].field_name == "file"
+    assert request.files[0].filename == "soh-curve.png"
+    assert request.files[0].content_type == "image/png"
+    assert request.files[0].payload == b"audited-curve"
+
+
 def _invoke_non_idempotent_operation(client: FeishuClient, operation: str) -> None:
     if operation == "send_message":
         client.send_message(
@@ -193,6 +222,13 @@ def _invoke_non_idempotent_operation(client: FeishuClient, operation: str) -> No
             content_type="text/markdown",
             payload=b"audited-report",
         )
+    elif operation == "upload_bitable_media":
+        client.upload_bitable_media(
+            app_token="app_table",
+            filename="audited-plot.png",
+            content_type="image/png",
+            payload=b"audited-image",
+        )
     elif operation == "create_bitable_record":
         client.create_bitable_record(
             app_token="app_table",
@@ -210,6 +246,7 @@ def _invoke_non_idempotent_operation(client: FeishuClient, operation: str) -> No
         "reply_message",
         "upload_image",
         "upload_file",
+        "upload_bitable_media",
         "create_bitable_record",
     ],
 )

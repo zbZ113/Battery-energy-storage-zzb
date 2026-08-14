@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from uuid import uuid4
 
 import pytest
 
 from quanxin_life.core import EvidenceLevel, ProvenanceRecord, SourceKind, ToolResult
 from quanxin_life.integrations.feishu.aily_tasks import AilyAnalysisJobDelivery
+from quanxin_life.integrations.feishu.analysis_plots import (
+    AnalysisPlotTemplate,
+    FeishuAnalysisPlotArtifact,
+)
 from quanxin_life.integrations.feishu.bitable import (
+    BitableAttachment,
     BitableWriteAction,
     BitableWriteResult,
 )
@@ -20,8 +26,13 @@ from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobOrigin,
     FeishuAnalysisJobRecord,
     FeishuAnalysisJobStatus,
+    FeishuJobDeliveryProgress,
 )
 from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
+from quanxin_life.tools.blast_scenarios import (
+    COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
+)
+from tests.unit.integrations.feishu.test_audited_cards import _cycle_life_result
 
 NOW = datetime(2026, 8, 12, 11, 0, tzinfo=UTC)
 
@@ -64,6 +75,29 @@ class _ModelAuthorizer:
             evidence_level=EvidenceLevel.MODEL_INFERENCE,
             supported_domain="project-bound MATR cycle-life route",
         )
+
+
+class _Plotter:
+    def render(self, result: ToolResult) -> FeishuAnalysisPlotArtifact:
+        payload = b"\x89PNG\r\n\x1a\naily-scenario"
+        return FeishuAnalysisPlotArtifact(
+            source_result_id=result.result_id,
+            filename=f"scenario-{result.result_id}.png",
+            media_type="image/png",
+            payload=payload,
+            sha256=sha256(payload).hexdigest(),
+            template=AnalysisPlotTemplate.SCENARIO_COMPARISON,
+            renderer_version="test-scenario-renderer-v1",
+        )
+
+
+class _MediaUploader:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def upload_image(self, **_kwargs: object) -> BitableAttachment:
+        self.calls += 1
+        return BitableAttachment(file_token="file-aily-curve")
 
 
 def _job() -> FeishuAnalysisJobRecord:
@@ -118,7 +152,7 @@ def _result(job: FeishuAnalysisJobRecord) -> ToolResult:
     return ToolResult(
         result_id=job.analysis_result_id,
         tool_name="compare_operation_scenarios",
-        tool_version="compare-operation-scenarios-tool-v1",
+        tool_version=COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
         model_version="blast-lite-lfp-gr-250ah-prismatic-2019-v1",
         data_version="scenario-data-v1",
         feature_version="operation-scenario-contract-v1",
@@ -216,6 +250,46 @@ def test_aily_success_delivery_writes_only_scalar_metadata_and_report_link() -> 
     assert "soh" not in rendered
 
 
+def test_aily_success_delivery_uploads_and_checkpoints_audited_curve() -> None:
+    bitable = _Bitable()
+    media = _MediaUploader()
+    progress: list[FeishuJobDeliveryProgress] = []
+    delivery = AilyAnalysisJobDelivery(
+        bitable_writer=bitable,
+        result_authorizer=_Authorizer(),
+        analysis_plotter=_Plotter(),
+        bitable_media_uploader=media,
+    )
+    job = _job()
+    analysis = _result(job)
+
+    delivery.deliver_success(
+        job=job,
+        analysis_result=analysis,
+        report_result=_report(job),
+        checkpoint=progress.append,
+    )
+
+    assert media.calls == 1
+    assert any(
+        item.bitable_curve_file_token == "file-aily-curve"
+        and item.bitable_curve_source_result_id == analysis.result_id
+        and item.bitable_curve_renderer_version == "test-scenario-renderer-v1"
+        and item.bitable_curve_template == "SCENARIO_COMPARISON"
+        for item in progress
+    )
+    fields = bitable.fields[0]
+    assert fields["analysis_summary"] == "已完成参考工况退化对比"
+    assert fields["applicability"] == (
+        "结果为物理参考工况。不是目标电芯个体寿命结论"
+    )
+    assert fields["curve_attachment"] == BitableAttachment(
+        file_token="file-aily-curve"
+    )
+    assert fields["curve_source_result_id"] == analysis.result_id
+    assert fields["curve_template"] == "SCENARIO_COMPARISON"
+
+
 def test_aily_success_delivery_rejects_unbound_report_before_bitable_write() -> None:
     bitable = _Bitable()
     delivery = AilyAnalysisJobDelivery(
@@ -275,27 +349,15 @@ def test_aily_non_scenario_success_does_not_require_scenario_projection() -> Non
     )
     assert job.analysis_result_id is not None
     assert job.report_result_id is not None
-    analysis = ToolResult(
-        result_id=job.analysis_result_id,
-        tool_name="predict_cycle_life",
-        tool_version="advanced-rul-prediction-tool-v1",
-        model_version="cyclepatch-direct-v3",
-        data_version="matr-project-v1",
-        feature_version="advanced-input-v1",
-        input_hash="8" * 64,
-        values={"artifact": {"record_batch_id": job.record_batch_id}},
-        warnings=[],
-        provenance=[
-            ProvenanceRecord(
-                source_id="project-batch",
-                source_kind=SourceKind.OBSERVED,
-                uri="record-batch:project-batch",
-                sha256="9" * 64,
-                description="Authorized project batch.",
-                created_at=NOW,
-            )
-        ],
-        created_at=NOW,
+    analysis = _cycle_life_result().model_copy(
+        update={
+            "result_id": job.analysis_result_id,
+            "model_version": "cyclepatch-direct-v3",
+            "data_version": "matr-project-v1",
+            "feature_version": "advanced-input-v1",
+            "input_hash": "8" * 64,
+            "created_at": NOW,
+        }
     )
     report = _report(job).model_copy(
         update={

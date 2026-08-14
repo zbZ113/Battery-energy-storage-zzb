@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from quanxin_life.core import AgentRunState, AgentRunStatus, ToolResult
 
+from .analysis_bitable import build_audited_analysis_bitable_fields
 from .bitable import BitableWriteResult
 from .cards import AuditedResultAuthorizer
 from .delivery_contract import validate_delivery_results
@@ -16,10 +17,13 @@ from .jobs import (
     FeishuAnalysisJobOrigin,
     FeishuAnalysisJobRecord,
     FeishuAnalysisJobStatus,
+    FeishuBitableCurvePlotRenderer,
+    FeishuBitableMediaUploader,
     FeishuJobDeliveryProgress,
     FeishuJobDeliveryReceipt,
     FeishuJobQueue,
     SqlAlchemyFeishuJobStore,
+    prepare_audited_bitable_curve_fields,
 )
 from .scenario_contexts import SqlAlchemyFeishuScenarioContextStore
 from .workflow import FeishuAnalysisTask
@@ -57,10 +61,14 @@ class AilyAnalysisJobDelivery:
         report_link_factory: (
             Callable[[FeishuAnalysisJobRecord, ToolResult], str] | None
         ) = None,
+        analysis_plotter: FeishuBitableCurvePlotRenderer | None = None,
+        bitable_media_uploader: FeishuBitableMediaUploader | None = None,
     ) -> None:
         self._bitable_writer = bitable_writer
         self._result_authorizer = result_authorizer
         self._report_link_factory = report_link_factory
+        self._analysis_plotter = analysis_plotter
+        self._bitable_media_uploader = bitable_media_uploader
 
     def deliver_rejection(
         self,
@@ -107,11 +115,23 @@ class AilyAnalysisJobDelivery:
             report_result=report_result,
             authorizer=self._result_authorizer,
         )
-        if job.bitable_record_id is not None:
+        should_write_bitable = job.bitable_record_id is None or (
+            job.bitable_curve_file_token is None
+            and self._analysis_plotter is not None
+            and self._bitable_media_uploader is not None
+        )
+        if not should_write_bitable:
             return FeishuJobDeliveryReceipt(
                 bitable_record_id=job.bitable_record_id,
                 report_file_key=None,
             )
+        curve_fields = prepare_audited_bitable_curve_fields(
+            job=job,
+            analysis_result=analysis_result,
+            analysis_plotter=self._analysis_plotter,
+            bitable_media_uploader=self._bitable_media_uploader,
+            checkpoint=checkpoint,
+        )
         fields = self._base_fields(job, task_status="SUCCEEDED")
         fields.update(
             {
@@ -123,8 +143,10 @@ class AilyAnalysisJobDelivery:
                 "evidence_level": authorization.evidence_level.value,
             }
         )
+        fields.update(build_audited_analysis_bitable_fields(analysis_result))
         if job.task_type in _SCENARIO_TASKS:
             fields.update(_scenario_fields(job, analysis_result))
+        fields.update(curve_fields)
         if analysis_result.warnings:
             fields["warnings"] = "\n".join(analysis_result.warnings)
         if self._report_link_factory is not None:

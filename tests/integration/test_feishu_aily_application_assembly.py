@@ -40,6 +40,10 @@ from quanxin_life.core import (
 from quanxin_life.features import EarlyCycleFeatureConfig
 from quanxin_life.infrastructure.feishu_queue import FEISHU_ANALYSIS_TASK
 from quanxin_life.integrations.feishu.analysis_plots import FeishuAnalysisPlotter
+from quanxin_life.integrations.feishu.bitable import (
+    CHINESE_ANALYSIS_BITABLE_PROFILE,
+    BitableMediaUploader,
+)
 from quanxin_life.integrations.feishu.default_scenarios import (
     ReviewedDefaultScenarioRegistry,
 )
@@ -169,6 +173,17 @@ def test_feishu_aily_assembly_shares_one_persistent_boundary(tmp_path) -> None:
     scenario_plotter = components.worker._delivery._feishu_delivery._scenario_plotter
     assert isinstance(analysis_plotter, FeishuAnalysisPlotter)
     assert scenario_plotter is analysis_plotter
+    feishu_delivery = components.worker._delivery._feishu_delivery
+    aily_delivery = components.worker._delivery._aily_delivery
+    media_uploader = feishu_delivery._bitable_media_uploader
+    assert isinstance(media_uploader, BitableMediaUploader)
+    assert feishu_delivery._bitable_curve_plotter is analysis_plotter
+    assert aily_delivery._bitable_media_uploader is media_uploader
+    assert aily_delivery._analysis_plotter is analysis_plotter
+    assert (
+        feishu_delivery._bitable_writer._field_profile
+        is CHINESE_ANALYSIS_BITABLE_PROFILE
+    )
     assert components.aily_http_adapter is not None
     assert components.feishu_http_adapter is not None
     assert FEISHU_ANALYSIS_TASK not in celery_app.tasks

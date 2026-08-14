@@ -1282,6 +1282,22 @@ class FeishuEventReceipt(Base):
             name="ck_feishu_event_receipt_analysis_image_provenance",
         ),
         CheckConstraint(
+            "(bitable_curve_file_token IS NULL AND "
+            "bitable_curve_source_result_id IS NULL AND "
+            "bitable_curve_renderer_version IS NULL AND "
+            "bitable_curve_sha256 IS NULL AND "
+            "bitable_curve_template IS NULL) OR "
+            "(bitable_curve_file_token IS NOT NULL AND "
+            "bitable_curve_source_result_id IS NOT NULL AND "
+            "bitable_curve_renderer_version IS NOT NULL AND "
+            "bitable_curve_sha256 IS NOT NULL AND "
+            "bitable_curve_template IS NOT NULL AND "
+            "length(bitable_curve_sha256) = 64 AND "
+            "analysis_result_id IS NOT NULL AND "
+            "bitable_curve_source_result_id = analysis_result_id)",
+            name="ck_feishu_event_receipt_bitable_curve_provenance",
+        ),
+        CheckConstraint(
             "source_job_id IS NULL OR source_job_id <> job_id",
             name="ck_feishu_event_receipt_source_job_distinct",
         ),
@@ -1356,6 +1372,11 @@ class FeishuEventReceipt(Base):
     analysis_image_key: Mapped[str | None] = mapped_column(String(200))
     analysis_image_renderer_version: Mapped[str | None] = mapped_column(String(100))
     analysis_image_sha256: Mapped[str | None] = mapped_column(String(64))
+    bitable_curve_file_token: Mapped[str | None] = mapped_column(String(200))
+    bitable_curve_source_result_id: Mapped[str | None] = mapped_column(String(64))
+    bitable_curve_renderer_version: Mapped[str | None] = mapped_column(String(100))
+    bitable_curve_sha256: Mapped[str | None] = mapped_column(String(64))
+    bitable_curve_template: Mapped[str | None] = mapped_column(String(100))
     result_card_message_id: Mapped[str | None] = mapped_column(String(200))
     report_file_key: Mapped[str | None] = mapped_column(String(200))
     report_message_id: Mapped[str | None] = mapped_column(String(200))

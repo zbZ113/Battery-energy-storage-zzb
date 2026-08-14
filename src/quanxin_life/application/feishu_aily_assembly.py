@@ -59,7 +59,11 @@ from quanxin_life.integrations.feishu.attachments import (
     FeishuAttachmentPolicy,
     VerifiedFeishuAttachment,
 )
-from quanxin_life.integrations.feishu.bitable import FeishuBitableWriter
+from quanxin_life.integrations.feishu.bitable import (
+    CHINESE_ANALYSIS_BITABLE_PROFILE,
+    BitableMediaUploader,
+    FeishuBitableWriter,
+)
 from quanxin_life.integrations.feishu.cards import AuditedCardBuilder
 from quanxin_life.integrations.feishu.client import (
     FeishuClient,
@@ -530,6 +534,11 @@ def create_feishu_aily_components(
         client,
         app_token=config.bitable_app_token,
         table_id=config.bitable_table_id,
+        field_profile=CHINESE_ANALYSIS_BITABLE_PROFILE,
+    )
+    bitable_media_uploader = BitableMediaUploader(
+        client,
+        app_token=config.bitable_app_token,
     )
     analysis_plotter = FeishuAnalysisPlotter()
     feishu_delivery = FeishuAnalysisJobDelivery(
@@ -548,6 +557,8 @@ def create_feishu_aily_components(
         result_authorizer=authorizer,
         scenario_plotter=analysis_plotter,
         analysis_plotter=analysis_plotter,
+        bitable_curve_plotter=analysis_plotter,
+        bitable_media_uploader=bitable_media_uploader,
     )
     aily_delivery = AilyAnalysisJobDelivery(
         bitable_writer=bitable_writer,
@@ -556,6 +567,8 @@ def create_feishu_aily_components(
             f"{checked_base_url}/v1/aily/analysis-tasks/{job.run_id}"
             f"/reports/{report.result_id}"
         ),
+        analysis_plotter=analysis_plotter,
+        bitable_media_uploader=bitable_media_uploader,
     )
     workflow = FeishuAnalysisWorkflow(
         tool_service,
