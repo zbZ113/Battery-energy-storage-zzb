@@ -515,6 +515,8 @@ def _authorize_engineering_recommendation(
             )
         )
         outcome = values.get("recommendation")
+        if outcome in {"ADOPTABLE", "RECHECK_REQUIRED"} and not evidence:
+            raise ValueError("resolved recommendation requires rule evidence")
         if resolution_issues:
             valid_outcome = outcome == "UNRESOLVED" and bool(reason_codes)
         elif failed_codes:

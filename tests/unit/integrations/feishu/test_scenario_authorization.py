@@ -635,3 +635,29 @@ def test_audited_authorizer_allows_recommendation_and_exact_report_only() -> Non
         }
     )
     assert authorizer.authorize(tampered).allowed is False
+
+
+def test_audited_authorizer_rejects_adoptable_recommendation_without_rule_evidence() -> None:
+    from tests.unit.integrations.feishu.test_analysis_bitable import (
+        _recommendation_result,
+    )
+
+    source = _recommendation_result()
+    recommendation = source.model_copy(
+        update={
+            "values": {
+                **source.values,
+                "recommendation": "ADOPTABLE",
+                "evaluated_value_paths": [],
+                "reason_codes": [],
+                "resolution_issues": [],
+                "threshold_evidence": [],
+            },
+            "warnings": [],
+        }
+    )
+    authorizer = AuditedScenarioResultAuthorizer(
+        result_resolver=AuditLedger((recommendation,))
+    )
+
+    assert authorizer.authorize(recommendation).allowed is False

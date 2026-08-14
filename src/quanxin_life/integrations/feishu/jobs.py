@@ -1083,7 +1083,11 @@ class SqlAlchemyFeishuJobStore:
         family = tuple(
             session.scalars(
                 select(FeishuEventReceipt).where(
-                    FeishuEventReceipt.source_job_id == source_job_id
+                    FeishuEventReceipt.source_job_id == source_job_id,
+                    FeishuEventReceipt.job_origin
+                    == FeishuAnalysisJobOrigin.FEISHU.value,
+                    FeishuEventReceipt.event_type
+                    == "feishu.analysis_job.derived_v1",
                 )
             ).all()
         )

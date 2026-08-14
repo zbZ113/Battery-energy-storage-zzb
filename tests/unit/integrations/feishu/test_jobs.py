@@ -289,6 +289,86 @@ def test_recommendation_sibling_waits_for_family_and_freezes_same_root_results()
     assert queue.job_ids == [soh_id, scenario_id, recommendation_id]
 
 
+def test_recommendation_ignores_aily_scenario_children_when_freezing_family() -> None:
+    _receipts, jobs, session_factory = _fixture()
+    source_job_id = _seed_completed_source_job(session_factory)
+    queue = _Queue()
+    service = SqlAlchemyFeishuSiblingJobService(
+        jobs,
+        queue=queue,
+        clock=lambda: NOW,
+    )
+    soh_id = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+    )
+    scenario_id = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+    )
+    recommendation_id = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+        recommendation_ruleset_id="reviewed-release-gate",
+        recommendation_ruleset_version="reviewed-release-gate-v1",
+        recommendation_ruleset_sha256="e" * 64,
+    )
+    aily_scenario = jobs.stage_aily(
+        task=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+        source_job_id=source_job_id,
+        record_batch_id="canonical-csv-" + "b" * 64,
+        scenario_context_id="3a3c972b-a23e-42c3-af76-e39038806f18",
+        staged_at=NOW,
+    )
+
+    result_ids = {
+        "validation": "3a3c972b-a23e-42c3-af76-e39038806f14",
+        "rul": "3a3c972b-a23e-42c3-af76-e39038806f15",
+        "soh": "3a3c972b-a23e-42c3-af76-e39038806f16",
+        "scenario": "3a3c972b-a23e-42c3-af76-e39038806f17",
+        "aily_scenario": "3a3c972b-a23e-42c3-af76-e39038806f19",
+    }
+    with session_factory() as session:
+        rows = {
+            row.job_id: row
+            for row in session.scalars(
+                select(FeishuEventReceipt).where(
+                    FeishuEventReceipt.job_id.in_(
+                        (source_job_id, soh_id, scenario_id, aily_scenario.job_id)
+                    )
+                )
+            ).all()
+        }
+        rows[source_job_id].analysis_result_id = result_ids["rul"]
+        for job_id, result_key in (
+            (soh_id, "soh"),
+            (scenario_id, "scenario"),
+            (aily_scenario.job_id, "aily_scenario"),
+        ):
+            rows[job_id].job_status = FeishuAnalysisJobStatus.SUCCEEDED.value
+            rows[job_id].job_stage = FeishuAnalysisJobStage.SUCCEEDED.value
+            rows[job_id].analysis_result_id = result_ids[result_key]
+        session.commit()
+
+    assert service.dispatch_pending(source_job_id=source_job_id) == (
+        recommendation_id,
+    )
+    frozen = jobs.get(recommendation_id)
+    assert frozen.recommendation_upstream_result_ids == tuple(
+        sorted(
+            (
+                result_ids["validation"],
+                result_ids["rul"],
+                result_ids["soh"],
+                result_ids["scenario"],
+            )
+        )
+    )
+    assert result_ids["aily_scenario"] not in (
+        frozen.recommendation_upstream_result_ids or ()
+    )
+
+
 def test_recommendation_sibling_rejects_ruleset_substitution() -> None:
     _receipts, jobs, session_factory = _fixture()
     source_job_id = _seed_completed_source_job(session_factory)
