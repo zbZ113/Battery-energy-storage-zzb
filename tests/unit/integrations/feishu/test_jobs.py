@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import get_type_hints
 
 import pytest
 from sqlalchemy import create_engine, select
 
 from quanxin_life.api.feishu import FeishuEventRouteStatus
 from quanxin_life.core import sha256_canonical
+from quanxin_life.integrations.feishu.analysis_plots import (
+    FeishuAnalysisPlotArtifact,
+)
 from quanxin_life.integrations.feishu.events import FeishuReceiptClaimStatus
 from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobOrigin,
     FeishuAnalysisJobStage,
     FeishuAnalysisJobStatus,
+    FeishuAnalysisPlotRenderer,
     FeishuJobClaimStatus,
     FeishuJobDeliveryReceipt,
     FeishuJobDispatchReceipt,
@@ -856,3 +861,9 @@ def test_job_read_rejects_tampered_csv_mapping_evidence_hash() -> None:
 
     with pytest.raises(ValueError, match="evidence SHA-256"):
         jobs.get(staged.job_id)
+
+
+def test_analysis_plot_renderer_protocol_requires_audited_analysis_artifact() -> None:
+    hints = get_type_hints(FeishuAnalysisPlotRenderer.render)
+
+    assert hints["return"] is FeishuAnalysisPlotArtifact

@@ -400,7 +400,7 @@ class FeishuScenarioPlotRenderer(Protocol):
 class FeishuAnalysisPlotRenderer(Protocol):
     renderer_version: str
 
-    def render(self, result: ToolResult) -> FeishuScenarioPlotArtifact: ...
+    def render(self, result: ToolResult) -> FeishuAnalysisPlotArtifact: ...
 
 
 class FeishuBitableCurvePlotRenderer(Protocol):
