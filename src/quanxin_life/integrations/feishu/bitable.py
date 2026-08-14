@@ -503,7 +503,7 @@ _CHINESE_FIELD_NAMES = {
 }
 CHINESE_ANALYSIS_BITABLE_PROFILE = BitableFieldProfile(
     profile_id="quanxin-analysis-zh-cn",
-    profile_version="v1",
+    profile_version="v2",
     field_names=_CHINESE_FIELD_NAMES,
     value_labels={
         "task_type": {
@@ -531,6 +531,11 @@ CHINESE_ANALYSIS_BITABLE_PROFILE = BitableFieldProfile(
             "PHYSICS_REFERENCE": "物理参考推演",
             "DOMAIN_KNOWLEDGE": "领域知识",
             "UNDETERMINED": "尚未确定",
+        },
+        "curve_template": {
+            "CYCLE_LIFE_SUMMARY": "早期寿命概览",
+            "FINITE_SOH_CURVE": "SOH退化轨迹",
+            "SCENARIO_COMPARISON": "工况退化对比",
         },
     },
 )

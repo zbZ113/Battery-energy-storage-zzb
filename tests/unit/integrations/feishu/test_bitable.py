@@ -227,7 +227,7 @@ def test_chinese_profile_maps_business_fields_and_audited_attachment() -> None:
     assert client.remote_fields["曲线来源结果ID"] == "result-safe"
     assert client.remote_fields["曲线渲染器版本"] == "feishu-soh-plot-v1"
     assert client.remote_fields["曲线SHA256"] == "b" * 64
-    assert client.remote_fields["曲线模板"] == "FINITE_SOH_CURVE"
+    assert client.remote_fields["曲线模板"] == "SOH退化轨迹"
 
 
 def test_chinese_profile_names_recommendation_business_fields() -> None:
@@ -248,6 +248,31 @@ def test_chinese_profile_names_recommendation_business_fields() -> None:
         ]
         == "工程综合建议"
     )
+
+
+@pytest.mark.parametrize(
+    ("template", "expected_label"),
+    (
+        ("CYCLE_LIFE_SUMMARY", "早期寿命概览"),
+        ("FINITE_SOH_CURVE", "SOH退化轨迹"),
+        ("SCENARIO_COMPARISON", "工况退化对比"),
+    ),
+)
+def test_chinese_profile_labels_audited_curve_attachments(
+    template: str,
+    expected_label: str,
+) -> None:
+    assert CHINESE_ANALYSIS_BITABLE_PROFILE.profile_version == "v2"
+    assert (
+        CHINESE_ANALYSIS_BITABLE_PROFILE.field_names["curve_attachment"]
+        == "分析曲线"
+    )
+
+    remote = CHINESE_ANALYSIS_BITABLE_PROFILE.remote_fields(
+        {"curve_template": template}
+    )
+
+    assert remote == {"曲线模板": expected_label}
 
 
 def test_bitable_media_uploader_binds_payload_sha_and_table_token() -> None:
