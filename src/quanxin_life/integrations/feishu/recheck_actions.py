@@ -24,7 +24,7 @@ from quanxin_life.integrations.feishu.events import (
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}\Z")
 _INITIAL_STATUS = "PENDING"
-_RECHECK_EVENT_TYPE = "quanxin_life.recheck_action.v1"
+RECHECK_ACTION_EVENT_TYPE = "quanxin_life.recheck_action.v1"
 Clock = Callable[[], datetime]
 
 
@@ -156,7 +156,7 @@ class FeishuRecheckActionService:
         )
         claim = self._receipt_store.claim(
             event_id=event_id,
-            event_type=_RECHECK_EVENT_TYPE,
+            event_type=RECHECK_ACTION_EVENT_TYPE,
             payload_sha256=request_hash,
             received_at=now,
         )
@@ -435,6 +435,7 @@ def _safe_stored_text(value: object, *, field_name: str) -> str:
 
 
 __all__ = [
+    "RECHECK_ACTION_EVENT_TYPE",
     "FeishuRecheckActionService",
     "RecheckActionAuthorizationError",
     "RecheckActionAuthorizationVerifier",
