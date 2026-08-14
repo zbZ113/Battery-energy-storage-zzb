@@ -65,6 +65,9 @@ from quanxin_life.integrations.feishu.client import (
     FeishuTransport,
 )
 from quanxin_life.integrations.feishu.decryptor import FeishuAesCbcDecryptor
+from quanxin_life.integrations.feishu.default_scenarios import (
+    ReviewedDefaultScenarioRegistry,
+)
 from quanxin_life.integrations.feishu.events import FeishuEventProcessor
 from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobDelivery,
@@ -73,6 +76,7 @@ from quanxin_life.integrations.feishu.jobs import (
     OriginAwareAnalysisJobDelivery,
     SqlAlchemyFeishuJobRouter,
     SqlAlchemyFeishuJobStore,
+    SqlAlchemyFeishuSiblingJobService,
 )
 from quanxin_life.integrations.feishu.report_delivery import FeishuReportDelivery
 from quanxin_life.integrations.feishu.routing import (
@@ -92,6 +96,9 @@ from quanxin_life.integrations.feishu.scenario_reports import (
 from quanxin_life.integrations.feishu.security import (
     FeishuWebhookSecrets,
     FeishuWebhookVerifier,
+)
+from quanxin_life.integrations.feishu.sibling_planner import (
+    ProactiveFeishuSiblingPlanner,
 )
 from quanxin_life.integrations.feishu.soh_plot import FeishuSohPlotter
 from quanxin_life.integrations.feishu.sqlalchemy_receipts import (
@@ -242,6 +249,7 @@ class FeishuAilyComponents:
     feishu_http_adapter: FeishuHttpAdapter
     aily_http_adapter: AilyHttpAdapter
     aily_task_gateway: SqlAlchemyAilyAnalysisTaskGateway
+    sibling_job_service: SqlAlchemyFeishuSiblingJobService
     worker: FeishuAnalysisJobWorker
     registration_resolver: FeishuCsvRegistrationResolver
 
@@ -297,6 +305,7 @@ def create_feishu_aily_components(
     ) = None,
     project_model_dependencies: FeishuProjectModelDependencies | None = None,
     csv_mapping_profiles: tuple[BatteryCsvMappingProfile, ...] = (),
+    default_scenarios: ReviewedDefaultScenarioRegistry | None = None,
     clock: Clock | None = None,
 ) -> FeishuAilyComponents:
     """Assemble Feishu callbacks, Aily facade, worker, tools, and delivery ports."""
@@ -357,6 +366,18 @@ def create_feishu_aily_components(
         transport=feishu_transport,
     )
     queue = CeleryFeishuJobQueue(app=celery_app)
+    sibling_job_service = SqlAlchemyFeishuSiblingJobService(
+        job_store,
+        queue=queue,
+        clock=now,
+    )
+    sibling_planner = ProactiveFeishuSiblingPlanner(
+        batch_store=batch_store,
+        context_store=scenario_context_store,
+        sibling_jobs=sibling_job_service,
+        default_scenarios=default_scenarios,
+        clock=now,
+    )
     scenario_gateway = SqlAlchemyAilyScenarioContextGateway(
         context_store=scenario_context_store,
         batch_store=batch_store,
@@ -469,6 +490,7 @@ def create_feishu_aily_components(
             feishu_delivery=feishu_delivery,
             aily_delivery=aily_delivery,
         ),
+        sibling_planner=sibling_planner,
         clock=now,
     )
     aily_http_adapter = create_aily_http_adapter(
@@ -490,6 +512,7 @@ def create_feishu_aily_components(
         feishu_http_adapter=feishu_http_adapter,
         aily_http_adapter=aily_http_adapter,
         aily_task_gateway=aily_task_gateway,
+        sibling_job_service=sibling_job_service,
         worker=worker,
         registration_resolver=resolved_registration,
     )

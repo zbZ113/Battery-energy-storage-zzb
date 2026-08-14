@@ -9,6 +9,7 @@ from typing import TypeAlias
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from quanxin_life.core import sha256_canonical
 from quanxin_life.persistence.database import SessionFactory
@@ -125,6 +126,65 @@ class SqlAlchemyFeishuScenarioContextStore:
             created_by_reference=checked_creator,
             created_at=checked_created_at,
         )
+
+    def create_or_resolve(
+        self,
+        *,
+        task: FeishuAnalysisTask,
+        data_batch_id: str,
+        verified_context: VerifiedScenarioContext,
+        analysis_input: ScenarioAnalysisInput,
+        created_by_reference: str,
+        created_at: datetime,
+    ) -> FeishuScenarioContextRecord:
+        concurrent_conflict: IntegrityError | None = None
+        try:
+            return self.create(
+                task=task,
+                data_batch_id=data_batch_id,
+                verified_context=verified_context,
+                analysis_input=analysis_input,
+                created_by_reference=created_by_reference,
+                created_at=created_at,
+            )
+        except ValueError as exc:
+            if str(exc) != "scenario context already exists":
+                raise
+        except IntegrityError as exc:
+            concurrent_conflict = exc
+        try:
+            record = self.get(verified_context.scenario_context_id)
+        except (LookupError, RuntimeError, TypeError, ValueError) as exc:
+            if concurrent_conflict is not None:
+                raise concurrent_conflict from exc
+            raise
+        checked_task = _scenario_task(task)
+        checked_batch_id = _reference(data_batch_id, field_name="data_batch_id")
+        checked_creator = _reference(
+            created_by_reference,
+            field_name="created_by_reference",
+        )
+        context, typed_input = _validated_payload(
+            task=checked_task,
+            verified_context=verified_context,
+            analysis_input=analysis_input,
+        )
+        if (
+            record.task is not checked_task
+            or record.data_batch_id != checked_batch_id
+            or record.route_id != typed_input.route_id
+            or record.created_by_reference != checked_creator
+            or self.resolve_scenario_context(record.scenario_context_id) != context
+            or self.resolve_analysis_input(
+                scenario_context_id=record.scenario_context_id,
+                task=checked_task,
+                run_id=record.scenario_context_id,
+            )
+            != typed_input.model_dump(mode="json")
+        ):
+            raise ValueError("scenario context already exists with conflicting content")
+        return record
+
 
     def get(self, scenario_context_id: str) -> FeishuScenarioContextRecord:
         row, _context, _analysis_input = self._resolve_row(scenario_context_id)

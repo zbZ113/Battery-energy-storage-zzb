@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -145,6 +146,7 @@ class FeishuAnalysisJobRecord:
     job_id: str
     run_id: str
     event_id: str
+    event_type: str
     task_type: FeishuAnalysisTask
     job_status: FeishuAnalysisJobStatus
     job_stage: str
@@ -182,6 +184,10 @@ class FeishuAnalysisJobRecord:
     job_completed_at: datetime | None
     job_origin: FeishuAnalysisJobOrigin = FeishuAnalysisJobOrigin.FEISHU
     job_request_sha256: str | None = None
+    source_job_id: str | None = None
+    default_scenario_profile_id: str | None = None
+    default_scenario_profile_version: str | None = None
+    default_scenario_profile_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +266,10 @@ class FeishuScenarioInputResolver(Protocol):
         task: FeishuAnalysisTask,
         run_id: str,
     ) -> Mapping[str, object]: ...
+
+
+class FeishuValidatedSiblingPlanner(Protocol):
+    def plan_validated_siblings(self, *, job: FeishuAnalysisJobRecord) -> None: ...
 
 
 class FeishuJobDelivery(Protocol):
@@ -518,6 +528,148 @@ class SqlAlchemyFeishuJobStore:
         finally:
             session.close()
 
+    def stage_sibling(
+        self,
+        *,
+        source_job_id: str,
+        task: FeishuAnalysisTask,
+        scenario_context_id: str | None,
+        default_scenario_profile_id: str | None,
+        default_scenario_profile_version: str | None,
+        default_scenario_profile_sha256: str | None,
+        staged_at: datetime,
+    ) -> _StagedJob:
+        checked_source_job_id = validate_feishu_job_id(source_job_id)
+        if task not in {
+            FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+            FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+        }:
+            raise ValueError("Feishu sibling task is not supported")
+        context_id = (
+            validate_feishu_job_id(scenario_context_id)
+            if scenario_context_id is not None
+            else None
+        )
+        profile = _default_scenario_profile_reference(
+            profile_id=default_scenario_profile_id,
+            profile_version=default_scenario_profile_version,
+            profile_sha256=default_scenario_profile_sha256,
+        )
+        if task is FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY:
+            if context_id is not None or profile is not None:
+                raise ValueError("SOH sibling cannot carry scenario references")
+        elif (context_id is None) != (profile is None):
+            raise ValueError("scenario sibling context and profile must be paired")
+        now = _utc(staged_at)
+        session = self._session_factory()
+        try:
+            source = session.scalar(
+                select(FeishuEventReceipt)
+                .where(FeishuEventReceipt.job_id == checked_source_job_id)
+                .with_for_update()
+            )
+            self._require_sibling_source(source)
+            assert source is not None
+            request_sha256 = sha256_canonical(
+                {
+                    "schema_version": "feishu-derived-job-v1",
+                    "source_job_id": checked_source_job_id,
+                    "record_batch_id": source.record_batch_id,
+                    "input_file_sha256": source.input_file_sha256,
+                    "task_type": task.value,
+                    "scenario_context_id": context_id,
+                    "default_scenario_profile": (
+                        {
+                            "profile_id": profile[0],
+                            "profile_version": profile[1],
+                            "profile_sha256": profile[2],
+                        }
+                        if profile is not None
+                        else None
+                    ),
+                }
+            )
+            existing = session.scalar(
+                select(FeishuEventReceipt)
+                .where(FeishuEventReceipt.job_request_sha256 == request_sha256)
+                .with_for_update()
+            )
+            if existing is not None:
+                staged = self._existing_sibling_job(
+                    existing,
+                    source=source,
+                    task=task,
+                    request_sha256=request_sha256,
+                    scenario_context_id=context_id,
+                    profile=profile,
+                )
+                session.rollback()
+                return staged
+            job_id = str(uuid4())
+            session.add(
+                FeishuEventReceipt(
+                    id=str(uuid4()),
+                    event_id=f"derived:{checked_source_job_id}:{request_sha256}",
+                    event_type="feishu.analysis_job.derived_v1",
+                    payload_sha256=request_sha256,
+                    status=FeishuReceiptClaimStatus.PROCESSED.value,
+                    attempt_count=1,
+                    received_at=now,
+                    processed_at=now,
+                    job_id=job_id,
+                    job_origin=FeishuAnalysisJobOrigin.FEISHU.value,
+                    job_request_sha256=request_sha256,
+                    source_job_id=checked_source_job_id,
+                    job_status=FeishuAnalysisJobStatus.PENDING.value,
+                    job_stage=FeishuAnalysisJobStage.RECEIVED.value,
+                    task_type=task.value,
+                    run_id=job_id,
+                    chat_id=source.chat_id,
+                    sender_id=source.sender_id,
+                    receive_id_type=source.receive_id_type,
+                    event_time=source.event_time,
+                    scenario_context_id=context_id,
+                    default_scenario_profile_id=(profile[0] if profile else None),
+                    default_scenario_profile_version=(profile[1] if profile else None),
+                    default_scenario_profile_sha256=(profile[2] if profile else None),
+                    record_batch_id=source.record_batch_id,
+                    cell_reference=source.cell_reference,
+                    input_file_sha256=source.input_file_sha256,
+                    job_attempt_count=0,
+                    job_created_at=now,
+                    job_updated_at=now,
+                )
+            )
+            session.commit()
+            return _StagedJob(job_id=job_id, dispatched=False)
+        except IntegrityError:
+            session.rollback()
+            existing = session.scalar(
+                select(FeishuEventReceipt).where(
+                    FeishuEventReceipt.job_request_sha256 == request_sha256
+                )
+            )
+            source = session.scalar(
+                select(FeishuEventReceipt).where(
+                    FeishuEventReceipt.job_id == checked_source_job_id
+                )
+            )
+            if existing is None or source is None:
+                raise
+            return self._existing_sibling_job(
+                existing,
+                source=source,
+                task=task,
+                request_sha256=request_sha256,
+                scenario_context_id=context_id,
+                profile=profile,
+            )
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     def stage_replay(
         self,
         *,
@@ -634,11 +786,89 @@ class SqlAlchemyFeishuJobStore:
             if row.job_task_id is not None and row.job_task_id != checked_task_id:
                 raise FeishuJobOwnershipError("Feishu job owns another dispatch")
             row.job_task_id = checked_task_id
+            row.job_last_error_code = None
             row.job_updated_at = now
             session.commit()
         except Exception:
             session.rollback()
             raise
+        finally:
+            session.close()
+
+    def note_dispatch_failure(
+        self,
+        *,
+        job_id: str,
+        failed_at: datetime,
+    ) -> None:
+        now = _utc(failed_at)
+        session = self._session_factory()
+        try:
+            row = session.scalar(
+                select(FeishuEventReceipt)
+                .where(FeishuEventReceipt.job_id == validate_feishu_job_id(job_id))
+                .with_for_update()
+            )
+            if row is None or row.job_status is None:
+                raise ValueError("Feishu analysis job was not found")
+            if row.job_task_id is not None:
+                session.rollback()
+                return
+            if FeishuAnalysisJobStatus(row.job_status) in {
+                FeishuAnalysisJobStatus.SUCCEEDED,
+                FeishuAnalysisJobStatus.REJECTED,
+                FeishuAnalysisJobStatus.FAILED,
+            }:
+                session.rollback()
+                return
+            row.job_last_error_code = "DISPATCH_RETRYABLE"
+            row.job_updated_at = now
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def list_undispatched_siblings(
+        self,
+        *,
+        source_job_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        if limit < 1 or limit > 1000:
+            raise ValueError("undispatched sibling limit is invalid")
+        checked_source_id = (
+            validate_feishu_job_id(source_job_id)
+            if source_job_id is not None
+            else None
+        )
+        session = self._session_factory()
+        try:
+            statement = (
+                select(FeishuEventReceipt.job_id)
+                .where(
+                    FeishuEventReceipt.source_job_id.is_not(None),
+                    FeishuEventReceipt.job_task_id.is_(None),
+                    FeishuEventReceipt.job_status.in_(
+                        (
+                            FeishuAnalysisJobStatus.PENDING.value,
+                            FeishuAnalysisJobStatus.RETRYABLE.value,
+                        )
+                    ),
+                )
+                .order_by(FeishuEventReceipt.job_created_at, FeishuEventReceipt.job_id)
+                .limit(limit)
+            )
+            if checked_source_id is not None:
+                statement = statement.where(
+                    FeishuEventReceipt.source_job_id == checked_source_id
+                )
+            return tuple(
+                value
+                for value in session.scalars(statement).all()
+                if value is not None
+            )
         finally:
             session.close()
 
@@ -1088,6 +1318,7 @@ class SqlAlchemyFeishuJobStore:
             job_id=row.job_id,
             run_id=row.run_id,
             event_id=row.event_id,
+            event_type=row.event_type,
             task_type=FeishuAnalysisTask(row.task_type),
             job_status=FeishuAnalysisJobStatus(row.job_status),
             job_stage=row.job_stage,
@@ -1133,6 +1364,75 @@ class SqlAlchemyFeishuJobStore:
                 else FeishuAnalysisJobOrigin.FEISHU
             ),
             job_request_sha256=row.job_request_sha256,
+            source_job_id=row.source_job_id,
+            default_scenario_profile_id=row.default_scenario_profile_id,
+            default_scenario_profile_version=row.default_scenario_profile_version,
+            default_scenario_profile_sha256=row.default_scenario_profile_sha256,
+        )
+
+    @staticmethod
+    def _require_sibling_source(row: FeishuEventReceipt | None) -> None:
+        required = (
+            row.record_batch_id if row is not None else None,
+            row.cell_reference if row is not None else None,
+            row.input_file_sha256 if row is not None else None,
+            row.chat_id if row is not None else None,
+            row.sender_id if row is not None else None,
+            row.receive_id_type if row is not None else None,
+            row.event_time if row is not None else None,
+            row.validation_result_id if row is not None else None,
+        )
+        if (
+            row is None
+            or row.job_origin != FeishuAnalysisJobOrigin.FEISHU.value
+            or row.event_type != "im.message.receive_v1"
+            or row.task_type != FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value
+            or row.source_job_id is not None
+            or row.job_status
+            not in {
+                FeishuAnalysisJobStatus.RUNNING.value,
+                FeishuAnalysisJobStatus.SUCCEEDED.value,
+            }
+            or any(value is None for value in required)
+        ):
+            raise ValueError("sibling jobs require a validated root Feishu file job")
+
+    @staticmethod
+    def _existing_sibling_job(
+        row: FeishuEventReceipt,
+        *,
+        source: FeishuEventReceipt,
+        task: FeishuAnalysisTask,
+        request_sha256: str,
+        scenario_context_id: str | None,
+        profile: tuple[str, str, str] | None,
+    ) -> _StagedJob:
+        if (
+            row.job_id is None
+            or row.event_type != "feishu.analysis_job.derived_v1"
+            or row.payload_sha256 != request_sha256
+            or row.job_request_sha256 != request_sha256
+            or row.job_origin != FeishuAnalysisJobOrigin.FEISHU.value
+            or row.source_job_id != source.job_id
+            or row.task_type != task.value
+            or row.scenario_context_id != scenario_context_id
+            or row.record_batch_id != source.record_batch_id
+            or row.cell_reference != source.cell_reference
+            or row.input_file_sha256 != source.input_file_sha256
+            or row.validation_result_id is not None
+            or (
+                row.default_scenario_profile_id,
+                row.default_scenario_profile_version,
+                row.default_scenario_profile_sha256,
+            )
+            != (profile if profile is not None else (None, None, None))
+        ):
+            raise FeishuJobOwnershipError(
+                "Feishu sibling conflicts with its persisted sanitized reference"
+            )
+        return _StagedJob(
+            job_id=row.job_id,
+            dispatched=row.job_task_id is not None,
         )
 
     @staticmethod
@@ -1314,6 +1614,80 @@ class SqlAlchemyFeishuJobReplayService:
             dispatched_at=self._clock(),
         )
         return staged.job_id
+
+
+class SqlAlchemyFeishuSiblingJobService:
+    """Stage and dispatch independent analysis siblings through the shared queue."""
+
+    def __init__(
+        self,
+        store: SqlAlchemyFeishuJobStore,
+        *,
+        queue: FeishuJobQueue,
+        clock: Callable[[], datetime],
+    ) -> None:
+        self._store = store
+        self._queue = queue
+        self._clock = clock
+
+    def stage_sibling(
+        self,
+        *,
+        source_job_id: str,
+        task: FeishuAnalysisTask,
+        scenario_context_id: str | None = None,
+        default_scenario_profile_id: str | None = None,
+        default_scenario_profile_version: str | None = None,
+        default_scenario_profile_sha256: str | None = None,
+    ) -> str:
+        staged = self._store.stage_sibling(
+            source_job_id=source_job_id,
+            task=task,
+            scenario_context_id=scenario_context_id,
+            default_scenario_profile_id=default_scenario_profile_id,
+            default_scenario_profile_version=default_scenario_profile_version,
+            default_scenario_profile_sha256=default_scenario_profile_sha256,
+            staged_at=self._clock(),
+        )
+        if not staged.dispatched:
+            with suppress(Exception):
+                self._dispatch(staged.job_id)
+        return staged.job_id
+
+    def dispatch_pending(
+        self,
+        *,
+        source_job_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        dispatched: list[str] = []
+        for job_id in self._store.list_undispatched_siblings(
+            source_job_id=source_job_id,
+            limit=limit,
+        ):
+            try:
+                self._dispatch(job_id)
+            except Exception:
+                continue
+            dispatched.append(job_id)
+        return tuple(dispatched)
+
+    def _dispatch(self, job_id: str) -> None:
+        try:
+            receipt = self._queue.enqueue(job_id=job_id)
+            if receipt.job_id != job_id:
+                raise ValueError("Feishu queue returned a mismatched sibling identity")
+            self._store.mark_dispatched(
+                job_id=job_id,
+                task_id=receipt.task_id,
+                dispatched_at=self._clock(),
+            )
+        except Exception:
+            self._store.note_dispatch_failure(
+                job_id=job_id,
+                failed_at=self._clock(),
+            )
+            raise
 
 
 class FeishuAnalysisJobDelivery:
@@ -1687,6 +2061,7 @@ class FeishuAnalysisJobWorker:
         ],
         project_model_executor: FeishuProjectModelExecutorPort | None = None,
         delivery: FeishuJobDelivery,
+        sibling_planner: FeishuValidatedSiblingPlanner | None = None,
         clock: Callable[[], datetime],
         heartbeat_interval_seconds: int = 30,
         max_attempts: int = 3,
@@ -1708,6 +2083,7 @@ class FeishuAnalysisJobWorker:
         self._report_result_factory = report_result_factory
         self._project_model_executor = project_model_executor
         self._delivery = delivery
+        self._sibling_planner = sibling_planner
         self._clock = clock
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._max_attempts = max_attempts
@@ -1759,7 +2135,12 @@ class FeishuAnalysisJobWorker:
         registration: CanonicalCsvBatchRegistration | None = None
         if job.task_type in _SCENARIO_TASKS:
             if self._scenario_input_resolver is None or job.scenario_context_id is None:
-                return self._reject(job, claim_token, "SCENARIO_CONTEXT_REQUIRED", None)
+                reason = (
+                    "SCENARIO_PARAMETERS_REQUIRED"
+                    if job.source_job_id is not None
+                    else "SCENARIO_CONTEXT_REQUIRED"
+                )
+                return self._reject(job, claim_token, reason, None)
             self._store.update_stage(
                 job_id=job_id,
                 claim_token=claim_token,
@@ -2061,6 +2442,22 @@ class FeishuAnalysisJobWorker:
             )
 
         try:
+            validation = self._ensure_validation_result(
+                job=job,
+                claim_token=claim_token,
+                validation_input=validation_input,
+            )
+        except FeishuWorkflowRejected as exc:
+            primary_result_id = (
+                exc.validation_result.result_id
+                if exc.validation_result is not None
+                else None
+            )
+            job = self._store.get(job_id)
+            return self._reject(job, claim_token, exc.reason_code, primary_result_id)
+        job = self._store.get(job_id)
+        self._plan_siblings(job)
+        try:
             self._store.update_stage(
                 job_id=job_id,
                 claim_token=claim_token,
@@ -2071,6 +2468,7 @@ class FeishuAnalysisJobWorker:
                 task=job.task_type,
                 validation_input=validation_input,
                 analysis_input=requested_analysis_input,
+                validation_result=validation,
                 before_analysis=lambda: self._store.update_stage(
                     job_id=job_id,
                     claim_token=claim_token,
@@ -2079,16 +2477,12 @@ class FeishuAnalysisJobWorker:
                 ),
             )
         except FeishuWorkflowRejected as exc:
-            primary_result_id = None
-            if exc.validation_result is not None:
-                primary_result_id = exc.validation_result.result_id
-                self._store.checkpoint_results(
-                    job_id=job_id,
-                    claim_token=claim_token,
-                    validation_result_id=primary_result_id,
-                    updated_at=self._now(),
-                )
-                job = self._store.get(job_id)
+            primary_result_id = (
+                exc.validation_result.result_id
+                if exc.validation_result is not None
+                else validation.result_id
+            )
+            job = self._store.get(job_id)
             return self._reject(job, claim_token, exc.reason_code, primary_result_id)
         except (TypeError, ValueError):
             return self._reject(job, claim_token, "ANALYSIS_INPUT_REJECTED", None)
@@ -2096,7 +2490,11 @@ class FeishuAnalysisJobWorker:
         self._store.checkpoint_results(
             job_id=job_id,
             claim_token=claim_token,
-            validation_result_id=outcome.validation_result.result_id,
+            validation_result_id=(
+                outcome.validation_result.result_id
+                if job.source_job_id is None
+                else None
+            ),
             analysis_result_id=outcome.analysis_result.result_id,
             updated_at=self._now(),
         )
@@ -2147,26 +2545,21 @@ class FeishuAnalysisJobWorker:
             updated_at=self._now(),
         )
         try:
-            validation = self._workflow.validate(validation_input=validation_input)
+            validation = self._ensure_validation_result(
+                job=job,
+                claim_token=claim_token,
+                validation_input=validation_input,
+            )
         except FeishuWorkflowRejected as exc:
-            primary_result_id = None
-            if exc.validation_result is not None:
-                primary_result_id = exc.validation_result.result_id
-                self._store.checkpoint_results(
-                    job_id=job.job_id,
-                    claim_token=claim_token,
-                    validation_result_id=primary_result_id,
-                    updated_at=self._now(),
-                )
-                job = self._store.get(job.job_id)
+            primary_result_id = (
+                exc.validation_result.result_id
+                if exc.validation_result is not None
+                else None
+            )
+            job = self._store.get(job.job_id)
             return self._reject(job, claim_token, exc.reason_code, primary_result_id)
-        self._store.checkpoint_results(
-            job_id=job.job_id,
-            claim_token=claim_token,
-            validation_result_id=validation.result_id,
-            updated_at=self._now(),
-        )
         job = self._store.get(job.job_id)
+        self._plan_siblings(job)
         self._store.update_stage(
             job_id=job.job_id,
             claim_token=claim_token,
@@ -2345,6 +2738,64 @@ class FeishuAnalysisJobWorker:
             )
         )
 
+    def _resolve_validation_result(
+        self,
+        result_id: str,
+        *,
+        validation_input: Mapping[str, object],
+    ) -> ToolResult:
+        result = self._resolve_result(result_id)
+        return self._workflow.validate_result(
+            validation_input=validation_input,
+            validation_result=result,
+        )
+
+    def _ensure_validation_result(
+        self,
+        *,
+        job: FeishuAnalysisJobRecord,
+        claim_token: str,
+        validation_input: Mapping[str, object],
+    ) -> ToolResult:
+        result_id = job.validation_result_id
+        if result_id is None and job.source_job_id is not None:
+            source = self._store.get(job.source_job_id)
+            if (
+                source.job_origin is not FeishuAnalysisJobOrigin.FEISHU
+                or source.event_type != "im.message.receive_v1"
+                or source.task_type is not FeishuAnalysisTask.PREDICT_CYCLE_LIFE
+                or source.source_job_id is not None
+                or source.record_batch_id != job.record_batch_id
+                or source.cell_reference != job.cell_reference
+                or source.input_file_sha256 != job.input_file_sha256
+                or source.validation_result_id is None
+            ):
+                raise FeishuWorkflowRejected("DATA_VALIDATION_RESULT_INVALID")
+            result_id = source.validation_result_id
+        if result_id is not None:
+            return self._resolve_validation_result(
+                result_id,
+                validation_input=validation_input,
+            )
+        try:
+            validation = self._workflow.validate(validation_input=validation_input)
+        except FeishuWorkflowRejected as exc:
+            if exc.validation_result is not None:
+                self._store.checkpoint_results(
+                    job_id=job.job_id,
+                    claim_token=claim_token,
+                    validation_result_id=exc.validation_result.result_id,
+                    updated_at=self._now(),
+                )
+            raise
+        self._store.checkpoint_results(
+            job_id=job.job_id,
+            claim_token=claim_token,
+            validation_result_id=validation.result_id,
+            updated_at=self._now(),
+        )
+        return validation
+
     def _checkpoint_delivery(
         self,
         job: FeishuAnalysisJobRecord,
@@ -2374,6 +2825,17 @@ class FeishuAnalysisJobWorker:
             claim_token=claim_token,
             renewed_at=self._now(),
         )
+
+    def _plan_siblings(self, job: FeishuAnalysisJobRecord) -> None:
+        if (
+            self._sibling_planner is None
+            or job.job_origin is not FeishuAnalysisJobOrigin.FEISHU
+            or job.event_type != "im.message.receive_v1"
+            or job.task_type is not FeishuAnalysisTask.PREDICT_CYCLE_LIFE
+            or job.source_job_id is not None
+        ):
+            return
+        self._sibling_planner.plan_validated_siblings(job=job)
 
     def _now(self) -> datetime:
         return _utc(self._clock())
@@ -2412,6 +2874,33 @@ def _replay_key(value: str) -> str:
     ):
         raise ValueError("Feishu replay_key is invalid")
     return normalized
+
+
+def _default_scenario_profile_reference(
+    *,
+    profile_id: str | None,
+    profile_version: str | None,
+    profile_sha256: str | None,
+) -> tuple[str, str, str] | None:
+    values = (profile_id, profile_version, profile_sha256)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError("default scenario profile reference is incomplete")
+    assert profile_id is not None
+    assert profile_version is not None
+    assert profile_sha256 is not None
+    return (
+        _delivery_reference(profile_id, field_name="default_scenario_profile_id"),
+        _delivery_reference(
+            profile_version,
+            field_name="default_scenario_profile_version",
+        ),
+        _sha256_reference(
+            profile_sha256,
+            field_name="default_scenario_profile_sha256",
+        ),
+    )
 
 
 def _delivery_reference(value: object, *, field_name: str) -> str:
@@ -2570,9 +3059,11 @@ __all__ = [
     "FeishuProjectModelRejected",
     "FeishuScenarioInputResolver",
     "FeishuScenarioPlotRenderer",
+    "FeishuValidatedSiblingPlanner",
     "OriginAwareAnalysisJobDelivery",
     "SqlAlchemyFeishuJobReplayService",
     "SqlAlchemyFeishuJobRouter",
     "SqlAlchemyFeishuJobStore",
+    "SqlAlchemyFeishuSiblingJobService",
     "validate_feishu_job_id",
 ]

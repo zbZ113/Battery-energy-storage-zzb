@@ -156,6 +156,12 @@ def test_runtime_settings_load_complete_feishu_aily_bundle_from_secret_files(
         '"registrations":[]}\n',
         encoding="utf-8",
     )
+    default_scenarios = tmp_path / "feishu-default-scenario-profiles.json"
+    default_scenarios.write_text(
+        '{"schema_version":"feishu-default-scenario-registry-v1",'
+        '"profiles":[]}\n',
+        encoding="utf-8",
+    )
     environment.update(
         {
             "QUANXIN_FEISHU_AILY_ENABLED": "true",
@@ -164,6 +170,9 @@ def test_runtime_settings_load_complete_feishu_aily_bundle_from_secret_files(
             "QUANXIN_FEISHU_BITABLE_TABLE_ID": "tbl-reviewed",
             "QUANXIN_EXTERNAL_HTTPS_BASE_URL": "https://integration.example.test",
             "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE": str(csv_registrations),
+            "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE": str(
+                default_scenarios
+            ),
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION": "true",
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS": "false",
         }
@@ -178,6 +187,9 @@ def test_runtime_settings_load_complete_feishu_aily_bundle_from_secret_files(
     assert integration.bitable_table_id == "tbl-reviewed"
     assert integration.external_https_base_url == "https://integration.example.test"
     assert integration.csv_registrations_file == csv_registrations.resolve(strict=True)
+    assert integration.default_scenario_profiles_file == default_scenarios.resolve(
+        strict=True
+    )
     assert integration.allow_candidate_scenario_execution is True
     assert integration.allow_candidate_scenario_results is False
     rendered = repr(settings) + str(settings)
@@ -237,6 +249,12 @@ def test_runtime_settings_reject_invalid_feishu_aily_flags_and_url(
         '"registrations":[]}\n',
         encoding="utf-8",
     )
+    default_scenarios = tmp_path / "feishu-default-scenario-profiles.json"
+    default_scenarios.write_text(
+        '{"schema_version":"feishu-default-scenario-registry-v1",'
+        '"profiles":[]}\n',
+        encoding="utf-8",
+    )
     environment.update(
         {
             "QUANXIN_FEISHU_AILY_ENABLED": "true",
@@ -245,6 +263,9 @@ def test_runtime_settings_reject_invalid_feishu_aily_flags_and_url(
             "QUANXIN_FEISHU_BITABLE_TABLE_ID": "tbl-reviewed",
             "QUANXIN_EXTERNAL_HTTPS_BASE_URL": "https://integration.example.test",
             "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE": str(csv_registrations),
+            "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE": str(
+                default_scenarios
+            ),
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION": "false",
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS": "false",
             key: value,

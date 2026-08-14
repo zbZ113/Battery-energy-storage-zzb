@@ -11,6 +11,7 @@ from deploy.competition_inputs import (
     load_advanced_agent_policy,
     load_calibration_source_registrations,
     load_feishu_csv_registrations,
+    load_feishu_default_scenario_profiles,
 )
 from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
 from quanxin_life.core import CellMetadata, ProvenanceRecord, SourceKind
@@ -247,3 +248,27 @@ def test_feishu_csv_registry_rejects_duplicate_or_mismatched_sha(tmp_path: Path)
     )
     with pytest.raises(ValueError, match="SHA-256"):
         load_feishu_csv_registrations(mismatched)
+
+
+def test_feishu_default_scenario_registry_uses_strict_operator_loader(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "feishu-default-scenarios.json"
+    registry.write_text(
+        '{"schema_version":"feishu-default-scenario-registry-v1",'
+        '"profiles":[]}\n',
+        encoding="utf-8",
+    )
+
+    loaded = load_feishu_default_scenario_profiles(registry)
+
+    assert loaded.profiles == ()
+    assert loaded.file_sha256 == hashlib.sha256(registry.read_bytes()).hexdigest()
+
+    registry.write_text(
+        '{"schema_version":"feishu-default-scenario-registry-v1",'
+        '"profiles":[],"profiles":[]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="strict UTF-8 JSON"):
+        load_feishu_default_scenario_profiles(registry)

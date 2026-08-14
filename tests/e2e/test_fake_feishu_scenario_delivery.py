@@ -44,7 +44,7 @@ from quanxin_life.integrations.feishu.report_delivery import FeishuReportDeliver
 from quanxin_life.integrations.feishu.routing import parse_feishu_event_reference
 from quanxin_life.integrations.feishu.sandbox import create_fake_feishu_sandbox_app
 from quanxin_life.integrations.feishu.scenario_authorization import (
-    BlastScenarioResultAuthorizer,
+    AuditedScenarioResultAuthorizer,
 )
 from quanxin_life.integrations.feishu.scenario_contexts import (
     SqlAlchemyFeishuScenarioContextStore,
@@ -297,7 +297,10 @@ def test_fake_feishu_scenario_pipeline_delivers_only_audited_results() -> None:
         route_authorizer=_ScenarioRouteAuthorizer(),
         input_binder=_ScenarioInputBinder(),
     )
-    authorizer = BlastScenarioResultAuthorizer(allow_candidate_results=True)
+    authorizer = AuditedScenarioResultAuthorizer(
+        result_resolver=ledger,
+        allow_candidate_results=True,
+    )
     delivery = FeishuAnalysisJobDelivery(
         client=client,
         card_builder=AuditedCardBuilder(
@@ -347,9 +350,10 @@ def test_fake_feishu_scenario_pipeline_delivers_only_audited_results() -> None:
 
     status = worker.execute(job_id=queue.job_id)
 
+    snapshot = jobs.get(queue.job_id)
+    assert snapshot.job_last_error_code is None
     assert status is FeishuAnalysisJobStatus.SUCCEEDED
     assert _download_count(transport) == downloads_before_worker
-    snapshot = jobs.get(queue.job_id)
     assert snapshot.record_batch_id == batch_id
     assert snapshot.scenario_context_id == context.scenario_context_id
     assert snapshot.analysis_result_id is not None

@@ -19,6 +19,12 @@ from quanxin_life.core import (
     UserRole,
     UserStatus,
 )
+from quanxin_life.integrations.feishu.jobs import (
+    FeishuJobDispatchReceipt,
+    SqlAlchemyFeishuJobStore,
+    SqlAlchemyFeishuSiblingJobService,
+)
+from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
 from quanxin_life.persistence import Base, create_session_factory
 from quanxin_life.persistence.database import session_scope
 from quanxin_life.persistence.models import (
@@ -29,6 +35,11 @@ from quanxin_life.persistence.models import (
 )
 
 NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+
+
+class _Queue:
+    def enqueue(self, *, job_id: str) -> FeishuJobDispatchReceipt:
+        return FeishuJobDispatchReceipt(job_id=job_id, task_id=f"task-{job_id}")
 
 
 def _result(*, tool_name: str) -> ToolResult:
@@ -134,6 +145,9 @@ def test_resolver_reads_global_and_exact_feishu_project_results() -> None:
                 sender_id="ou-approved",
                 receive_id_type="chat_id",
                 event_time=NOW,
+                record_batch_id="canonical-csv-" + "d" * 64,
+                cell_reference="MATR_b3c34",
+                input_file_sha256="e" * 64,
                 validation_result_id=validation.result_id,
                 analysis_result_id=analysis.result_id,
                 job_attempt_count=1,
@@ -141,6 +155,16 @@ def test_resolver_reads_global_and_exact_feishu_project_results() -> None:
                 job_updated_at=NOW,
             )
         )
+    jobs = SqlAlchemyFeishuJobStore(sessions, lease_seconds=60)
+    sibling_id = SqlAlchemyFeishuSiblingJobService(
+        jobs,
+        queue=_Queue(),
+        clock=lambda: NOW,
+    ).stage_sibling(
+        source_job_id=job_id,
+        task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+    )
+    assert jobs.get(sibling_id).validation_result_id is None
     resolver = FeishuProjectResultResolver(
         session_factory=sessions,
         global_resolver=global_ledger,

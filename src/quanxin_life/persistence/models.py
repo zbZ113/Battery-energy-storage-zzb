@@ -1281,9 +1281,24 @@ class FeishuEventReceipt(Base):
             "length(analysis_image_sha256) = 64)",
             name="ck_feishu_event_receipt_analysis_image_provenance",
         ),
+        CheckConstraint(
+            "source_job_id IS NULL OR source_job_id <> job_id",
+            name="ck_feishu_event_receipt_source_job_distinct",
+        ),
+        CheckConstraint(
+            "(default_scenario_profile_id IS NULL AND "
+            "default_scenario_profile_version IS NULL AND "
+            "default_scenario_profile_sha256 IS NULL) OR "
+            "(default_scenario_profile_id IS NOT NULL AND "
+            "default_scenario_profile_version IS NOT NULL AND "
+            "default_scenario_profile_sha256 IS NOT NULL AND "
+            "length(default_scenario_profile_sha256) = 64)",
+            name="ck_feishu_event_receipt_default_scenario_profile",
+        ),
         Index("ix_feishu_receipts_received_at", "received_at"),
         Index("ix_feishu_receipts_job_status_updated", "job_status", "job_updated_at"),
         Index("ix_feishu_receipts_scenario_context_id", "scenario_context_id"),
+        Index("ix_feishu_receipts_source_job_id", "source_job_id", "task_type"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -1306,6 +1321,7 @@ class FeishuEventReceipt(Base):
         server_default="FEISHU",
     )
     job_request_sha256: Mapped[str | None] = mapped_column(String(64))
+    source_job_id: Mapped[str | None] = mapped_column(String(64))
     job_status: Mapped[str | None] = mapped_column(String(32))
     job_stage: Mapped[str | None] = mapped_column(String(32))
     task_type: Mapped[str | None] = mapped_column(String(100))
@@ -1318,6 +1334,9 @@ class FeishuEventReceipt(Base):
     receive_id_type: Mapped[str | None] = mapped_column(String(32))
     event_time: Mapped[datetime | None] = mapped_column(UTCDateTime())
     scenario_context_id: Mapped[str | None] = mapped_column(String(64))
+    default_scenario_profile_id: Mapped[str | None] = mapped_column(String(200))
+    default_scenario_profile_version: Mapped[str | None] = mapped_column(String(100))
+    default_scenario_profile_sha256: Mapped[str | None] = mapped_column(String(64))
     job_claim_token: Mapped[str | None] = mapped_column(String(64))
     job_attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     job_lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

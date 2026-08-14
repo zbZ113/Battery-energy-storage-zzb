@@ -191,6 +191,7 @@ def _job(
         job_id="3a3c972b-a23e-42c3-af76-e39038806f13",
         run_id="3a3c972b-a23e-42c3-af76-e39038806f13",
         event_id="evt-delivery",
+        event_type="im.message.receive_v1",
         task_type=task_type,
         job_status=FeishuAnalysisJobStatus.RUNNING,
         job_stage="DELIVERING_RESULT",

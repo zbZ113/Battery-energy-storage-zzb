@@ -4,13 +4,18 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 import deploy.competition_runtime as competition_runtime_module
-from deploy.competition_runtime import create_competition_runtime
+from deploy.competition_runtime import (
+    create_competition_runtime,
+    recover_feishu_sibling_dispatches,
+    register_feishu_sibling_recovery,
+)
 from deploy.runtime_settings import (
     CompetitionRuntimeSettings,
     FeishuAilyRuntimeSettings,
@@ -131,6 +136,16 @@ def _enabled_settings(tmp_path) -> CompetitionRuntimeSettings:
         ),
         encoding="utf-8",
     )
+    default_scenarios = tmp_path / "config" / "feishu-default-scenarios.json"
+    default_scenarios.write_text(
+        json.dumps(
+            {
+                "schema_version": "feishu-default-scenario-registry-v1",
+                "profiles": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     return replace(
         settings,
         feishu_aily=FeishuAilyRuntimeSettings(
@@ -143,6 +158,7 @@ def _enabled_settings(tmp_path) -> CompetitionRuntimeSettings:
             bitable_table_id="table-id",
             external_https_base_url="https://integration.example.test",
             csv_registrations_file=csv_registrations,
+            default_scenario_profiles_file=default_scenarios,
             allow_candidate_scenario_execution=True,
             allow_candidate_scenario_results=True,
         ),
@@ -200,6 +216,8 @@ def test_competition_runtime_opt_in_mounts_feishu_aily_and_shared_worker(
     assert "/v1/aily/analysis-tasks" in route_paths
     assert FEISHU_ANALYSIS_TASK in runtime.celery_app.tasks
     assert runtime.feishu_worker is not None
+    assert runtime.feishu_sibling_job_service is not None
+    assert runtime.feishu_worker._sibling_planner is not None
     project_executor = runtime.feishu_worker._project_model_executor
     assert project_executor is not None
     assert project_executor._project_tool_service is runtime.agent_worker._tool_service
@@ -266,3 +284,92 @@ def test_competition_runtime_defaults_to_production_cookie_and_requires_local_op
         "__Host-quanxin_session",
         "quanxin_dev_session",
     ]
+
+
+def test_worker_startup_recovers_persisted_undispatched_feishu_siblings() -> None:
+    class _SiblingJobs:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def dispatch_pending(self) -> tuple[str, ...]:
+            self.calls += 1
+            return ("00000000-0000-0000-0000-000000000123",)
+
+    sibling_jobs = _SiblingJobs()
+
+    recovered = recover_feishu_sibling_dispatches(
+        SimpleNamespace(feishu_sibling_job_service=sibling_jobs)
+    )
+    disabled = recover_feishu_sibling_dispatches(
+        SimpleNamespace(feishu_sibling_job_service=None)
+    )
+
+    assert recovered == ("00000000-0000-0000-0000-000000000123",)
+    assert disabled == ()
+    assert sibling_jobs.calls == 1
+
+
+def test_sibling_recovery_waits_for_the_celery_worker_ready_signal(
+    monkeypatch,
+) -> None:
+    class _SiblingJobs:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def dispatch_pending(self) -> tuple[str, ...]:
+            self.calls += 1
+            return ("00000000-0000-0000-0000-000000000123",)
+
+    class _ReadySignal:
+        def __init__(self) -> None:
+            self.receiver = None
+            self.options: dict[str, object] = {}
+
+        def connect(self, receiver, **options: object) -> None:
+            self.receiver = receiver
+            self.options = options
+
+    sibling_jobs = _SiblingJobs()
+    ready = _ReadySignal()
+    runtime = SimpleNamespace(feishu_sibling_job_service=sibling_jobs)
+    monkeypatch.setattr(competition_runtime_module, "worker_ready", ready)
+
+    receiver = register_feishu_sibling_recovery(runtime)
+
+    assert sibling_jobs.calls == 0
+    assert ready.receiver is receiver
+    assert ready.options["weak"] is False
+    assert ready.receiver is not None
+    assert ready.receiver(sender=object()) == (
+        "00000000-0000-0000-0000-000000000123",
+    )
+    assert sibling_jobs.calls == 1
+
+
+def test_sibling_recovery_receiver_contains_database_enumeration_failures(
+    monkeypatch,
+    caplog,
+) -> None:
+    class _ReadySignal:
+        def __init__(self) -> None:
+            self.receiver = None
+
+        def connect(self, receiver, **_options: object) -> None:
+            self.receiver = receiver
+
+    ready = _ReadySignal()
+    monkeypatch.setattr(competition_runtime_module, "worker_ready", ready)
+    monkeypatch.setattr(
+        competition_runtime_module,
+        "recover_feishu_sibling_dispatches",
+        lambda _runtime: (_ for _ in ()).throw(
+            RuntimeError("database-secret-must-not-be-logged")
+        ),
+    )
+    receiver = register_feishu_sibling_recovery(
+        SimpleNamespace(feishu_sibling_job_service=object())
+    )
+
+    assert receiver(sender=object()) == ()
+    assert "RuntimeError" in caplog.text
+    assert "database-secret-must-not-be-logged" not in caplog.text

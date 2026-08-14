@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 
 from quanxin_life.core import ProvenanceRecord, SourceKind
 from quanxin_life.integrations.feishu.scenario_contexts import (
@@ -153,3 +154,29 @@ def test_scenario_context_rejects_task_or_identity_mismatch() -> None:
             created_by_reference="ou-scenario-user",
             created_at=NOW,
         )
+
+
+def test_create_or_resolve_recovers_from_concurrent_unique_insert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, _session_factory = _store()
+    context_id = str(uuid4())
+    original_create = store.create
+
+    def racing_create(**kwargs: object) -> object:
+        original_create(**kwargs)  # type: ignore[arg-type]
+        raise IntegrityError("concurrent insert", {}, RuntimeError("unique conflict"))
+
+    monkeypatch.setattr(store, "create", racing_create)
+
+    resolved = store.create_or_resolve(
+        task=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+        data_batch_id="batch-scenario-1",
+        verified_context=_context(context_id),
+        analysis_input=_analysis_input(context_id),
+        created_by_reference="ou-scenario-user",
+        created_at=NOW,
+    )
+
+    assert resolved.scenario_context_id == context_id
+    assert resolved.data_batch_id == "batch-scenario-1"

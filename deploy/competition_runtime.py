@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
+
+from celery.signals import worker_ready
 
 from deploy.advanced_agent_context import CompetitionAgentPolicyContextResolver
 from deploy.competition_inputs import (
     load_advanced_agent_policy,
     load_calibration_source_registrations,
     load_feishu_csv_registrations,
+    load_feishu_default_scenario_profiles,
 )
 from deploy.runtime_settings import CompetitionRuntimeSettings
 from quanxin_life.agents.supervisor import SupervisorPlanner
@@ -114,6 +119,8 @@ from quanxin_life.tasks.feishu import register_feishu_analysis_task
 from quanxin_life.tasks.project_reports import register_project_report_task
 from quanxin_life.tools import ToolExecutionScope
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class CompetitionRuntime:
@@ -126,6 +133,35 @@ class CompetitionRuntime:
     calibration_worker: Any
     report_worker: ProjectReportExportService
     feishu_worker: Any | None
+    feishu_sibling_job_service: Any | None
+
+
+def recover_feishu_sibling_dispatches(runtime: CompetitionRuntime) -> tuple[str, ...]:
+    """Re-enqueue persisted sibling jobs once when a worker process starts."""
+
+    service = runtime.feishu_sibling_job_service
+    if service is None:
+        return ()
+    return tuple(service.dispatch_pending())
+
+
+def register_feishu_sibling_recovery(
+    runtime: CompetitionRuntime,
+) -> Callable[..., tuple[str, ...]]:
+    """Recover persisted sibling dispatches after the Celery consumer is ready."""
+
+    def recover_on_worker_ready(**_: object) -> tuple[str, ...]:
+        try:
+            return recover_feishu_sibling_dispatches(runtime)
+        except Exception as exc:
+            _LOGGER.error(
+                "Feishu sibling startup recovery failed: %s",
+                type(exc).__name__,
+            )
+            return ()
+
+    worker_ready.connect(recover_on_worker_ready, weak=False)
+    return recover_on_worker_ready
 
 
 def create_competition_runtime(
@@ -304,6 +340,9 @@ def create_competition_runtime(
             registration_resolver=RegisteredFeishuCsvRegistrationResolver(
                 load_feishu_csv_registrations(integration.csv_registrations_file)
             ),
+            default_scenarios=load_feishu_default_scenario_profiles(
+                integration.default_scenario_profiles_file
+            ),
             project_model_dependencies=FeishuProjectModelDependencies(
                 context_service=context_service,
                 project_ledger=ledger,
@@ -380,7 +419,15 @@ def create_competition_runtime(
         calibration_worker=calibration.worker,
         report_worker=report_worker,
         feishu_worker=feishu_aily.worker if feishu_aily is not None else None,
+        feishu_sibling_job_service=(
+            feishu_aily.sibling_job_service if feishu_aily is not None else None
+        ),
     )
 
 
-__all__ = ["CompetitionRuntime", "create_competition_runtime"]
+__all__ = [
+    "CompetitionRuntime",
+    "create_competition_runtime",
+    "recover_feishu_sibling_dispatches",
+    "register_feishu_sibling_recovery",
+]

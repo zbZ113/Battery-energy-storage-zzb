@@ -36,6 +36,7 @@ def test_0025_adds_prepared_input_result_slot_and_empty_downgrade_is_safe(
         assert "prepared_input_result_id" in columns
         assert columns["prepared_input_result_id"]["type"].length == 64
         assert columns["prepared_input_result_id"]["nullable"] is True
+        command.upgrade(config, "head")
         command.check(config)
         command.downgrade(config, "0024")
         columns_after = {

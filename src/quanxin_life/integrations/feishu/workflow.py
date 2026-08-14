@@ -124,13 +124,17 @@ class FeishuAnalysisWorkflow:
         task: FeishuAnalysisTask,
         validation_input: Mapping[str, object],
         analysis_input: Mapping[str, object],
+        validation_result: ToolResult | None = None,
         before_analysis: Callable[[], None] | None = None,
     ) -> FeishuWorkflowOutcome:
         try:
             tool_name = _TASK_TO_TOOL[task]
         except KeyError as exc:  # pragma: no cover - exhaustive enum map
             raise FeishuWorkflowRejected("ANALYSIS_TASK_NOT_SUPPORTED") from exc
-        validation_result = self.validate(validation_input=validation_input)
+        validation_result = self.validate_result(
+            validation_input=validation_input,
+            validation_result=validation_result,
+        )
         if tool_name in _MODEL_TOOLS:
             try:
                 self._route_authorizer.authorize(
@@ -165,6 +169,40 @@ class FeishuAnalysisWorkflow:
             validation_result=validation_result,
             analysis_result=analysis_result,
         )
+
+    def validate_result(
+        self,
+        *,
+        validation_input: Mapping[str, object],
+        validation_result: ToolResult | None,
+    ) -> ToolResult:
+        if validation_result is None:
+            return self.validate(validation_input=validation_input)
+        ledger = self._service.audit_ledger
+        if ledger is None:  # pragma: no cover - guarded by __init__
+            raise FeishuWorkflowRejected("DATA_VALIDATION_RESULT_INVALID")
+        try:
+            registered = ledger.resolve_registered_result(validation_result.result_id)
+            expected_input_hash = self._service.registry.canonical_input_hash(
+                StandardToolName.VALIDATE_BATTERY_DATA,
+                validation_input,
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise FeishuWorkflowRejected("DATA_VALIDATION_RESULT_INVALID") from exc
+        blocked = registered.values.get("blocked")
+        if (
+            registered != validation_result
+            or registered.tool_name != StandardToolName.VALIDATE_BATTERY_DATA.value
+            or registered.input_hash != expected_input_hash
+            or not isinstance(blocked, bool)
+        ):
+            raise FeishuWorkflowRejected("DATA_VALIDATION_RESULT_INVALID")
+        if blocked:
+            raise FeishuWorkflowRejected(
+                "DATA_VALIDATION_BLOCKED",
+                validation_result=registered,
+            )
+        return registered
 
 
 __all__ = [

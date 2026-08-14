@@ -164,6 +164,45 @@ def test_compare_tool_runs_two_scenarios_and_registers_audited_result() -> None:
     assert ledger.resolve_registered_result(result.result_id) == result
 
 
+def test_compare_tool_marks_reviewed_capacity_and_format_reference_mismatch() -> None:
+    reference_cell = ScenarioCellDescriptor(
+        chemistry="LFP/graphite",
+        nominal_capacity_ah=1.1,
+        cell_format="cylindrical",
+    )
+    context = VerifiedScenarioContext(
+        scenario_context_id="ctx-reviewed-reference-use",
+        cell=reference_cell,
+        trusted_reference_use=True,
+        data_version="scenario-context-data-v1",
+        provenance=_context().provenance,
+    )
+    service, _ = _service(
+        context=context,
+        allow_candidate_execution=True,
+    )
+    input_value = CompareOperationScenariosToolInput(
+        run_id=str(uuid4()),
+        scenario_context_id=context.scenario_context_id,
+        route_id="blast-lite-lfp-gr-250ah-prismatic-2019-v1",
+        cell=reference_cell,
+        baseline=_scenario(scenario_id="baseline"),
+        comparisons=(_scenario(scenario_id="comparison"),),
+    )
+
+    result = service.invoke(
+        ToolInvocation(
+            tool_name=StandardToolName.COMPARE_OPERATION_SCENARIOS,
+            input_value=input_value.model_dump(mode="json"),
+        )
+    )
+
+    assert result.values["artifact"]["status"] == "COMPLETED"
+    assert "CAPACITY_REFERENCE_MISMATCH" in result.warnings
+    assert "CELL_FORMAT_REFERENCE_MISMATCH" in result.warnings
+    assert "REFERENCE_USE_ONLY" in result.warnings
+
+
 def test_candidate_route_is_rejected_by_default_activation_gate() -> None:
     service, _ = _service(allow_candidate_execution=False)
     input_value = CompareOperationScenariosToolInput(

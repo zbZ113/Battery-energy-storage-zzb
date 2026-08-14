@@ -23,6 +23,7 @@ _FEISHU_AILY_CONFIGURATION_KEYS = (
     "QUANXIN_FEISHU_BITABLE_TABLE_ID",
     "QUANXIN_EXTERNAL_HTTPS_BASE_URL",
     "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE",
+    "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE",
     "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
     "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
 )
@@ -41,6 +42,7 @@ class FeishuAilyRuntimeSettings:
     bitable_table_id: str
     external_https_base_url: str
     csv_registrations_file: Path
+    default_scenario_profiles_file: Path
     allow_candidate_scenario_execution: bool
     allow_candidate_scenario_results: bool
 
@@ -271,6 +273,10 @@ def _feishu_aily_settings(
         csv_registrations_file=_regular_file(
             environment,
             "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE",
+        ),
+        default_scenario_profiles_file=_regular_file(
+            environment,
+            "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE",
         ),
         allow_candidate_scenario_execution=_strict_boolean(
             environment,

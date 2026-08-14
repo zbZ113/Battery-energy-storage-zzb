@@ -40,6 +40,7 @@ class LocalCompetitionRuntimeSettings(CompetitionRuntimeSettings):
             ),
             calibration_evidence_root=settings.calibration_evidence_root,
             agent_policy_file=settings.agent_policy_file,
+            feishu_aily=settings.feishu_aily,
         )
 
 

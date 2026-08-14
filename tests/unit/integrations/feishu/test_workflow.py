@@ -301,6 +301,115 @@ def test_active_route_executes_only_allowlisted_tool_and_registers_both_results(
     )
 
 
+def test_supplied_validation_result_must_be_registered() -> None:
+    prediction_calls: list[str] = []
+    service = _service(prediction_calls=prediction_calls)
+    workflow = FeishuAnalysisWorkflow(
+        service,
+        route_authorizer=_RecordingRouteAuthorizer(),
+        input_binder=_SameEvidenceInputBinder(),
+    )
+    valid_input = _input(
+        records=(
+            {
+                "dataset_id": "source",
+                "cell_id": "cell",
+                "cycle_index": 0,
+                "sample_index": 0,
+                "time_s": 0,
+                "voltage_v": 3,
+                "current_a": 0,
+                "temperature_c": None,
+                "charge_capacity_ah": None,
+                "discharge_capacity_ah": None,
+                "internal_resistance_ohm": None,
+                "diagnostic": False,
+                "valid": True,
+            },
+        )
+    )
+    validation = workflow.validate(validation_input=valid_input)
+    forged = validation.model_copy(update={"result_id": str(uuid4())})
+
+    with pytest.raises(
+        FeishuWorkflowRejected, match="DATA_VALIDATION_RESULT_INVALID"
+    ):
+        workflow.run(
+            task=FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+            validation_input=valid_input,
+            analysis_input=valid_input,
+            validation_result=forged,
+        )
+
+    assert prediction_calls == []
+
+
+def test_supplied_validation_result_must_match_current_input() -> None:
+    prediction_calls: list[str] = []
+    workflow = FeishuAnalysisWorkflow(
+        _service(prediction_calls=prediction_calls),
+        route_authorizer=_RecordingRouteAuthorizer(),
+        input_binder=_SameEvidenceInputBinder(),
+    )
+    valid_input = _input(
+        records=(
+            {
+                "dataset_id": "source",
+                "cell_id": "cell",
+                "cycle_index": 0,
+                "sample_index": 0,
+                "time_s": 0,
+                "voltage_v": 3,
+                "current_a": 0,
+                "temperature_c": None,
+                "charge_capacity_ah": None,
+                "discharge_capacity_ah": None,
+                "internal_resistance_ohm": None,
+                "diagnostic": False,
+                "valid": True,
+            },
+        )
+    )
+    validation = workflow.validate(validation_input=valid_input)
+    changed_input = dict(valid_input)
+    changed_input["feature_version"] = "different-feature-v1"
+
+    with pytest.raises(
+        FeishuWorkflowRejected, match="DATA_VALIDATION_RESULT_INVALID"
+    ):
+        workflow.run(
+            task=FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+            validation_input=changed_input,
+            analysis_input=changed_input,
+            validation_result=validation,
+        )
+
+    assert prediction_calls == []
+
+
+def test_supplied_blocked_validation_result_still_blocks_analysis() -> None:
+    prediction_calls: list[str] = []
+    workflow = FeishuAnalysisWorkflow(
+        _service(prediction_calls=prediction_calls),
+        route_authorizer=_RecordingRouteAuthorizer(),
+        input_binder=_SameEvidenceInputBinder(),
+    )
+    blocked_input = _input()
+    with pytest.raises(FeishuWorkflowRejected) as captured:
+        workflow.validate(validation_input=blocked_input)
+    assert captured.value.validation_result is not None
+
+    with pytest.raises(FeishuWorkflowRejected, match="DATA_VALIDATION_BLOCKED"):
+        workflow.run(
+            task=FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+            validation_input=blocked_input,
+            analysis_input=blocked_input,
+            validation_result=captured.value.validation_result,
+        )
+
+    assert prediction_calls == []
+
+
 @pytest.mark.parametrize(
     ("task", "tool_name"),
     (

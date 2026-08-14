@@ -18,6 +18,10 @@ from quanxin_life.application.advanced_calibration_evidence import (
 )
 from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
 from quanxin_life.core.schemas import ContractModel, Sha256
+from quanxin_life.integrations.feishu.default_scenarios import (
+    ReviewedDefaultScenarioRegistry,
+    load_reviewed_default_scenario_registry,
+)
 
 _MAX_CONFIG_BYTES = 1_048_576
 
@@ -174,6 +178,14 @@ def load_feishu_csv_registrations(
     return MappingProxyType(registrations)
 
 
+def load_feishu_default_scenario_profiles(
+    path: Path,
+) -> ReviewedDefaultScenarioRegistry:
+    """Load the server-reviewed proactive scenario registry fail closed."""
+
+    return load_reviewed_default_scenario_registry(path)
+
+
 def _read_config(path: Path, label: str) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"{label} must be a regular file")
@@ -236,4 +248,5 @@ __all__ = [
     "load_advanced_agent_policy",
     "load_calibration_source_registrations",
     "load_feishu_csv_registrations",
+    "load_feishu_default_scenario_profiles",
 ]

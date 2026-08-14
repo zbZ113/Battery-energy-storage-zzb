@@ -62,6 +62,41 @@ def _environment(tmp_path: Path, *, origin: str) -> dict[str, str]:
     }
 
 
+def _enable_feishu_aily(
+    tmp_path: Path,
+    environment: dict[str, str],
+) -> Path:
+    secret_files: dict[str, Path] = {}
+    for key in (
+        "QUANXIN_FEISHU_APP_SECRET_FILE",
+        "QUANXIN_FEISHU_VERIFICATION_TOKEN_FILE",
+        "QUANXIN_FEISHU_ENCRYPT_KEY_FILE",
+        "QUANXIN_AILY_CONNECTOR_API_KEY_FILE",
+    ):
+        path = tmp_path / key.casefold()
+        path.write_text(f"{key.casefold()}-value\n", encoding="utf-8")
+        secret_files[key] = path
+    registrations = tmp_path / "feishu-csv-registrations.json"
+    registrations.write_text("[]\n", encoding="utf-8")
+    profiles = tmp_path / "feishu-default-scenario-profiles.json"
+    profiles.write_text("{}\n", encoding="utf-8")
+    environment.update(
+        {
+            "QUANXIN_FEISHU_AILY_ENABLED": "true",
+            "QUANXIN_FEISHU_APP_ID": "cli-local-app",
+            **{key: str(path) for key, path in secret_files.items()},
+            "QUANXIN_FEISHU_BITABLE_APP_TOKEN": "basc-local",
+            "QUANXIN_FEISHU_BITABLE_TABLE_ID": "tbl-local",
+            "QUANXIN_EXTERNAL_HTTPS_BASE_URL": "https://local.example.test",
+            "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE": str(registrations),
+            "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE": str(profiles),
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION": "false",
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS": "false",
+        }
+    )
+    return profiles.resolve()
+
+
 @pytest.mark.parametrize(
     "origin",
     (
@@ -114,3 +149,16 @@ def test_local_settings_repr_does_not_expose_service_credentials(
     assert "database-secret" not in rendered
     assert "redis-secret" not in rendered
     assert "**********" in rendered
+
+
+def test_local_settings_preserve_the_complete_feishu_aily_bundle(
+    tmp_path: Path,
+) -> None:
+    environment = _environment(tmp_path, origin="http://127.0.0.1:8080")
+    profiles = _enable_feishu_aily(tmp_path, environment)
+
+    settings = _settings_type().from_environment(environment)
+
+    assert settings.feishu_aily is not None
+    assert settings.feishu_aily.app_id == "cli-local-app"
+    assert settings.feishu_aily.default_scenario_profiles_file == profiles

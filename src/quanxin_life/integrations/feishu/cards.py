@@ -148,6 +148,7 @@ _REASON_PRESENTATION = {
     "DATA_REGISTRATION_REJECTED": "数据登记未通过",
     "ANALYSIS_TASK_NOT_SUPPORTED": "当前分析类型暂不支持",
     "SCENARIO_OUTSIDE_SUPPORTED_RANGE": "工况超出参考模型支持范围",
+    "SCENARIO_PARAMETERS_REQUIRED": "需要补充温度、倍率、SOC、DoD等工况参数",
     "ROUTE_NOT_ACTIVATED": "参考情景路线尚未启用",
     "UNSUPPORTED_BLAST_STATE_INITIALIZATION": "当前参考模型不能从该状态继续推演",
 }

@@ -95,14 +95,14 @@ class BlastRouteCatalog(ContractModel):
         aliases = {alias.strip().casefold() for alias in route.chemistry_aliases}
         if normalized_chemistry not in aliases:
             raise BlastRouteRejected("CHEMISTRY_NOT_SUPPORTED")
-        if cell_format.strip().casefold() != route.cell_format:
-            raise BlastRouteRejected("CELL_REFERENCE_NOT_SUPPORTED")
-        exact_reference = math.isclose(
+        format_matches = cell_format.strip().casefold() == route.cell_format
+        capacity_matches = math.isclose(
             nominal_capacity_ah,
             route.nominal_capacity_reference_ah,
             rel_tol=0.0,
             abs_tol=1e-9,
         )
+        exact_reference = format_matches and capacity_matches
         if route.capacity_policy == "EXACT_REFERENCE_ONLY" and not exact_reference:
             raise BlastRouteRejected("CELL_REFERENCE_NOT_SUPPORTED")
         if (

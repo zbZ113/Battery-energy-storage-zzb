@@ -102,6 +102,7 @@ def test_0023_adds_sanitized_csv_mapping_evidence_contract(tmp_path: Path) -> No
                 ),
                 {"sha": "a" * 64},
             )
+        command.upgrade(config, "head")
         command.check(config)
     finally:
         engine.dispose()

@@ -107,6 +107,8 @@ def test_feishu_aily_override_is_the_only_source_of_optional_secrets() -> None:
         "QUANXIN_FEISHU_BITABLE_TABLE_ID: ${FEISHU_BITABLE_TABLE_ID}",
         "QUANXIN_EXTERNAL_HTTPS_BASE_URL: ${EXTERNAL_HTTPS_BASE_URL}",
         "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE: /srv/quanxin/config/feishu-csv-registrations.json",
+        "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE: "
+        "/srv/quanxin/config/feishu-default-scenario-profiles.json",
         "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION: ${ALLOW_CANDIDATE_SCENARIO_EXECUTION}",
         "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS: ${ALLOW_CANDIDATE_SCENARIO_RESULTS}",
     ):
@@ -203,6 +205,9 @@ def test_production_entrypoints_use_the_strict_competition_runtime() -> None:
         assert "foundation_api" not in source
     assert "app = runtime.http_app" in api
     assert "app = runtime.celery_app" in worker
+    assert "register_feishu_sibling_recovery(runtime)" not in api
+    assert "register_feishu_sibling_recovery(runtime)" in worker
+    assert "recover_feishu_sibling_dispatches(runtime)" not in worker
 
 
 def test_local_entrypoints_are_explicit_and_cannot_leak_into_production() -> None:
@@ -221,3 +226,6 @@ def test_local_entrypoints_are_explicit_and_cannot_leak_into_production() -> Non
 
     assert "app = runtime.http_app" in local_api
     assert "app = runtime.celery_app" in local_worker
+    assert "register_feishu_sibling_recovery(runtime)" not in local_api
+    assert "register_feishu_sibling_recovery(runtime)" in local_worker
+    assert "recover_feishu_sibling_dispatches(runtime)" not in local_worker

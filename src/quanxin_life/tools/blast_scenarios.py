@@ -204,6 +204,27 @@ def _resolve_route_and_context(
     return context, authorized, []
 
 
+def _reference_use_warnings(
+    context: VerifiedScenarioContext | None,
+    route: BlastRouteManifest | None,
+) -> list[str]:
+    if context is None or route is None:
+        return []
+    warnings: list[str] = []
+    if not math.isclose(
+        context.cell.nominal_capacity_ah,
+        route.nominal_capacity_reference_ah,
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    ):
+        warnings.append("CAPACITY_REFERENCE_MISMATCH")
+    if context.cell.cell_format != route.cell_format:
+        warnings.append("CELL_FORMAT_REFERENCE_MISMATCH")
+    if warnings:
+        warnings.append("REFERENCE_USE_ONLY")
+    return warnings
+
+
 def _projection_payload(
     projection: ScenarioProjection,
     *,
@@ -308,6 +329,7 @@ def execute_compare_operation_scenarios_tool(
         declared_cell=validated.cell,
         context_resolver=context_resolver,
     )
+    reference_warnings = _reference_use_warnings(context, route)
     if not reasons and not allow_candidate_execution:
         reasons.append("ROUTE_NOT_ACTIVATED")
     projections: list[ScenarioProjection] = []
@@ -341,7 +363,7 @@ def execute_compare_operation_scenarios_tool(
             route_id=validated.route_id,
             reasons=reasons,
         )
-        warnings = reasons
+        warnings = [*reasons, *reference_warnings]
     else:
         artifact = {
             "status": "COMPLETED",
@@ -366,6 +388,7 @@ def execute_compare_operation_scenarios_tool(
         }
         warnings = [
             "CANDIDATE_ROUTE_RESEARCH_USE_ONLY",
+            *reference_warnings,
             *(warning for projection in projections for warning in projection.warnings),
         ]
     return _result(
@@ -401,6 +424,7 @@ def execute_project_storage_lifetime_tool(
         declared_cell=validated.cell,
         context_resolver=context_resolver,
     )
+    reference_warnings = _reference_use_warnings(context, route)
     if not reasons and not allow_candidate_execution:
         reasons.append("ROUTE_NOT_ACTIVATED")
     if not reasons and validated.new_observation_reference is not None:
@@ -426,7 +450,7 @@ def execute_project_storage_lifetime_tool(
             route_id=validated.route_id,
             reasons=reasons,
         )
-        warnings = reasons
+        warnings = [*reasons, *reference_warnings]
     else:
         if projection is None:  # pragma: no cover - execution invariant
             raise RuntimeError("scenario projection was not produced")
@@ -443,7 +467,11 @@ def execute_project_storage_lifetime_tool(
                 scenario=validated.scenario,
             ),
         }
-        warnings = ["CANDIDATE_ROUTE_RESEARCH_USE_ONLY", *projection.warnings]
+        warnings = [
+            "CANDIDATE_ROUTE_RESEARCH_USE_ONLY",
+            *reference_warnings,
+            *projection.warnings,
+        ]
     return _result(
         result_id=result_id,
         tool_name=StandardToolName.PROJECT_STORAGE_LIFETIME,

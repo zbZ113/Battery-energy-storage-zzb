@@ -59,6 +59,7 @@ def _job() -> FeishuAnalysisJobRecord:
         job_id=job_id,
         run_id=job_id,
         event_id="aily:" + "1" * 64,
+        event_type="aily.analysis_task.create_v1",
         task_type=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
         job_status=FeishuAnalysisJobStatus.RUNNING,
         job_stage="DELIVERING_RESULT",

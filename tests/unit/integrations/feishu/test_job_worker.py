@@ -50,8 +50,10 @@ from quanxin_life.integrations.feishu.jobs import (
     FeishuJobRetryableError,
     FeishuProjectModelExecution,
     FeishuProjectModelRejected,
+    FeishuValidatedSiblingPlanner,
     SqlAlchemyFeishuJobRouter,
     SqlAlchemyFeishuJobStore,
+    SqlAlchemyFeishuSiblingJobService,
 )
 from quanxin_life.integrations.feishu.routing import (
     FeishuEventReference,
@@ -233,20 +235,44 @@ class _ProjectModelExecutor:
             provenance=list(registration.provenance),
             created_at=NOW,
         )
+        task_type = FeishuAnalysisTask(job.task_type)
         analysis = ToolResult(
             result_id=str(uuid4()),
-            tool_name=StandardToolName.PREDICT_CYCLE_LIFE.value,
-            tool_version="advanced-rul-prediction-tool-v1",
+            tool_name=task_type.value,
+            tool_version=(
+                "advanced-soh-prediction-tool-v1"
+                if task_type is FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY
+                else "advanced-rul-prediction-tool-v1"
+            ),
             model_version="reviewed-project-model-v1",
             data_version=registration.data_version,
             feature_version=registration.feature_config.feature_version,
             input_hash="2" * 64,
-            values={
-                "artifact": {
-                    "cycle_life_prediction": {"predicted_cycle": 24},
-                    "derived_remaining_cycles": 4,
+            values=(
+                {
+                    "artifact_type": "quanxin_life.advanced_soh_trajectory.v1",
+                    "artifact": {
+                        "prediction_cycles": [21, 500],
+                        "predicted_soh": [0.99, 0.87],
+                        "horizon_end_cycle": 500,
+                    },
                 }
-            },
+                if task_type is FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY
+                else {
+                    "artifact": {
+                        "cycle_life_prediction": {"predicted_cycle": 24},
+                        "derived_remaining_cycles": 4,
+                    }
+                }
+            ),
+            uncertainty=(
+                {
+                    "finite_horizon_only": True,
+                    "conformal_interval_included": False,
+                }
+                if task_type is FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY
+                else None
+            ),
             provenance=list(registration.provenance),
             created_at=NOW,
         )
@@ -277,6 +303,24 @@ class _ProjectModelExecutor:
             analysis_result=analysis,
             report_result=report,
         )
+
+
+class _FailOnceSiblingPlanner:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def plan_validated_siblings(self, *, job: object) -> None:
+        self.calls.append(job.validation_result_id)
+        if len(self.calls) == 1:
+            raise RuntimeError("scenario context store unavailable")
+
+
+class _RecordingSiblingPlanner:
+    def __init__(self) -> None:
+        self.validation_result_ids: list[str | None] = []
+
+    def plan_validated_siblings(self, *, job: object) -> None:
+        self.validation_result_ids.append(job.validation_result_id)
 
 
 def _event() -> FeishuEventReference:
@@ -361,8 +405,9 @@ def _tool_service(
     *,
     prediction_calls: list[str],
     analysis_rejection_reason: str | None = None,
+    audit_ledger: AuditLedger | None = None,
 ) -> tuple[ToolInvocationService, AuditLedger]:
-    ledger = AuditLedger()
+    ledger = audit_ledger if audit_ledger is not None else AuditLedger()
     registry = ToolRegistry()
     register_validate_battery_data_tool(registry)
 
@@ -426,10 +471,13 @@ def _worker(
     project_registrations: list[CanonicalCsvBatchRegistration] | None = None,
     batch_store: InMemoryVerifiedEarlyCycleBatchStore | None = None,
     project_model_crash_before_return: bool = False,
+    sibling_planner: FeishuValidatedSiblingPlanner | None = None,
+    audit_ledger: AuditLedger | None = None,
 ) -> FeishuAnalysisJobWorker:
     service, ledger = _tool_service(
         prediction_calls=prediction_calls,
         analysis_rejection_reason=analysis_rejection_reason,
+        audit_ledger=audit_ledger,
     )
     workflow = FeishuAnalysisWorkflow(
         service,
@@ -490,6 +538,7 @@ def _worker(
         report_result_factory=report_result,
         project_model_executor=project_executor,
         delivery=delivery,
+        sibling_planner=sibling_planner,
         clock=lambda: NOW,
         heartbeat_interval_seconds=30,
         max_attempts=max_attempts,
@@ -536,9 +585,168 @@ def test_worker_uses_project_model_executor_after_global_validation() -> None:
     ]
 
 
+def test_worker_retries_sibling_planning_without_revalidating_root() -> None:
+    jobs, job_id = _job()
+    planner = _FailOnceSiblingPlanner()
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        sibling_planner=planner,
+    )
+
+    with pytest.raises(FeishuJobRetryableError, match="UNEXPECTED_WORKER_ERROR"):
+        worker.execute(job_id=job_id)
+
+    after_failure = jobs.get(job_id)
+    validation_result_id = after_failure.validation_result_id
+    assert after_failure.job_status is FeishuAnalysisJobStatus.RETRYABLE
+    assert validation_result_id is not None
+    assert after_failure.analysis_result_id is None
+    assert after_failure.report_result_id is None
+    assert worker._client.calls == 1
+    assert worker._project_model_executor.calls == []
+
+    assert worker.execute(job_id=job_id) is FeishuAnalysisJobStatus.SUCCEEDED
+
+    completed = jobs.get(job_id)
+    assert completed.validation_result_id == validation_result_id
+    assert planner.calls == [validation_result_id, validation_result_id]
+    assert worker._client.calls == 1
+    assert worker._project_model_executor.calls == [("cell-1", 20)]
+
+
+def test_worker_plans_siblings_for_regular_workflow_after_validation() -> None:
+    jobs, job_id = _job()
+    planner = _RecordingSiblingPlanner()
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=True,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        sibling_planner=planner,
+    )
+
+    assert worker.execute(job_id=job_id) is FeishuAnalysisJobStatus.SUCCEEDED
+    assert planner.validation_result_ids == [jobs.get(job_id).validation_result_id]
+    assert planner.validation_result_ids[0] is not None
+
+
+def test_soh_sibling_reuses_canonical_batch_without_redownloading() -> None:
+    jobs, root_job_id = _job()
+    batches = InMemoryVerifiedEarlyCycleBatchStore()
+    audit_ledger = AuditLedger()
+    root_worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        batch_store=batches,
+        audit_ledger=audit_ledger,
+    )
+    assert root_worker.execute(job_id=root_job_id) is FeishuAnalysisJobStatus.SUCCEEDED
+    root = jobs.get(root_job_id)
+    assert root.record_batch_id is not None
+    queue = _Queue()
+    sibling_id = SqlAlchemyFeishuSiblingJobService(
+        jobs,
+        queue=queue,
+        clock=lambda: NOW,
+    ).stage_sibling(
+        source_job_id=root_job_id,
+        task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+    )
+    assert jobs.get(sibling_id).validation_result_id is None
+    registrations: list[CanonicalCsvBatchRegistration] = []
+    sibling_worker = _worker(
+        jobs=jobs,
+        client_response=AssertionError("SOH sibling must not download"),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        project_registrations=registrations,
+        batch_store=batches,
+        audit_ledger=audit_ledger,
+    )
+
+    status = sibling_worker.execute(job_id=sibling_id)
+
+    sibling = jobs.get(sibling_id)
+    assert status is FeishuAnalysisJobStatus.SUCCEEDED
+    assert sibling.record_batch_id == root.record_batch_id
+    assert sibling.source_job_id == root_job_id
+    assert sibling.validation_result_id is None
+    assert sibling.analysis_result_id is not None
+    assert (
+        sibling_worker._result_resolver.resolve_registered_result(
+            sibling.analysis_result_id
+        ).tool_name
+        == FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY.value
+    )
+    assert sibling_worker._client.calls == 0
+    assert [item.metadata.source_sha256 for item in registrations] == [
+        root.input_file_sha256
+    ]
+
+
+def test_missing_profile_scenario_sibling_rejects_before_any_model_call() -> None:
+    jobs, root_job_id = _job()
+    batches = InMemoryVerifiedEarlyCycleBatchStore()
+    root_worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        batch_store=batches,
+    )
+    assert root_worker.execute(job_id=root_job_id) is FeishuAnalysisJobStatus.SUCCEEDED
+    scenario_id = SqlAlchemyFeishuSiblingJobService(
+        jobs,
+        queue=_Queue(),
+        clock=lambda: NOW,
+    ).stage_sibling(
+        source_job_id=root_job_id,
+        task=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+    )
+    delivery = _Delivery()
+    predictions: list[str] = []
+    scenario_worker = _worker(
+        jobs=jobs,
+        client_response=AssertionError("missing-profile child must not download"),
+        route_active=True,
+        prediction_calls=predictions,
+        delivery=delivery,
+        enable_project_model=True,
+        batch_store=batches,
+    )
+
+    status = scenario_worker.execute(job_id=scenario_id)
+
+    scenario = jobs.get(scenario_id)
+    assert status is FeishuAnalysisJobStatus.REJECTED
+    assert scenario.job_last_error_code == "SCENARIO_PARAMETERS_REQUIRED"
+    assert scenario.analysis_result_id is None
+    assert scenario_worker._client.calls == 0
+    assert scenario_worker._project_model_executor.calls == []
+    assert predictions == []
+    assert delivery.rejections == [
+        (scenario.run_id, "SCENARIO_PARAMETERS_REQUIRED", None)
+    ]
+
+
 def test_project_model_restart_keeps_canonical_batch_identity() -> None:
     jobs, job_id = _job()
     batch_store = InMemoryVerifiedEarlyCycleBatchStore()
+    audit_ledger = AuditLedger()
     worker = _worker(
         jobs=jobs,
         client_response=_response(VALID_CSV),
@@ -548,6 +756,7 @@ def test_project_model_restart_keeps_canonical_batch_identity() -> None:
         enable_project_model=True,
         batch_store=batch_store,
         project_model_crash_before_return=True,
+        audit_ledger=audit_ledger,
     )
 
     with pytest.raises(FeishuJobRetryableError, match="UNEXPECTED_WORKER_ERROR"):
@@ -568,6 +777,7 @@ def test_project_model_restart_keeps_canonical_batch_identity() -> None:
         delivery=_Delivery(),
         enable_project_model=True,
         batch_store=batch_store,
+        audit_ledger=audit_ledger,
     )
 
     assert worker.execute(job_id=job_id) is FeishuAnalysisJobStatus.SUCCEEDED

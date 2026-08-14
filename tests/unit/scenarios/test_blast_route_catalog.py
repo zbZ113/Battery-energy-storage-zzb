@@ -37,20 +37,31 @@ def test_route_catalog_rejects_non_lfp_chemistry() -> None:
 
 
 @pytest.mark.parametrize(
-    ("route_id", "capacity_ah", "cell_format"),
+    ("route_id", "capacity_ah", "cell_format", "reason"),
     [
-        ("blast-lite-lfp-gr-sony-murata-3ah-2018-v1", 250.0, "prismatic"),
-        ("blast-lite-lfp-gr-250ah-prismatic-2019-v1", 3.0, "cylindrical"),
+        (
+            "blast-lite-lfp-gr-sony-murata-3ah-2018-v1",
+            250.0,
+            "prismatic",
+            "CELL_REFERENCE_NOT_SUPPORTED",
+        ),
+        (
+            "blast-lite-lfp-gr-250ah-prismatic-2019-v1",
+            3.0,
+            "cylindrical",
+            "REFERENCE_USE_NOT_APPROVED",
+        ),
     ],
 )
 def test_route_catalog_rejects_3ah_and_250ah_misrouting(
     route_id: str,
     capacity_ah: float,
     cell_format: str,
+    reason: str,
 ) -> None:
     catalog = load_packaged_blast_route_catalog()
 
-    with pytest.raises(BlastRouteRejected, match="CELL_REFERENCE_NOT_SUPPORTED"):
+    with pytest.raises(BlastRouteRejected, match=reason):
         catalog.authorize_reference_use(
             route_id=route_id,
             chemistry="LFP/graphite",
@@ -82,3 +93,26 @@ def test_280ah_reference_requires_server_side_approval() -> None:
     )
     assert authorized.route_id == route_id
     assert "REFERENCE_MODEL_NOT_CELL_SPECIFIC" in authorized.warnings
+
+
+def test_small_cylindrical_lfp_may_use_large_prismatic_route_only_when_reviewed() -> None:
+    catalog = load_packaged_blast_route_catalog()
+    route_id = "blast-lite-lfp-gr-250ah-prismatic-2019-v1"
+
+    with pytest.raises(BlastRouteRejected, match="REFERENCE_USE_NOT_APPROVED"):
+        catalog.authorize_reference_use(
+            route_id=route_id,
+            chemistry="LFP/graphite",
+            nominal_capacity_ah=1.1,
+            cell_format="cylindrical",
+            trusted_reference_use=False,
+        )
+
+    authorized = catalog.authorize_reference_use(
+        route_id=route_id,
+        chemistry="LFP/graphite",
+        nominal_capacity_ah=1.1,
+        cell_format="cylindrical",
+        trusted_reference_use=True,
+    )
+    assert authorized.route_id == route_id

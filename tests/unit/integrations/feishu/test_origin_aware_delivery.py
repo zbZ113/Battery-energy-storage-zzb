@@ -60,6 +60,11 @@ def _job(origin: FeishuAnalysisJobOrigin) -> FeishuAnalysisJobRecord:
         job_id=job_id,
         run_id=job_id,
         event_id=f"{origin.value.casefold()}:{uuid4()}",
+        event_type=(
+            "im.message.receive_v1"
+            if origin is FeishuAnalysisJobOrigin.FEISHU
+            else "aily.analysis_task.create_v1"
+        ),
         task_type=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
         job_status=FeishuAnalysisJobStatus.RUNNING,
         job_stage="DELIVERING_RESULT",

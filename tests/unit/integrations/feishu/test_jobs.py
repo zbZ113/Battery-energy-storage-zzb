@@ -18,6 +18,7 @@ from quanxin_life.integrations.feishu.jobs import (
     SqlAlchemyFeishuJobReplayService,
     SqlAlchemyFeishuJobRouter,
     SqlAlchemyFeishuJobStore,
+    SqlAlchemyFeishuSiblingJobService,
 )
 from quanxin_life.integrations.feishu.routing import (
     FeishuEventReference,
@@ -41,6 +42,18 @@ class _Queue:
     def enqueue(self, *, job_id: str) -> FeishuJobDispatchReceipt:
         self.job_ids.append(job_id)
         return FeishuJobDispatchReceipt(job_id=job_id, task_id=f"task-{job_id}")
+
+
+class _FailOnceQueue(_Queue):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures = 1
+
+    def enqueue(self, *, job_id: str) -> FeishuJobDispatchReceipt:
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("broker unavailable")
+        return super().enqueue(job_id=job_id)
 
 
 def _fixture() -> tuple[
@@ -133,6 +146,167 @@ def test_router_persists_sanitized_reference_and_dispatches_identity_once() -> N
         assert row.receive_id_type == "chat_id"
         assert row.event_time == NOW
         assert row.job_task_id == f"task-{row.job_id}"
+
+
+def test_sibling_service_stages_idempotent_jobs_from_persisted_batch() -> None:
+    _receipts, jobs, session_factory = _fixture()
+    source_job_id = _seed_completed_source_job(session_factory)
+    queue = _Queue()
+    service = SqlAlchemyFeishuSiblingJobService(
+        jobs,
+        queue=queue,
+        clock=lambda: NOW,
+    )
+
+    first = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+    )
+    second = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+    )
+
+    assert first == second
+    assert queue.job_ids == [first]
+    sibling = jobs.get(first)
+    assert sibling.source_job_id == source_job_id
+    assert sibling.task_type is FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY
+    assert sibling.record_batch_id == "canonical-csv-" + "b" * 64
+    assert sibling.message_id is None
+    assert sibling.file_key is None
+    assert sibling.input_file_sha256 == "c" * 64
+    assert sibling.validation_result_id is None
+
+
+def test_sibling_dispatch_recovers_after_broker_failure() -> None:
+    _receipts, jobs, session_factory = _fixture()
+    source_job_id = _seed_completed_source_job(session_factory)
+    queue = _FailOnceQueue()
+    service = SqlAlchemyFeishuSiblingJobService(
+        jobs,
+        queue=queue,
+        clock=lambda: NOW,
+    )
+
+    sibling_id = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+    )
+
+    pending = jobs.list_undispatched_siblings(source_job_id=source_job_id)
+    assert pending == (sibling_id,)
+    assert service.dispatch_pending(source_job_id=source_job_id) == (pending[0],)
+    assert jobs.get(pending[0]).job_status is FeishuAnalysisJobStatus.PENDING
+
+
+def test_sibling_store_rejects_replay_job_as_a_proactive_source() -> None:
+    _receipts, jobs, session_factory = _fixture()
+    source_job_id = _seed_completed_source_job(session_factory)
+    with session_factory() as session:
+        source = session.scalar(
+            select(FeishuEventReceipt).where(
+                FeishuEventReceipt.job_id == source_job_id
+            )
+        )
+        assert source is not None
+        source.event_type = "feishu.analysis_job.replay_v1"
+        session.commit()
+
+    with pytest.raises(ValueError, match="validated root Feishu file job"):
+        SqlAlchemyFeishuSiblingJobService(
+            jobs,
+            queue=_Queue(),
+            clock=lambda: NOW,
+        ).stage_sibling(
+            source_job_id=source_job_id,
+            task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+        )
+
+
+def test_sibling_store_rejects_a_root_without_a_validation_result() -> None:
+    _receipts, jobs, session_factory = _fixture()
+    source_job_id = _seed_completed_source_job(
+        session_factory,
+        validation_result_id=None,
+    )
+
+    with pytest.raises(ValueError, match="validated root Feishu file job"):
+        SqlAlchemyFeishuSiblingJobService(
+            jobs,
+            queue=_Queue(),
+            clock=lambda: NOW,
+        ).stage_sibling(
+            source_job_id=source_job_id,
+            task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+        )
+
+
+def test_sibling_store_rejects_a_rejected_root() -> None:
+    _receipts, jobs, session_factory = _fixture()
+    source_job_id = _seed_completed_source_job(session_factory)
+    with session_factory() as session:
+        source = session.scalar(
+            select(FeishuEventReceipt).where(
+                FeishuEventReceipt.job_id == source_job_id
+            )
+        )
+        assert source is not None
+        source.job_status = FeishuAnalysisJobStatus.REJECTED.value
+        source.job_stage = FeishuAnalysisJobStage.REJECTED.value
+        source.job_last_error_code = "DATA_VALIDATION_BLOCKED"
+        session.commit()
+
+    with pytest.raises(ValueError, match="validated root Feishu file job"):
+        SqlAlchemyFeishuSiblingJobService(
+            jobs,
+            queue=_Queue(),
+            clock=lambda: NOW,
+        ).stage_sibling(
+            source_job_id=source_job_id,
+            task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+        )
+
+
+def _seed_completed_source_job(
+    session_factory: object,
+    *,
+    validation_result_id: str | None = "3a3c972b-a23e-42c3-af76-e39038806f14",
+) -> str:
+    source_job_id = "3a3c972b-a23e-42c3-af76-e39038806f13"
+    with session_factory() as session:
+        session.add(
+            FeishuEventReceipt(
+                id="source-receipt",
+                event_id="source-event",
+                event_type="im.message.receive_v1",
+                payload_sha256="d" * 64,
+                status=FeishuReceiptClaimStatus.PROCESSED.value,
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=source_job_id,
+                job_origin=FeishuAnalysisJobOrigin.FEISHU.value,
+                job_status=FeishuAnalysisJobStatus.SUCCEEDED.value,
+                job_stage=FeishuAnalysisJobStage.SUCCEEDED.value,
+                task_type=FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value,
+                run_id=source_job_id,
+                chat_id="oc-job",
+                sender_id="ou-job",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                record_batch_id="canonical-csv-" + "b" * 64,
+                cell_reference="MATR_b3c34",
+                input_file_sha256="c" * 64,
+                validation_result_id=validation_result_id,
+                job_attempt_count=1,
+                job_created_at=NOW,
+                job_updated_at=NOW,
+                job_completed_at=NOW,
+            )
+        )
+        session.commit()
+    return source_job_id
 
 
 def test_expired_worker_claim_is_recovered_with_a_new_fence() -> None:
