@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from quanxin_life.api.feishu import FeishuEventRouteStatus
 from quanxin_life.application.battery_csv_mapping import (
@@ -108,6 +109,8 @@ _AILY_DATA_TASKS = frozenset(
     }
 )
 _AILY_TASKS = _SCENARIO_TASKS | _AILY_DATA_TASKS
+_RECOMMENDATION_TASK = FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION
+_BITABLE_CURVE_TASKS = _SCENARIO_TASKS | _AILY_DATA_TASKS
 
 
 class FeishuJobClaimStatus(StrEnum):
@@ -197,6 +200,11 @@ class FeishuAnalysisJobRecord:
     default_scenario_profile_id: str | None = None
     default_scenario_profile_version: str | None = None
     default_scenario_profile_sha256: str | None = None
+    recommendation_ruleset_id: str | None = None
+    recommendation_ruleset_version: str | None = None
+    recommendation_ruleset_sha256: str | None = None
+    recommendation_upstream_result_ids: tuple[str, ...] | None = None
+    recommendation_upstream_result_ids_sha256: str | None = None
     bitable_curve_file_token: str | None = None
     bitable_curve_source_result_id: str | None = None
     bitable_curve_renderer_version: str | None = None
@@ -282,6 +290,15 @@ class FeishuProjectModelExecutorPort(Protocol):
     ) -> FeishuProjectModelExecution: ...
 
 
+class FeishuEngineeringRecommendationExecutorPort(Protocol):
+    def execute(
+        self,
+        job: FeishuAnalysisJobRecord,
+        *,
+        claim_token: str,
+    ) -> tuple[ToolResult, ToolResult]: ...
+
+
 class BatteryCsvNormalizerPort(Protocol):
     def normalize(self, payload: bytes) -> BatteryCsvMappingResult: ...
 
@@ -302,6 +319,15 @@ class FeishuScenarioInputResolver(Protocol):
 
 class FeishuValidatedSiblingPlanner(Protocol):
     def plan_validated_siblings(self, *, job: FeishuAnalysisJobRecord) -> None: ...
+
+
+class FeishuSiblingJobDispatcher(Protocol):
+    def dispatch_pending(
+        self,
+        *,
+        source_job_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[str, ...]: ...
 
 
 class FeishuJobDelivery(Protocol):
@@ -628,12 +654,16 @@ class SqlAlchemyFeishuJobStore:
         default_scenario_profile_id: str | None,
         default_scenario_profile_version: str | None,
         default_scenario_profile_sha256: str | None,
+        recommendation_ruleset_id: str | None,
+        recommendation_ruleset_version: str | None,
+        recommendation_ruleset_sha256: str | None,
         staged_at: datetime,
     ) -> _StagedJob:
         checked_source_job_id = validate_feishu_job_id(source_job_id)
         if task not in {
             FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
             FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+            _RECOMMENDATION_TASK,
         }:
             raise ValueError("Feishu sibling task is not supported")
         context_id = (
@@ -646,11 +676,31 @@ class SqlAlchemyFeishuJobStore:
             profile_version=default_scenario_profile_version,
             profile_sha256=default_scenario_profile_sha256,
         )
+        recommendation_ruleset = _recommendation_ruleset_reference(
+            ruleset_id=recommendation_ruleset_id,
+            ruleset_version=recommendation_ruleset_version,
+            ruleset_sha256=recommendation_ruleset_sha256,
+        )
         if task is FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY:
-            if context_id is not None or profile is not None:
+            if (
+                context_id is not None
+                or profile is not None
+                or recommendation_ruleset is not None
+            ):
                 raise ValueError("SOH sibling cannot carry scenario references")
-        elif (context_id is None) != (profile is None):
-            raise ValueError("scenario sibling context and profile must be paired")
+        elif task in _SCENARIO_TASKS:
+            if recommendation_ruleset is not None:
+                raise ValueError("scenario sibling cannot carry recommendation rules")
+            if (context_id is None) != (profile is None):
+                raise ValueError("scenario sibling context and profile must be paired")
+        elif (
+            context_id is not None
+            or profile is not None
+            or recommendation_ruleset is None
+        ):
+            raise ValueError(
+                "recommendation sibling requires only a reviewed ruleset reference"
+            )
         now = _utc(staged_at)
         session = self._session_factory()
         try:
@@ -678,11 +728,23 @@ class SqlAlchemyFeishuJobStore:
                         if profile is not None
                         else None
                     ),
+                    "recommendation_ruleset": (
+                        {
+                            "ruleset_id": recommendation_ruleset[0],
+                            "ruleset_version": recommendation_ruleset[1],
+                            "ruleset_sha256": recommendation_ruleset[2],
+                        }
+                        if recommendation_ruleset is not None
+                        else None
+                    ),
                 }
             )
             existing = session.scalar(
                 select(FeishuEventReceipt)
-                .where(FeishuEventReceipt.job_request_sha256 == request_sha256)
+                .where(
+                    FeishuEventReceipt.source_job_id == checked_source_job_id,
+                    FeishuEventReceipt.task_type == task.value,
+                )
                 .with_for_update()
             )
             if existing is not None:
@@ -693,6 +755,7 @@ class SqlAlchemyFeishuJobStore:
                     request_sha256=request_sha256,
                     scenario_context_id=context_id,
                     profile=profile,
+                    recommendation_ruleset=recommendation_ruleset,
                 )
                 session.rollback()
                 return staged
@@ -723,6 +786,15 @@ class SqlAlchemyFeishuJobStore:
                     default_scenario_profile_id=(profile[0] if profile else None),
                     default_scenario_profile_version=(profile[1] if profile else None),
                     default_scenario_profile_sha256=(profile[2] if profile else None),
+                    recommendation_ruleset_id=(
+                        recommendation_ruleset[0] if recommendation_ruleset else None
+                    ),
+                    recommendation_ruleset_version=(
+                        recommendation_ruleset[1] if recommendation_ruleset else None
+                    ),
+                    recommendation_ruleset_sha256=(
+                        recommendation_ruleset[2] if recommendation_ruleset else None
+                    ),
                     record_batch_id=source.record_batch_id,
                     cell_reference=source.cell_reference,
                     input_file_sha256=source.input_file_sha256,
@@ -737,7 +809,8 @@ class SqlAlchemyFeishuJobStore:
             session.rollback()
             existing = session.scalar(
                 select(FeishuEventReceipt).where(
-                    FeishuEventReceipt.job_request_sha256 == request_sha256
+                    FeishuEventReceipt.source_job_id == checked_source_job_id,
+                    FeishuEventReceipt.task_type == task.value,
                 )
             )
             source = session.scalar(
@@ -754,6 +827,7 @@ class SqlAlchemyFeishuJobStore:
                 request_sha256=request_sha256,
                 scenario_context_id=context_id,
                 profile=profile,
+                recommendation_ruleset=recommendation_ruleset,
             )
         except Exception:
             session.rollback()
@@ -926,6 +1000,7 @@ class SqlAlchemyFeishuJobStore:
         *,
         source_job_id: str | None = None,
         limit: int = 100,
+        prepared_at: datetime | None = None,
     ) -> tuple[str, ...]:
         if limit < 1 or limit > 1000:
             raise ValueError("undispatched sibling limit is invalid")
@@ -934,10 +1009,11 @@ class SqlAlchemyFeishuJobStore:
             if source_job_id is not None
             else None
         )
+        now = _utc(prepared_at or datetime.now(UTC))
         session = self._session_factory()
         try:
             statement = (
-                select(FeishuEventReceipt.job_id)
+                select(FeishuEventReceipt)
                 .where(
                     FeishuEventReceipt.source_job_id.is_not(None),
                     FeishuEventReceipt.job_task_id.is_(None),
@@ -949,19 +1025,124 @@ class SqlAlchemyFeishuJobStore:
                     ),
                 )
                 .order_by(FeishuEventReceipt.job_created_at, FeishuEventReceipt.job_id)
-                .limit(limit)
             )
             if checked_source_id is not None:
                 statement = statement.where(
                     FeishuEventReceipt.source_job_id == checked_source_id
                 )
-            return tuple(
-                value
-                for value in session.scalars(statement).all()
-                if value is not None
-            )
+            dispatchable: list[str] = []
+            for row in session.scalars(statement).all():
+                if row.job_id is None:
+                    continue
+                if (
+                    row.task_type == _RECOMMENDATION_TASK.value
+                    and not self._freeze_ready_recommendation_inputs(
+                        session,
+                        row=row,
+                        updated_at=now,
+                    )
+                ):
+                    continue
+                dispatchable.append(row.job_id)
+                if len(dispatchable) == limit:
+                    break
+            session.commit()
+            return tuple(dispatchable)
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
+
+    @staticmethod
+    def _freeze_ready_recommendation_inputs(
+        session: Session,
+        *,
+        row: FeishuEventReceipt,
+        updated_at: datetime,
+    ) -> bool:
+        source_job_id = row.source_job_id
+        if source_job_id is None:
+            raise FeishuJobOwnershipError(
+                "recommendation job is not bound to a root Feishu job"
+            )
+        root = session.scalar(
+            select(FeishuEventReceipt).where(
+                FeishuEventReceipt.job_id == source_job_id
+            )
+        )
+        if (
+            root is None
+            or root.source_job_id is not None
+            or root.task_type != FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value
+            or root.validation_result_id is None
+        ):
+            raise FeishuJobOwnershipError(
+                "recommendation job root identity is invalid"
+            )
+        family = tuple(
+            session.scalars(
+                select(FeishuEventReceipt).where(
+                    FeishuEventReceipt.source_job_id == source_job_id
+                )
+            ).all()
+        )
+        by_task: dict[str, list[FeishuEventReceipt]] = {}
+        for member in family:
+            if member.task_type is not None:
+                by_task.setdefault(member.task_type, []).append(member)
+        required_tasks = (
+            FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY.value,
+            FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+        )
+        if any(len(by_task.get(task, ())) != 1 for task in required_tasks):
+            return False
+        terminal = {
+            FeishuAnalysisJobStatus.SUCCEEDED.value,
+            FeishuAnalysisJobStatus.REJECTED.value,
+            FeishuAnalysisJobStatus.FAILED.value,
+        }
+        required_members = tuple(by_task[task][0] for task in required_tasks)
+        if root.job_status not in terminal or any(
+            member.job_status not in terminal for member in required_members
+        ):
+            return False
+        identity = (root.record_batch_id, root.cell_reference, root.input_file_sha256)
+        if any(
+            (member.record_batch_id, member.cell_reference, member.input_file_sha256)
+            != identity
+            for member in (*required_members, row)
+        ):
+            raise FeishuJobOwnershipError(
+                "recommendation family data identity does not match the root"
+            )
+        result_ids = [root.validation_result_id]
+        for member in (root, *required_members):
+            if member.job_status == FeishuAnalysisJobStatus.SUCCEEDED.value:
+                if member.analysis_result_id is None:
+                    raise FeishuJobOwnershipError(
+                        "successful recommendation family member has no analysis result"
+                    )
+                result_ids.append(member.analysis_result_id)
+        normalized_ids = tuple(sorted(set(result_ids)))
+        digest = sha256_canonical(
+            {
+                "schema_version": "feishu-recommendation-upstream-results-v1",
+                "result_ids": list(normalized_ids),
+            }
+        )
+        if row.recommendation_upstream_result_ids_json is None:
+            row.recommendation_upstream_result_ids_json = list(normalized_ids)
+            row.recommendation_upstream_result_ids_sha256 = digest
+            row.job_updated_at = updated_at
+        elif (
+            row.recommendation_upstream_result_ids_json != list(normalized_ids)
+            or row.recommendation_upstream_result_ids_sha256 != digest
+        ):
+            raise FeishuJobOwnershipError(
+                "recommendation upstream results conflict with frozen evidence"
+            )
+        return True
 
     def claim(self, *, job_id: str, claimed_at: datetime) -> FeishuJobClaim:
         checked_job_id = validate_feishu_job_id(job_id)
@@ -1063,6 +1244,30 @@ class SqlAlchemyFeishuJobStore:
             if row is None:
                 raise ValueError("Feishu analysis job was not found")
             return self._record(row)
+        finally:
+            session.close()
+
+    def get_recommendation_sibling(
+        self,
+        *,
+        source_job_id: str,
+    ) -> FeishuAnalysisJobRecord:
+        checked_source_job_id = validate_feishu_job_id(source_job_id)
+        session = self._session_factory()
+        try:
+            rows = tuple(
+                session.scalars(
+                    select(FeishuEventReceipt).where(
+                        FeishuEventReceipt.source_job_id == checked_source_job_id,
+                        FeishuEventReceipt.task_type == _RECOMMENDATION_TASK.value,
+                    )
+                ).all()
+            )
+            if len(rows) != 1:
+                raise ValueError(
+                    "reviewed engineering recommendation is not staged for this root"
+                )
+            return self._record(rows[0])
         finally:
             session.close()
 
@@ -1489,12 +1694,27 @@ class SqlAlchemyFeishuJobStore:
                 raise ValueError(
                     "Feishu Bitable curve source result does not match analysis"
                 )
+        recommendation_ruleset = _recommendation_ruleset_reference(
+            ruleset_id=row.recommendation_ruleset_id,
+            ruleset_version=row.recommendation_ruleset_version,
+            ruleset_sha256=row.recommendation_ruleset_sha256,
+        )
+        recommendation_result_ids = _recommendation_upstream_result_ids(
+            value=row.recommendation_upstream_result_ids_json,
+            expected_sha256=row.recommendation_upstream_result_ids_sha256,
+        )
+        task_type = FeishuAnalysisTask(row.task_type)
+        if task_type is _RECOMMENDATION_TASK:
+            if recommendation_ruleset is None:
+                raise ValueError("Feishu recommendation job has no reviewed ruleset")
+        elif recommendation_ruleset is not None or recommendation_result_ids is not None:
+            raise ValueError("non-recommendation job carries recommendation evidence")
         return FeishuAnalysisJobRecord(
             job_id=row.job_id,
             run_id=row.run_id,
             event_id=row.event_id,
             event_type=row.event_type,
-            task_type=FeishuAnalysisTask(row.task_type),
+            task_type=task_type,
             job_status=FeishuAnalysisJobStatus(row.job_status),
             job_stage=row.job_stage,
             message_id=row.message_id,
@@ -1548,6 +1768,25 @@ class SqlAlchemyFeishuJobStore:
             default_scenario_profile_id=row.default_scenario_profile_id,
             default_scenario_profile_version=row.default_scenario_profile_version,
             default_scenario_profile_sha256=row.default_scenario_profile_sha256,
+            recommendation_ruleset_id=(
+                recommendation_ruleset[0]
+                if recommendation_ruleset is not None
+                else None
+            ),
+            recommendation_ruleset_version=(
+                recommendation_ruleset[1]
+                if recommendation_ruleset is not None
+                else None
+            ),
+            recommendation_ruleset_sha256=(
+                recommendation_ruleset[2]
+                if recommendation_ruleset is not None
+                else None
+            ),
+            recommendation_upstream_result_ids=recommendation_result_ids,
+            recommendation_upstream_result_ids_sha256=(
+                row.recommendation_upstream_result_ids_sha256
+            ),
         )
 
     @staticmethod
@@ -1615,6 +1854,7 @@ class SqlAlchemyFeishuJobStore:
         request_sha256: str,
         scenario_context_id: str | None,
         profile: tuple[str, str, str] | None,
+        recommendation_ruleset: tuple[str, str, str] | None,
     ) -> _StagedJob:
         if (
             row.job_id is None
@@ -1635,6 +1875,16 @@ class SqlAlchemyFeishuJobStore:
                 row.default_scenario_profile_sha256,
             )
             != (profile if profile is not None else (None, None, None))
+            or (
+                row.recommendation_ruleset_id,
+                row.recommendation_ruleset_version,
+                row.recommendation_ruleset_sha256,
+            )
+            != (
+                recommendation_ruleset
+                if recommendation_ruleset is not None
+                else (None, None, None)
+            )
         ):
             raise FeishuJobOwnershipError(
                 "Feishu sibling conflicts with its persisted sanitized reference"
@@ -1864,6 +2114,9 @@ class SqlAlchemyFeishuSiblingJobService:
         default_scenario_profile_id: str | None = None,
         default_scenario_profile_version: str | None = None,
         default_scenario_profile_sha256: str | None = None,
+        recommendation_ruleset_id: str | None = None,
+        recommendation_ruleset_version: str | None = None,
+        recommendation_ruleset_sha256: str | None = None,
     ) -> str:
         staged = self._store.stage_sibling(
             source_job_id=source_job_id,
@@ -1872,9 +2125,12 @@ class SqlAlchemyFeishuSiblingJobService:
             default_scenario_profile_id=default_scenario_profile_id,
             default_scenario_profile_version=default_scenario_profile_version,
             default_scenario_profile_sha256=default_scenario_profile_sha256,
+            recommendation_ruleset_id=recommendation_ruleset_id,
+            recommendation_ruleset_version=recommendation_ruleset_version,
+            recommendation_ruleset_sha256=recommendation_ruleset_sha256,
             staged_at=self._clock(),
         )
-        if not staged.dispatched:
+        if not staged.dispatched and task is not _RECOMMENDATION_TASK:
             with suppress(Exception):
                 self._dispatch(staged.job_id)
         return staged.job_id
@@ -1889,6 +2145,7 @@ class SqlAlchemyFeishuSiblingJobService:
         for job_id in self._store.list_undispatched_siblings(
             source_job_id=source_job_id,
             limit=limit,
+            prepared_at=self._clock(),
         ):
             try:
                 self._dispatch(job_id)
@@ -2180,7 +2437,8 @@ class FeishuAnalysisJobDelivery:
                 ),
             )
         should_write_bitable = job.bitable_record_id is None or (
-            job.bitable_curve_file_token is None
+            job.task_type in _BITABLE_CURVE_TASKS
+            and job.bitable_curve_file_token is None
             and self._bitable_curve_plotter is not None
             and self._bitable_media_uploader is not None
         )
@@ -2204,7 +2462,7 @@ class FeishuAnalysisJobDelivery:
             fields.update(build_audited_analysis_bitable_fields(analysis_result))
             fields.update(_scenario_bitable_metadata(job, analysis_result))
             fields.update(curve_fields)
-            if analysis_result.warnings:
+            if analysis_result.warnings and job.task_type is not _RECOMMENDATION_TASK:
                 fields["warnings"] = "\n".join(analysis_result.warnings)
             if self._report_link_factory is not None:
                 fields["report_link"] = self._report_link_factory(report_receipt)
@@ -2229,6 +2487,8 @@ class FeishuAnalysisJobDelivery:
         analysis_result: ToolResult,
         checkpoint: Callable[[FeishuJobDeliveryProgress], None] | None,
     ) -> dict[str, object]:
+        if job.task_type not in _BITABLE_CURVE_TASKS:
+            return {}
         return prepare_audited_bitable_curve_fields(
             job=job,
             analysis_result=analysis_result,
@@ -2325,8 +2585,12 @@ class FeishuAnalysisJobWorker:
             [FeishuAnalysisJobRecord, ToolResult], ToolResult
         ],
         project_model_executor: FeishuProjectModelExecutorPort | None = None,
+        engineering_recommendation_executor: (
+            FeishuEngineeringRecommendationExecutorPort | None
+        ) = None,
         delivery: FeishuJobDelivery,
         sibling_planner: FeishuValidatedSiblingPlanner | None = None,
+        sibling_dispatcher: FeishuSiblingJobDispatcher | None = None,
         aily_data_identity_resolver: AilyDataIdentityResolver | None = None,
         clock: Callable[[], datetime],
         heartbeat_interval_seconds: int = 30,
@@ -2348,8 +2612,12 @@ class FeishuAnalysisJobWorker:
         self._result_resolver = result_resolver
         self._report_result_factory = report_result_factory
         self._project_model_executor = project_model_executor
+        self._engineering_recommendation_executor = (
+            engineering_recommendation_executor
+        )
         self._delivery = delivery
         self._sibling_planner = sibling_planner
+        self._sibling_dispatcher = sibling_dispatcher
         self._aily_data_identity_resolver = aily_data_identity_resolver
         self._clock = clock
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
@@ -2461,6 +2729,12 @@ class FeishuAnalysisJobWorker:
             analysis = self._resolve_result(job.analysis_result_id)
             report = self._resolve_result(job.report_result_id)
             return self._deliver_success(job, claim_token, analysis, report)
+
+        if job.task_type is _RECOMMENDATION_TASK:
+            return self._execute_engineering_recommendation(
+                job=job,
+                claim_token=claim_token,
+            )
 
         registration: CanonicalCsvBatchRegistration | None = None
         if job.task_type in _SCENARIO_TASKS:
@@ -2859,6 +3133,47 @@ class FeishuAnalysisJobWorker:
         job = self._store.get(job_id)
         return self._deliver_success(job, claim_token, outcome.analysis_result, report)
 
+    def _execute_engineering_recommendation(
+        self,
+        *,
+        job: FeishuAnalysisJobRecord,
+        claim_token: str,
+    ) -> FeishuAnalysisJobStatus:
+        executor = self._engineering_recommendation_executor
+        if executor is None:
+            return self._reject(
+                job,
+                claim_token,
+                "ENGINEERING_RECOMMENDATION_NOT_CONFIGURED",
+                None,
+            )
+        self._store.update_stage(
+            job_id=job.job_id,
+            claim_token=claim_token,
+            stage=FeishuAnalysisJobStage.RUNNING_TOOL,
+            updated_at=self._now(),
+        )
+        try:
+            analysis, report = executor.execute(job, claim_token=claim_token)
+        except (TypeError, ValueError):
+            return self._reject(
+                job,
+                claim_token,
+                "ENGINEERING_RECOMMENDATION_REJECTED",
+                None,
+            )
+        refreshed = self._store.get(job.job_id)
+        if (
+            refreshed.analysis_result_id != analysis.result_id
+            or refreshed.report_result_id != report.result_id
+        ):
+            return self._fail(
+                refreshed,
+                claim_token,
+                "ENGINEERING_RECOMMENDATION_CHECKPOINT_INVALID",
+            )
+        return self._deliver_success(refreshed, claim_token, analysis, report)
+
     def _execute_project_model(
         self,
         *,
@@ -2982,6 +3297,7 @@ class FeishuAnalysisJobWorker:
             delivery=delivery,
             completed_at=self._now(),
         )
+        self._notify_family_progress(job)
         return FeishuAnalysisJobStatus.SUCCEEDED
 
     def _reject(
@@ -3020,6 +3336,7 @@ class FeishuAnalysisJobWorker:
             delivery=delivery,
             completed_at=self._now(),
         )
+        self._notify_family_progress(job)
         return FeishuAnalysisJobStatus.REJECTED
 
     def _retry(
@@ -3038,6 +3355,7 @@ class FeishuAnalysisJobWorker:
                 delivery=None,
                 completed_at=self._now(),
             )
+            self._notify_family_progress(job)
             return
         self._store.mark_retryable(
             job_id=job.job_id,
@@ -3061,6 +3379,7 @@ class FeishuAnalysisJobWorker:
             delivery=None,
             completed_at=self._now(),
         )
+        self._notify_family_progress(job)
         return FeishuAnalysisJobStatus.FAILED
 
     def _resolve_result(self, result_id: str) -> ToolResult:
@@ -3183,6 +3502,14 @@ class FeishuAnalysisJobWorker:
             return
         self._sibling_planner.plan_validated_siblings(job=job)
 
+    def _notify_family_progress(self, job: FeishuAnalysisJobRecord) -> None:
+        dispatcher = self._sibling_dispatcher
+        if dispatcher is None:
+            return
+        root_job_id = job.source_job_id or job.job_id
+        with suppress(Exception):
+            dispatcher.dispatch_pending(source_job_id=root_job_id)
+
     def _now(self) -> datetime:
         return _utc(self._clock())
 
@@ -3254,6 +3581,70 @@ def _default_scenario_profile_reference(
             field_name="default_scenario_profile_sha256",
         ),
     )
+
+
+def _recommendation_ruleset_reference(
+    *,
+    ruleset_id: str | None,
+    ruleset_version: str | None,
+    ruleset_sha256: str | None,
+) -> tuple[str, str, str] | None:
+    values = (ruleset_id, ruleset_version, ruleset_sha256)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError("engineering recommendation ruleset reference is incomplete")
+    assert ruleset_id is not None
+    assert ruleset_version is not None
+    assert ruleset_sha256 is not None
+    return (
+        _delivery_reference(ruleset_id, field_name="recommendation_ruleset_id"),
+        _delivery_reference(
+            ruleset_version,
+            field_name="recommendation_ruleset_version",
+        ),
+        _sha256_reference(
+            ruleset_sha256,
+            field_name="recommendation_ruleset_sha256",
+        ),
+    )
+
+
+def _recommendation_upstream_result_ids(
+    *,
+    value: object,
+    expected_sha256: str | None,
+) -> tuple[str, ...] | None:
+    if value is None and expected_sha256 is None:
+        return None
+    if value is None or expected_sha256 is None:
+        raise ValueError("recommendation upstream result evidence is incomplete")
+    if not isinstance(value, list) or not value:
+        raise ValueError("recommendation upstream result IDs must be a nonempty list")
+    result_ids: list[str] = []
+    for item in value:
+        try:
+            normalized = str(UUID(item))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise ValueError("recommendation upstream result ID is invalid") from exc
+        if normalized != item:
+            raise ValueError("recommendation upstream result ID must be canonical")
+        result_ids.append(normalized)
+    normalized_ids = tuple(sorted(set(result_ids)))
+    if tuple(result_ids) != normalized_ids:
+        raise ValueError("recommendation upstream result IDs must be sorted and unique")
+    digest = _sha256_reference(
+        expected_sha256,
+        field_name="recommendation_upstream_result_ids_sha256",
+    )
+    if digest != sha256_canonical(
+        {
+            "schema_version": "feishu-recommendation-upstream-results-v1",
+            "result_ids": list(normalized_ids),
+        }
+    ):
+        raise ValueError("recommendation upstream result IDs SHA-256 does not match")
+    return normalized_ids
 
 
 def _delivery_reference(value: object, *, field_name: str) -> str:

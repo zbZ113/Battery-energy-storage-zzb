@@ -7,6 +7,9 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine, select
 
+from quanxin_life.application.engineering_recommendation_rules import (
+    ReviewedEngineeringRecommendationRulesetRegistry,
+)
 from quanxin_life.application.ingestion import (
     CanonicalCsvBatchRegistration,
     InMemoryVerifiedEarlyCycleBatchStore,
@@ -35,6 +38,11 @@ from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
 from quanxin_life.persistence import Base, create_session_factory
 from quanxin_life.persistence.models import FeishuEventReceipt, FeishuScenarioContextRow
 from quanxin_life.scenarios import OperationScenario, ScenarioSegment
+from quanxin_life.tools import StandardToolName
+from quanxin_life.tools.engineering_recommendation import (
+    EngineeringRecommendationRule,
+    VerifiedEngineeringRecommendationRuleset,
+)
 
 NOW = datetime(2026, 8, 13, 13, 0, tzinfo=UTC)
 CSV = (
@@ -132,12 +140,50 @@ def _profile(digest: str) -> ReviewedDefaultScenarioProfile:
     )
 
 
+def _recommendation_registry() -> ReviewedEngineeringRecommendationRulesetRegistry:
+    ruleset = VerifiedEngineeringRecommendationRuleset(
+        ruleset_id="reviewed-release-gate",
+        ruleset_version="reviewed-release-gate-v1",
+        ruleset_manifest_sha256="e" * 64,
+        unresolved_reason_code="EVIDENCE_UNRESOLVED",
+        rules=(
+            EngineeringRecommendationRule(
+                rule_id="reviewed-rul-gate",
+                result_tool_name=StandardToolName.PREDICT_CYCLE_LIFE,
+                result_tool_version="advanced-rul-prediction-tool-v1",
+                value_path="values.artifact.cycle_life_prediction.predicted_cycle",
+                comparator="GTE",
+                threshold=1.0,
+                recheck_reason_code="RUL_RECHECK_REQUIRED",
+            ),
+        ),
+        provenance=(
+            ProvenanceRecord(
+                source_id="reviewed-release-gate",
+                source_kind=SourceKind.OBSERVED,
+                uri="configuration://reviewed-release-gate",
+                sha256="f" * 64,
+                description="Reviewed test ruleset.",
+                created_at=NOW,
+            ),
+        ),
+    )
+    return ReviewedEngineeringRecommendationRulesetRegistry(
+        rulesets=(ruleset,),
+        default_ruleset_id=ruleset.ruleset_id,
+        file_sha256="f" * 64,
+    )
+
+
 def _fixture(
     *,
     registry: ReviewedDefaultScenarioRegistry | None,
     fail_task_index: int | None = None,
     fail_before_persistence: bool = False,
     validation_result_id: str | None = "3a3c972b-a23e-42c3-af76-e39038806f14",
+    recommendation_rulesets: (
+        ReviewedEngineeringRecommendationRulesetRegistry | None
+    ) = None,
 ) -> tuple[
     ProactiveFeishuSiblingPlanner,
     SqlAlchemyFeishuJobStore,
@@ -230,6 +276,7 @@ def _fixture(
         ),
         default_scenarios=registry,
         clock=lambda: NOW,
+        recommendation_rulesets=recommendation_rulesets,
     )
     return planner, jobs, contexts, source_job_id, sessions
 
@@ -263,6 +310,38 @@ def test_planner_creates_soh_and_reviewed_scenario_siblings_idempotently() -> No
     assert contexts.resolve_scenario_context(context.scenario_context_id).cell.cell_format == (
         "cylindrical"
     )
+
+
+def test_planner_stages_configured_recommendation_without_early_dispatch() -> None:
+    digest = sha256(CSV).hexdigest()
+    planner, jobs, _contexts, source_job_id, sessions = _fixture(
+        registry=ReviewedDefaultScenarioRegistry((_profile(digest),)),
+        recommendation_rulesets=_recommendation_registry(),
+    )
+
+    planner.plan_validated_siblings(job=jobs.get(source_job_id))
+    planner.plan_validated_siblings(job=jobs.get(source_job_id))
+
+    with sessions() as session:
+        children = tuple(
+            session.scalars(
+                select(FeishuEventReceipt).where(
+                    FeishuEventReceipt.source_job_id == source_job_id
+                )
+            ).all()
+        )
+    recommendation = next(
+        row
+        for row in children
+        if row.task_type
+        == FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION.value
+    )
+    assert len(children) == 3
+    assert recommendation.job_task_id is None
+    assert recommendation.recommendation_ruleset_id == "reviewed-release-gate"
+    assert recommendation.recommendation_ruleset_version == "reviewed-release-gate-v1"
+    assert recommendation.recommendation_ruleset_sha256 == "e" * 64
+    assert recommendation.recommendation_upstream_result_ids_json is None
 
 
 def test_planner_without_profile_creates_structured_parameter_request() -> None:

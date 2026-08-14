@@ -27,6 +27,8 @@ from quanxin_life.tools.cell_metadata_evidence import (
     validate_versioned_cell_metadata_evidence,
 )
 
+from .recommendation_presentation import engineering_recommendation_presentation
+
 
 class AnalysisBitableProjectionError(ValueError):
     """Raised when audited values cannot form a scalar Bitable projection."""
@@ -47,6 +49,8 @@ def build_audited_analysis_bitable_fields(
         "project_storage_lifetime",
     }:
         return _scenario_fields(checked)
+    if checked.tool_name == "make_engineering_recommendation":
+        return _recommendation_fields(checked)
     raise AnalysisBitableProjectionError(
         "ToolResult has no reviewed Bitable business projection"
     )
@@ -177,6 +181,22 @@ def _scenario_fields(result: ToolResult) -> dict[str, object]:
             projection.get("scenario_version"),
             label="scenario_version",
         ),
+    }
+
+
+def _recommendation_fields(result: ToolResult) -> dict[str, object]:
+    try:
+        presentation = engineering_recommendation_presentation(result)
+    except ValueError as exc:
+        raise AnalysisBitableProjectionError(
+            "engineering recommendation result is invalid"
+        ) from exc
+    return {
+        "analysis_summary": "已生成工程综合建议",
+        "applicability": "建议由受审规则集生成。阈值与证据路径见详细报告",
+        "recommendation": presentation.label,
+        "recommendation_reason": presentation.reason,
+        "recommendation_ruleset_version": presentation.ruleset_version,
     }
 
 

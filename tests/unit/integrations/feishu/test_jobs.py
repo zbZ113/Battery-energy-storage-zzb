@@ -20,6 +20,7 @@ from quanxin_life.integrations.feishu.jobs import (
     FeishuJobClaimStatus,
     FeishuJobDeliveryReceipt,
     FeishuJobDispatchReceipt,
+    FeishuJobOwnershipError,
     SqlAlchemyFeishuJobReplayService,
     SqlAlchemyFeishuJobRouter,
     SqlAlchemyFeishuJobStore,
@@ -203,6 +204,115 @@ def test_sibling_dispatch_recovers_after_broker_failure() -> None:
     assert pending == (sibling_id,)
     assert service.dispatch_pending(source_job_id=source_job_id) == (pending[0],)
     assert jobs.get(pending[0]).job_status is FeishuAnalysisJobStatus.PENDING
+
+
+def test_recommendation_sibling_waits_for_family_and_freezes_same_root_results() -> None:
+    _receipts, jobs, session_factory = _fixture()
+    source_job_id = _seed_completed_source_job(session_factory)
+    queue = _Queue()
+    service = SqlAlchemyFeishuSiblingJobService(
+        jobs,
+        queue=queue,
+        clock=lambda: NOW,
+    )
+    soh_id = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+    )
+    scenario_id = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+    )
+
+    recommendation_id = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+        recommendation_ruleset_id="reviewed-release-gate",
+        recommendation_ruleset_version="reviewed-release-gate-v1",
+        recommendation_ruleset_sha256="e" * 64,
+    )
+    repeated_id = service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+        recommendation_ruleset_id="reviewed-release-gate",
+        recommendation_ruleset_version="reviewed-release-gate-v1",
+        recommendation_ruleset_sha256="e" * 64,
+    )
+
+    assert repeated_id == recommendation_id
+    assert queue.job_ids == [soh_id, scenario_id]
+    waiting = jobs.get(recommendation_id)
+    assert waiting.recommendation_ruleset_id == "reviewed-release-gate"
+    assert waiting.recommendation_ruleset_version == "reviewed-release-gate-v1"
+    assert waiting.recommendation_ruleset_sha256 == "e" * 64
+    assert waiting.recommendation_upstream_result_ids is None
+    assert service.dispatch_pending(source_job_id=source_job_id) == ()
+
+    result_ids = {
+        "validation": "3a3c972b-a23e-42c3-af76-e39038806f14",
+        "rul": "3a3c972b-a23e-42c3-af76-e39038806f15",
+        "soh": "3a3c972b-a23e-42c3-af76-e39038806f16",
+        "scenario": "3a3c972b-a23e-42c3-af76-e39038806f17",
+    }
+    with session_factory() as session:
+        root = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == source_job_id)
+        )
+        soh = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == soh_id)
+        )
+        scenario = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == scenario_id)
+        )
+        assert root is not None and soh is not None and scenario is not None
+        root.analysis_result_id = result_ids["rul"]
+        soh.job_status = FeishuAnalysisJobStatus.SUCCEEDED.value
+        soh.job_stage = FeishuAnalysisJobStage.SUCCEEDED.value
+        soh.analysis_result_id = result_ids["soh"]
+        scenario.job_status = FeishuAnalysisJobStatus.SUCCEEDED.value
+        scenario.job_stage = FeishuAnalysisJobStage.SUCCEEDED.value
+        scenario.analysis_result_id = result_ids["scenario"]
+        session.commit()
+
+    assert service.dispatch_pending(source_job_id=source_job_id) == (
+        recommendation_id,
+    )
+    frozen = jobs.get(recommendation_id)
+    expected_ids = tuple(sorted(result_ids.values()))
+    assert frozen.recommendation_upstream_result_ids == expected_ids
+    assert frozen.recommendation_upstream_result_ids_sha256 == sha256_canonical(
+        {
+            "schema_version": "feishu-recommendation-upstream-results-v1",
+            "result_ids": list(expected_ids),
+        }
+    )
+    assert queue.job_ids == [soh_id, scenario_id, recommendation_id]
+
+
+def test_recommendation_sibling_rejects_ruleset_substitution() -> None:
+    _receipts, jobs, session_factory = _fixture()
+    source_job_id = _seed_completed_source_job(session_factory)
+    service = SqlAlchemyFeishuSiblingJobService(
+        jobs,
+        queue=_Queue(),
+        clock=lambda: NOW,
+    )
+    service.stage_sibling(
+        source_job_id=source_job_id,
+        task=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+        recommendation_ruleset_id="reviewed-release-gate",
+        recommendation_ruleset_version="reviewed-release-gate-v1",
+        recommendation_ruleset_sha256="e" * 64,
+    )
+
+    with pytest.raises(FeishuJobOwnershipError, match="persisted sanitized reference"):
+        service.stage_sibling(
+            source_job_id=source_job_id,
+            task=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+            recommendation_ruleset_id="reviewed-release-gate",
+            recommendation_ruleset_version="reviewed-release-gate-v2",
+            recommendation_ruleset_sha256="f" * 64,
+        )
 
 
 def test_sibling_store_rejects_replay_job_as_a_proactive_source() -> None:

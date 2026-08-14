@@ -611,3 +611,25 @@ def test_rejection_status_card_translates_reviewed_reason_code() -> None:
     assert "MODEL_ROUTE_NOT_ACTIVATED" not in rendered
     assert "predict_cycle_life" not in rendered
     assert "run-safe" not in rendered
+
+
+def test_engineering_recommendation_card_hides_thresholds_and_reason_codes() -> None:
+    from tests.unit.integrations.feishu.test_analysis_bitable import (
+        _recommendation_result,
+    )
+
+    result = _recommendation_result()
+    card = AuditedCardBuilder(
+        AuditLedger((result,)),
+        authorizer=_Authorizer(),
+        binding_verifier=_BindingVerifier(),
+    ).build_result_card(run_id="run-safe", result_id=result.result_id)
+    rendered = json.dumps(card, ensure_ascii=False)
+
+    assert "工程综合建议" in rendered
+    assert "建议复检" in rendered
+    assert "至少一项受审规则未通过, 建议复检" in rendered
+    assert "reviewed-release-gate-v1" in rendered
+    assert "900" not in rendered
+    assert "850" not in rendered
+    assert "RUL_BELOW_REVIEWED_GATE" not in rendered

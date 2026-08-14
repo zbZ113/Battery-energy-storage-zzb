@@ -20,6 +20,11 @@ from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
 from quanxin_life.reporting.contracts import (
     AUDITED_REPORT_TOOL_NAME,
     AUDITED_REPORT_TOOL_VERSION,
+    RECOMMENDATION_REPORT_RENDERER_VERSION,
+)
+
+_SUPPORTED_REPORT_RENDERERS = frozenset(
+    {REPORTING_VERSION, RECOMMENDATION_REPORT_RENDERER_VERSION}
 )
 
 
@@ -152,7 +157,7 @@ class AuditedReportArtifactExporter:
         if (
             result.tool_name != AUDITED_REPORT_TOOL_NAME
             or result.tool_version != AUDITED_REPORT_TOOL_VERSION
-            or result.model_version != REPORTING_VERSION
+            or result.model_version not in _SUPPORTED_REPORT_RENDERERS
         ):
             raise ValueError("artifact source must be a supported audited report")
         return result
@@ -170,7 +175,10 @@ def _report_content(result: ToolResult) -> tuple[str, str]:
         raise ValueError("audited report report_id must be a UUID") from exc
     if not isinstance(markdown, str) or not markdown.strip():
         raise ValueError("audited report result contains no Markdown")
-    if rendering_version != REPORTING_VERSION:
+    if (
+        rendering_version not in _SUPPORTED_REPORT_RENDERERS
+        or rendering_version != result.model_version
+    ):
         raise ValueError("audited report rendering version is unsupported")
     return report_id, markdown
 

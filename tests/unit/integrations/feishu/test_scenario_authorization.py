@@ -3,12 +3,19 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from quanxin_life.application.feishu_engineering_recommendation import (
+    build_engineering_recommendation_report_result,
+)
 from quanxin_life.audit import AuditLedger
 from quanxin_life.core import EvidenceLevel, ProvenanceRecord, SourceKind, ToolResult
 from quanxin_life.integrations.feishu import (
     AuditedScenarioResultAuthorizer,
     BlastScenarioResultAuthorizer,
 )
+from quanxin_life.integrations.feishu.delivery_contract import (
+    validate_delivery_results,
+)
+from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
 from quanxin_life.scenarios import (
     OperationScenario,
     ScenarioCellDescriptor,
@@ -587,3 +594,44 @@ def test_advanced_soh_authorization_enforces_metadata_artifact_version() -> None
 
     assert authorizer.authorize(missing_v2).allowed is False
     assert authorizer.authorize(legacy_v1).allowed is True
+
+
+def test_audited_authorizer_allows_recommendation_and_exact_report_only() -> None:
+    from tests.unit.integrations.feishu.test_analysis_bitable import (
+        _recommendation_result,
+    )
+
+    recommendation = _recommendation_result()
+    report = build_engineering_recommendation_report_result(
+        recommendation,
+        clock=lambda: NOW,
+    )
+    ledger = AuditLedger((recommendation, report))
+    authorizer = AuditedScenarioResultAuthorizer(result_resolver=ledger)
+
+    recommendation_authorization = authorizer.authorize(recommendation)
+    report_authorization = authorizer.authorize(report)
+
+    assert recommendation_authorization.allowed is True
+    assert recommendation_authorization.evidence_level is EvidenceLevel.DOMAIN_KNOWLEDGE
+    assert report_authorization.allowed is True
+    assert report_authorization.route_id == recommendation_authorization.route_id
+    delivered = validate_delivery_results(
+        task=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+        expected_analysis_result_id=recommendation.result_id,
+        expected_report_result_id=report.result_id,
+        analysis_result=recommendation,
+        report_result=report,
+        authorizer=authorizer,
+    )
+    assert delivered == recommendation_authorization
+
+    tampered = recommendation.model_copy(
+        update={
+            "values": {
+                **recommendation.values,
+                "recommendation": "ADOPTABLE",
+            }
+        }
+    )
+    assert authorizer.authorize(tampered).allowed is False

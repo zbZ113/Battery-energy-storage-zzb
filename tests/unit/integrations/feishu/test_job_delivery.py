@@ -164,6 +164,21 @@ class _SohAuthorizer:
         )
 
 
+class _RecommendationAuthorizer:
+    def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
+        assert result.tool_name in {
+            "make_engineering_recommendation",
+            "generate_audited_report",
+        }
+        return AuditedResultAuthorization(
+            allowed=True,
+            route_id="reviewed-release-gate",
+            activation_status="REVIEWED_RULESET",
+            evidence_level=EvidenceLevel.DOMAIN_KNOWLEDGE,
+            supported_domain="same-root-reviewed-results",
+        )
+
+
 class _ScenarioPlotter:
     def render(self, result: ToolResult) -> FeishuScenarioPlotArtifact:
         payload = b"\x89PNG\r\n\x1a\ncontrolled"
@@ -864,3 +879,56 @@ def test_success_delivery_replay_skips_checkpointed_external_actions() -> None:
         len(bitable.fields),
         len(cards.calls),
     ) == before
+
+
+def test_recommendation_delivery_writes_chinese_fields_without_a_curve_or_codes() -> None:
+    from quanxin_life.application.feishu_engineering_recommendation import (
+        build_engineering_recommendation_report_result,
+    )
+    from tests.unit.integrations.feishu.test_analysis_bitable import (
+        _recommendation_result,
+    )
+
+    analysis = _recommendation_result()
+    report = build_engineering_recommendation_report_result(
+        analysis,
+        clock=lambda: NOW,
+    )
+    upstream_ids = analysis.values["authorized_upstream_result_ids"]
+    assert isinstance(upstream_ids, list)
+    job = replace(
+        _job(task_type=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION),
+        analysis_result_id=analysis.result_id,
+        report_result_id=report.result_id,
+        source_job_id="3a3c972b-a23e-42c3-af76-e39038806f14",
+        recommendation_ruleset_id="reviewed-release-gate",
+        recommendation_ruleset_version="reviewed-release-gate-v1",
+        recommendation_ruleset_sha256="e" * 64,
+        recommendation_upstream_result_ids=tuple(upstream_ids),
+        recommendation_upstream_result_ids_sha256="f" * 64,
+    )
+    media = _MediaUploader()
+    bitable = _Bitable()
+    delivery = FeishuAnalysisJobDelivery(
+        client=_Client(),
+        card_builder=_CardBuilder(),
+        bitable_writer=bitable,
+        report_delivery=_ReportDelivery(),
+        result_authorizer=_RecommendationAuthorizer(),
+        bitable_curve_plotter=_RulPlotter(),
+        bitable_media_uploader=media,
+    )
+
+    delivery.deliver_success(
+        job=job,
+        analysis_result=analysis,
+        report_result=report,
+    )
+
+    fields = bitable.fields[-1]
+    assert fields["recommendation"] == "建议复检"
+    assert fields["recommendation_reason"] == "至少一项受审规则未通过, 建议复检"
+    assert fields["recommendation_ruleset_version"] == "reviewed-release-gate-v1"
+    assert "warnings" not in fields
+    assert "curve_attachment" not in fields
+    assert media.calls == []

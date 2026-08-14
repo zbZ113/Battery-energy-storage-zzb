@@ -1311,6 +1311,24 @@ class FeishuEventReceipt(Base):
             "length(default_scenario_profile_sha256) = 64)",
             name="ck_feishu_event_receipt_default_scenario_profile",
         ),
+        CheckConstraint(
+            "(recommendation_ruleset_id IS NULL AND "
+            "recommendation_ruleset_version IS NULL AND "
+            "recommendation_ruleset_sha256 IS NULL) OR "
+            "(recommendation_ruleset_id IS NOT NULL AND "
+            "recommendation_ruleset_version IS NOT NULL AND "
+            "recommendation_ruleset_sha256 IS NOT NULL AND "
+            "length(recommendation_ruleset_sha256) = 64)",
+            name="ck_feishu_event_receipt_recommendation_ruleset",
+        ),
+        CheckConstraint(
+            "(recommendation_upstream_result_ids_json IS NULL AND "
+            "recommendation_upstream_result_ids_sha256 IS NULL) OR "
+            "(recommendation_upstream_result_ids_json IS NOT NULL AND "
+            "recommendation_upstream_result_ids_sha256 IS NOT NULL AND "
+            "length(recommendation_upstream_result_ids_sha256) = 64)",
+            name="ck_feishu_event_receipt_recommendation_upstream_results",
+        ),
         Index("ix_feishu_receipts_received_at", "received_at"),
         Index("ix_feishu_receipts_job_status_updated", "job_status", "job_updated_at"),
         Index("ix_feishu_receipts_scenario_context_id", "scenario_context_id"),
@@ -1353,6 +1371,15 @@ class FeishuEventReceipt(Base):
     default_scenario_profile_id: Mapped[str | None] = mapped_column(String(200))
     default_scenario_profile_version: Mapped[str | None] = mapped_column(String(100))
     default_scenario_profile_sha256: Mapped[str | None] = mapped_column(String(64))
+    recommendation_ruleset_id: Mapped[str | None] = mapped_column(String(200))
+    recommendation_ruleset_version: Mapped[str | None] = mapped_column(String(200))
+    recommendation_ruleset_sha256: Mapped[str | None] = mapped_column(String(64))
+    recommendation_upstream_result_ids_json: Mapped[list[str] | None] = mapped_column(
+        JSON
+    )
+    recommendation_upstream_result_ids_sha256: Mapped[str | None] = mapped_column(
+        String(64)
+    )
     job_claim_token: Mapped[str | None] = mapped_column(String(64))
     job_attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     job_lease_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

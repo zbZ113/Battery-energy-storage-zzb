@@ -78,6 +78,7 @@ _FEISHU_PROJECT_ANALYSIS_TASKS = frozenset(
     {
         "predict_cycle_life",
         "predict_soh_trajectory",
+        "make_engineering_recommendation",
     }
 )
 ADVANCED_CALIBRATION_SAMPLE_MANIFEST_SCHEMA_VERSION = (

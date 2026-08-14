@@ -14,6 +14,11 @@ from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
 from quanxin_life.reporting.contracts import (
     AUDITED_REPORT_TOOL_NAME,
     AUDITED_REPORT_TOOL_VERSION,
+    RECOMMENDATION_REPORT_RENDERER_VERSION,
+)
+
+_SUPPORTED_REPORT_RENDERERS = frozenset(
+    {REPORTING_VERSION, RECOMMENDATION_REPORT_RENDERER_VERSION}
 )
 
 _SAFE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}\Z")
@@ -100,7 +105,9 @@ class FeishuReportDelivery:
         if (
             source_result.tool_name != AUDITED_REPORT_TOOL_NAME
             or source_result.tool_version != AUDITED_REPORT_TOOL_VERSION
-            or source_result.model_version != REPORTING_VERSION
+            or source_result.model_version not in _SUPPORTED_REPORT_RENDERERS
+            or source_result.values.get("rendering_version")
+            != source_result.model_version
         ):
             raise FeishuReportDeliveryError(
                 "source is not a supported audited report ToolResult"

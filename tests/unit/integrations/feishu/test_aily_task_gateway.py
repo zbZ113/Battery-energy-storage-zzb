@@ -22,6 +22,7 @@ from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobStatus,
     FeishuJobDeliveryReceipt,
     SqlAlchemyFeishuJobStore,
+    SqlAlchemyFeishuSiblingJobService,
 )
 from quanxin_life.integrations.feishu.scenario_contexts import (
     SqlAlchemyFeishuScenarioContextStore,
@@ -362,6 +363,42 @@ def test_gateway_hides_non_aily_jobs() -> None:
 
     with pytest.raises(LookupError, match="Aily"):
         gateway.get_analysis_task(feishu_job_id)
+
+
+def test_gateway_exposes_staged_recommendation_from_root_only_request() -> None:
+    gateway, jobs, _contexts, app, _sessions, _context_id = _fixture()
+    recommendation_id = SqlAlchemyFeishuSiblingJobService(
+        jobs,
+        queue=CeleryFeishuJobQueue(app=app),
+        clock=lambda: NOW,
+    ).stage_sibling(
+        source_job_id=SOURCE_RUN_ID,
+        task=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+        recommendation_ruleset_id="reviewed-release-gate",
+        recommendation_ruleset_version="reviewed-release-gate-v1",
+        recommendation_ruleset_sha256="e" * 64,
+    )
+
+    state = gateway.create_analysis_task(
+        AilyCreateAnalysisTaskRequest(
+            task_type=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+            source_run_id=SOURCE_RUN_ID,
+        )
+    )
+
+    assert state.run_id == recommendation_id
+    assert state.status is AgentRunStatus.PLANNING
+    assert gateway.get_analysis_task(recommendation_id) == state
+    assert app.calls == []
+
+
+def test_aily_recommendation_request_rejects_caller_supplied_data_references() -> None:
+    with pytest.raises(ValueError, match="recommendation"):
+        AilyCreateAnalysisTaskRequest(
+            task_type=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+            source_run_id=SOURCE_RUN_ID,
+            data_batch_id=BATCH_ID,
+        )
 
 
 @pytest.mark.parametrize(

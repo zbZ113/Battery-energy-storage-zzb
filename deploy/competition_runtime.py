@@ -359,6 +359,7 @@ def create_competition_runtime(
             default_scenarios=load_feishu_default_scenario_profiles(
                 integration.default_scenario_profiles_file
             ),
+            recommendation_rulesets=recommendation_rulesets,
             project_model_dependencies=FeishuProjectModelDependencies(
                 context_service=context_service,
                 project_ledger=ledger,

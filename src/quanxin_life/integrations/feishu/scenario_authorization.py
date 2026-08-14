@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
-from typing import Protocol, TypedDict
+from numbers import Real
+from typing import Protocol, TypedDict, cast
 from uuid import UUID
 
 from quanxin_life.core import (
@@ -14,10 +16,14 @@ from quanxin_life.core import (
     PredictionTarget,
     SourceKind,
     ToolResult,
+    sha256_canonical,
 )
 from quanxin_life.data.schemas import DataQualityReport
 from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
-from quanxin_life.reporting.contracts import AUDITED_REPORT_TOOL_VERSION
+from quanxin_life.reporting.contracts import (
+    AUDITED_REPORT_TOOL_VERSION,
+    RECOMMENDATION_REPORT_RENDERER_VERSION,
+)
 from quanxin_life.scenarios import BlastRouteManifest, load_packaged_blast_route_catalog
 from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
@@ -42,6 +48,12 @@ from quanxin_life.tools.cell_metadata_evidence import (
 from quanxin_life.tools.data_quality import (
     DATA_QUALITY_MODEL_VERSION,
     DATA_QUALITY_TOOL_VERSION,
+)
+from quanxin_life.tools.engineering_recommendation import (
+    ENGINEERING_RECOMMENDATION_FEATURE_VERSION,
+    ENGINEERING_RECOMMENDATION_MODEL_VERSION,
+    ENGINEERING_RECOMMENDATION_TOOL_VERSION,
+    EngineeringRecommendationToolInput,
 )
 
 from .cards import AuditedResultAuthorization, AuditedResultAuthorizer
@@ -68,6 +80,9 @@ _ADVANCED_SOH_DOMAIN = "activated project-bound MATR finite SOH route"
 _ADVANCED_SOH_UNRESOLVED_ROUTE = "unresolved-advanced-soh-route"
 _ADVANCED_SOH_SHA_FIELDS = _ADVANCED_RUL_SHA_FIELDS
 _DATA_QUALITY_DOMAIN = "registered battery cycle-data validation rules"
+_ENGINEERING_RECOMMENDATION_DOMAIN = (
+    "same-root reviewed ToolResult engineering decision support"
+)
 
 
 class _AuthorizationBase(TypedDict):
@@ -173,10 +188,11 @@ class AuditedScenarioResultAuthorizer:
             return _authorize_advanced_rul(result)
         if result.tool_name == "predict_soh_trajectory":
             return _authorize_advanced_soh(result)
+        if result.tool_name == "make_engineering_recommendation":
+            return _authorize_engineering_recommendation(result)
         if (
             result.tool_name != "generate_audited_report"
             or result.tool_version != AUDITED_REPORT_TOOL_VERSION
-            or result.model_version != REPORTING_VERSION
         ):
             return _rejected("AUDITED_RESULT_NOT_SUPPORTED")
         upstream_ids = result.values.get("upstream_result_ids")
@@ -195,8 +211,12 @@ class AuditedScenarioResultAuthorizer:
         except (AttributeError, TypeError, ValueError):
             return _rejected("AUDITED_REPORT_UPSTREAM_INVALID")
         if upstream.tool_name in _SCENARIO_TOOL_VERSIONS:
+            if result.model_version != REPORTING_VERSION:
+                return _rejected("AUDITED_REPORT_UPSTREAM_INVALID")
             authorization = self._scenario_authorizer.authorize(upstream)
         elif upstream.tool_name == "predict_cycle_life":
+            if result.model_version != REPORTING_VERSION:
+                return _rejected("AUDITED_REPORT_UPSTREAM_INVALID")
             authorization = _authorize_advanced_rul(upstream)
             if authorization.allowed and not _matches_advanced_rul_report(
                 result,
@@ -207,6 +227,8 @@ class AuditedScenarioResultAuthorizer:
                     route_id=authorization.route_id,
                 )
         elif upstream.tool_name == "predict_soh_trajectory":
+            if result.model_version != REPORTING_VERSION:
+                return _rejected("AUDITED_REPORT_UPSTREAM_INVALID")
             authorization = _authorize_advanced_soh(upstream)
             if authorization.allowed and not _matches_advanced_soh_report(
                 result,
@@ -215,6 +237,19 @@ class AuditedScenarioResultAuthorizer:
                 return _advanced_soh_rejected(
                     "ADVANCED_SOH_REPORT_CONTRACT_MISMATCH",
                     route_id=authorization.route_id,
+                )
+        elif upstream.tool_name == "make_engineering_recommendation":
+            authorization = _authorize_engineering_recommendation(upstream)
+            if authorization.allowed and not _matches_recommendation_report(
+                result,
+                upstream,
+            ):
+                return _rejected(
+                    "ENGINEERING_RECOMMENDATION_REPORT_CONTRACT_MISMATCH",
+                    route_id=authorization.route_id,
+                    activation_status=authorization.activation_status,
+                    evidence_level=authorization.evidence_level,
+                    supported_domain=authorization.supported_domain,
                 )
         else:
             return _rejected("AUDITED_REPORT_UPSTREAM_INVALID")
@@ -418,6 +453,256 @@ def _authorize_advanced_soh(result: ToolResult) -> AuditedResultAuthorization:
         evidence_level=EvidenceLevel.MODEL_INFERENCE,
         supported_domain=_ADVANCED_SOH_DOMAIN,
         rejection_reason=None,
+    )
+
+
+def _authorize_engineering_recommendation(
+    result: ToolResult,
+) -> AuditedResultAuthorization:
+    try:
+        checked = ToolResult.model_validate(result.model_dump(mode="json"))
+        values = checked.values
+        if set(values) != {
+            "recommendation",
+            "ruleset_id",
+            "ruleset_version",
+            "ruleset_manifest_sha256",
+            "authorized_upstream_result_ids",
+            "authorized_result_selectors",
+            "evaluated_value_paths",
+            "threshold_evidence",
+            "reason_codes",
+            "resolution_issues",
+        }:
+            raise ValueError("recommendation values are incomplete")
+        ruleset_id = _safe_recommendation_text(values.get("ruleset_id"))
+        _safe_recommendation_text(values.get("ruleset_version"))
+        if not _sha256(values.get("ruleset_manifest_sha256")):
+            raise ValueError("ruleset manifest is invalid")
+        result_ids_value = values.get("authorized_upstream_result_ids")
+        if not isinstance(result_ids_value, list):
+            raise ValueError("authorized result IDs are invalid")
+        input_value = EngineeringRecommendationToolInput(
+            result_ids=tuple(result_ids_value),
+            ruleset_id=ruleset_id,
+        )
+        if list(input_value.result_ids) != result_ids_value:
+            raise ValueError("authorized result IDs are not canonical")
+        selectors = _recommendation_selectors(
+            values.get("authorized_result_selectors")
+        )
+        evaluated_paths = _recommendation_text_list(
+            values.get("evaluated_value_paths")
+        )
+        evidence = _recommendation_threshold_evidence(
+            values.get("threshold_evidence"),
+            result_ids=frozenset(input_value.result_ids),
+            selectors=selectors,
+        )
+        if tuple(item["value_path"] for item in evidence) != evaluated_paths:
+            raise ValueError("evaluated recommendation paths are inconsistent")
+        reason_codes = _recommendation_text_list(values.get("reason_codes"))
+        resolution_issues = _recommendation_text_list(
+            values.get("resolution_issues")
+        )
+        if checked.warnings != [*reason_codes, *resolution_issues]:
+            raise ValueError("recommendation warnings are inconsistent")
+        failed_codes = tuple(
+            dict.fromkeys(
+                cast(str, item["recheck_reason_code"])
+                for item in evidence
+                if item["comparison_passed"] is False
+            )
+        )
+        outcome = values.get("recommendation")
+        if resolution_issues:
+            valid_outcome = outcome == "UNRESOLVED" and bool(reason_codes)
+        elif failed_codes:
+            valid_outcome = (
+                outcome == "RECHECK_REQUIRED" and reason_codes == failed_codes
+            )
+        else:
+            valid_outcome = outcome == "ADOPTABLE" and not reason_codes
+        if not valid_outcome:
+            raise ValueError("recommendation outcome is inconsistent")
+    except (AttributeError, TypeError, ValueError):
+        return _engineering_recommendation_rejected(
+            "ENGINEERING_RECOMMENDATION_RESULT_CONTRACT_MISMATCH"
+        )
+    if (
+        checked.tool_version != ENGINEERING_RECOMMENDATION_TOOL_VERSION
+        or checked.model_version != ENGINEERING_RECOMMENDATION_MODEL_VERSION
+        or checked.feature_version != ENGINEERING_RECOMMENDATION_FEATURE_VERSION
+        or checked.input_hash
+        != sha256_canonical(input_value.model_dump(mode="json"))
+        or checked.uncertainty is not None
+    ):
+        return _engineering_recommendation_rejected(
+            "ENGINEERING_RECOMMENDATION_RESULT_CONTRACT_MISMATCH",
+            route_id=ruleset_id,
+        )
+    return AuditedResultAuthorization(
+        allowed=True,
+        route_id=ruleset_id,
+        activation_status="REVIEWED_RULESET",
+        evidence_level=EvidenceLevel.DOMAIN_KNOWLEDGE,
+        supported_domain=_ENGINEERING_RECOMMENDATION_DOMAIN,
+        rejection_reason=None,
+    )
+
+
+def _engineering_recommendation_rejected(
+    reason: str,
+    *,
+    route_id: str = "unresolved-engineering-recommendation-ruleset",
+) -> AuditedResultAuthorization:
+    return _rejected(
+        reason,
+        route_id=route_id,
+        activation_status="NOT_ACTIVATED",
+        evidence_level=EvidenceLevel.DOMAIN_KNOWLEDGE,
+        supported_domain=_ENGINEERING_RECOMMENDATION_DOMAIN,
+    )
+
+
+def _recommendation_selectors(value: object) -> frozenset[tuple[str, str]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("recommendation selectors are invalid")
+    selectors: list[tuple[str, str]] = []
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {
+            "result_tool_name",
+            "result_tool_version",
+        }:
+            raise ValueError("recommendation selector is invalid")
+        selectors.append(
+            (
+                _safe_recommendation_text(item.get("result_tool_name")),
+                _safe_recommendation_text(item.get("result_tool_version")),
+            )
+        )
+    if len(selectors) != len(set(selectors)):
+        raise ValueError("recommendation selectors are duplicated")
+    return frozenset(selectors)
+
+
+def _recommendation_threshold_evidence(
+    value: object,
+    *,
+    result_ids: frozenset[str],
+    selectors: frozenset[tuple[str, str]],
+) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(value, list):
+        raise ValueError("recommendation threshold evidence is invalid")
+    checked: list[Mapping[str, object]] = []
+    rule_ids: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {
+            "rule_id",
+            "result_id",
+            "result_tool_name",
+            "result_tool_version",
+            "value_path",
+            "comparator",
+            "threshold",
+            "actual_value",
+            "comparison_passed",
+            "recheck_reason_code",
+        }:
+            raise ValueError("recommendation threshold entry is invalid")
+        rule_id = _safe_recommendation_text(item.get("rule_id"))
+        result_id = _safe_recommendation_text(item.get("result_id"))
+        selector = (
+            _safe_recommendation_text(item.get("result_tool_name")),
+            _safe_recommendation_text(item.get("result_tool_version")),
+        )
+        value_path = _safe_recommendation_text(item.get("value_path"))
+        comparator = _safe_recommendation_text(item.get("comparator"))
+        threshold = _finite_recommendation_number(item.get("threshold"))
+        actual = _finite_recommendation_number(item.get("actual_value"))
+        comparison_passed = item.get("comparison_passed")
+        _safe_recommendation_text(item.get("recheck_reason_code"))
+        if (
+            rule_id in rule_ids
+            or result_id not in result_ids
+            or selector not in selectors
+            or not value_path.startswith("values.")
+            or not isinstance(comparison_passed, bool)
+            or comparison_passed
+            is not _recommendation_compare(actual, comparator, threshold)
+        ):
+            raise ValueError("recommendation threshold evidence is inconsistent")
+        rule_ids.add(rule_id)
+        checked.append(item)
+    return tuple(checked)
+
+
+def _recommendation_compare(actual: float, comparator: str, threshold: float) -> bool:
+    comparisons = {
+        "LT": actual < threshold,
+        "LTE": actual <= threshold,
+        "EQ": actual == threshold,
+        "NE": actual != threshold,
+        "GTE": actual >= threshold,
+        "GT": actual > threshold,
+    }
+    try:
+        return comparisons[comparator]
+    except KeyError as exc:
+        raise ValueError("recommendation comparator is invalid") from exc
+
+
+def _finite_recommendation_number(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError("recommendation numeric evidence is invalid")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("recommendation numeric evidence is not finite")
+    return number
+
+
+def _recommendation_text_list(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError("recommendation text evidence is invalid")
+    normalized = tuple(_safe_recommendation_text(item) for item in value)
+    if len(normalized) != len(set(normalized)):
+        raise ValueError("recommendation text evidence is duplicated")
+    return normalized
+
+
+def _safe_recommendation_text(value: object) -> str:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if (
+        not normalized
+        or len(normalized) > 500
+        or any(ord(character) < 32 for character in normalized)
+    ):
+        raise ValueError("recommendation text evidence is invalid")
+    return normalized
+
+
+def _matches_recommendation_report(
+    report: ToolResult,
+    upstream: ToolResult,
+) -> bool:
+    markdown = report.values.get("markdown")
+    return (
+        report.model_version == RECOMMENDATION_REPORT_RENDERER_VERSION
+        and report.data_version == upstream.data_version
+        and report.feature_version == upstream.feature_version
+        and report.input_hash
+        == sha256_canonical(
+            {
+                "schema_version": "engineering-recommendation-report-input-v1",
+                "analysis_result_id": upstream.result_id,
+                "analysis_input_hash": upstream.input_hash,
+            }
+        )
+        and report.values.get("report_id") == report.result_id
+        and report.values.get("rendering_version")
+        == RECOMMENDATION_REPORT_RENDERER_VERSION
+        and isinstance(markdown, str)
+        and markdown.startswith("# 工程综合建议审计报告\n")
     )
 
 

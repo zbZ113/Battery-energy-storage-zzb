@@ -14,6 +14,9 @@ _TASK_TOOL_NAMES = {
     FeishuAnalysisTask.PROJECT_STORAGE_LIFETIME: "project_storage_lifetime",
     FeishuAnalysisTask.INGEST_OBSERVED_SOH: "ingest_newly_observed_soh",
     FeishuAnalysisTask.UPDATE_TRAJECTORY: "update_cell_parameters",
+    FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION: (
+        "make_engineering_recommendation"
+    ),
 }
 
 

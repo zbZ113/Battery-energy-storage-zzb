@@ -230,6 +230,26 @@ def test_chinese_profile_maps_business_fields_and_audited_attachment() -> None:
     assert client.remote_fields["曲线模板"] == "FINITE_SOH_CURVE"
 
 
+def test_chinese_profile_names_recommendation_business_fields() -> None:
+    assert CHINESE_ANALYSIS_BITABLE_PROFILE.field_names["recommendation"] == "综合建议"
+    assert (
+        CHINESE_ANALYSIS_BITABLE_PROFILE.field_names["recommendation_reason"]
+        == "建议原因"
+    )
+    assert (
+        CHINESE_ANALYSIS_BITABLE_PROFILE.field_names[
+            "recommendation_ruleset_version"
+        ]
+        == "规则集版本"
+    )
+    assert (
+        CHINESE_ANALYSIS_BITABLE_PROFILE.value_labels["task_type"][
+            "make_engineering_recommendation"
+        ]
+        == "工程综合建议"
+    )
+
+
 def test_bitable_media_uploader_binds_payload_sha_and_table_token() -> None:
     class MediaClient:
         def __init__(self) -> None:

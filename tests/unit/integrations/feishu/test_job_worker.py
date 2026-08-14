@@ -360,6 +360,21 @@ class _RecordingSiblingPlanner:
         self.validation_result_ids.append(job.validation_result_id)
 
 
+class _RecordingSiblingDispatcher:
+    def __init__(self) -> None:
+        self.source_job_ids: list[str | None] = []
+
+    def dispatch_pending(
+        self,
+        *,
+        source_job_id: str | None = None,
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        del limit
+        self.source_job_ids.append(source_job_id)
+        return ()
+
+
 def _event() -> FeishuEventReference:
     return FeishuEventReference(
         event_id="evt-worker",
@@ -509,6 +524,7 @@ def _worker(
     batch_store: InMemoryVerifiedEarlyCycleBatchStore | None = None,
     project_model_crash_before_return: bool = False,
     sibling_planner: FeishuValidatedSiblingPlanner | None = None,
+    sibling_dispatcher: _RecordingSiblingDispatcher | None = None,
     audit_ledger: AuditLedger | None = None,
     aily_data_identity_resolver: _AilyDataIdentityResolver | None = None,
     scenario_input_resolver: _ScenarioInputResolver | None = None,
@@ -579,6 +595,7 @@ def _worker(
         project_model_executor=project_executor,
         delivery=delivery,
         sibling_planner=sibling_planner,
+        sibling_dispatcher=sibling_dispatcher,
         aily_data_identity_resolver=aily_data_identity_resolver,
         clock=lambda: NOW,
         heartbeat_interval_seconds=30,
@@ -594,6 +611,22 @@ def _reviewed_normalizer() -> ReviewedBatteryCsvNormalizer:
             ),
         )
     )
+
+
+def test_terminal_root_notifies_sibling_dispatch_recovery() -> None:
+    jobs, job_id = _job()
+    dispatcher = _RecordingSiblingDispatcher()
+    worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        sibling_dispatcher=dispatcher,
+    )
+
+    assert worker.execute(job_id=job_id) is FeishuAnalysisJobStatus.REJECTED
+    assert dispatcher.source_job_ids == [job_id]
 
 
 def test_worker_uses_project_model_executor_after_global_validation() -> None:

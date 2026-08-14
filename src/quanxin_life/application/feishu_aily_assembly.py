@@ -28,6 +28,12 @@ from quanxin_life.application.battery_csv_mapping import (
     BatteryCsvMappingProfile,
     ReviewedBatteryCsvNormalizer,
 )
+from quanxin_life.application.engineering_recommendation_rules import (
+    ReviewedEngineeringRecommendationRulesetRegistry,
+)
+from quanxin_life.application.feishu_engineering_recommendation import (
+    FeishuEngineeringRecommendationExecutor,
+)
 from quanxin_life.application.feishu_project_models import (
     FeishuProjectModelExecutor,
     FeishuProjectRecordBatchResolver,
@@ -397,6 +403,9 @@ def create_feishu_aily_components(
     project_model_dependencies: FeishuProjectModelDependencies | None = None,
     csv_mapping_profiles: tuple[BatteryCsvMappingProfile, ...] = (),
     default_scenarios: ReviewedDefaultScenarioRegistry | None = None,
+    recommendation_rulesets: (
+        ReviewedEngineeringRecommendationRulesetRegistry | None
+    ) = None,
     aily_data_identity_resolver: AilyDataIdentityResolver | None = None,
     clock: Clock | None = None,
 ) -> FeishuAilyComponents:
@@ -411,6 +420,7 @@ def create_feishu_aily_components(
     scenario_context_store = SqlAlchemyFeishuScenarioContextStore(session_factory)
     result_resolver: _RegisteredResultResolver = audit_ledger
     project_model_executor = None
+    engineering_recommendation_executor = None
     data_identity_resolver: AilyDataIdentityResolver
     if project_model_dependencies is not None:
         if aily_data_identity_resolver is not None:
@@ -431,6 +441,17 @@ def create_feishu_aily_components(
             project_ledger=project_model_dependencies.project_ledger,
             clock=now,
         )
+        if recommendation_rulesets is not None:
+            engineering_recommendation_executor = (
+                FeishuEngineeringRecommendationExecutor(
+                    session_factory=session_factory,
+                    context_service=project_model_dependencies.context_service,
+                    project_ledger=project_model_dependencies.project_ledger,
+                    result_resolver=result_resolver,
+                    ruleset_resolver=recommendation_rulesets,
+                    clock=now,
+                )
+            )
         data_identity_resolver = _ProjectBoundAilyDataIdentityResolver(
             job_store=job_store,
             batch_store=batch_store,
@@ -438,6 +459,10 @@ def create_feishu_aily_components(
             batch_resolver=project_batch_resolver,
         )
     else:
+        if recommendation_rulesets is not None:
+            raise ValueError(
+                "engineering recommendations require project model dependencies"
+            )
         data_identity_resolver = (
             aily_data_identity_resolver or _RejectingAilyDataIdentityResolver()
         )
@@ -485,6 +510,7 @@ def create_feishu_aily_components(
         sibling_jobs=sibling_job_service,
         default_scenarios=default_scenarios,
         clock=now,
+        recommendation_rulesets=recommendation_rulesets,
     )
     scenario_gateway = SqlAlchemyAilyScenarioContextGateway(
         context_store=scenario_context_store,
@@ -605,11 +631,15 @@ def create_feishu_aily_components(
         result_resolver=result_resolver,
         report_result_factory=build_scenario_report,
         project_model_executor=project_model_executor,
+        engineering_recommendation_executor=(
+            engineering_recommendation_executor
+        ),
         delivery=OriginAwareAnalysisJobDelivery(
             feishu_delivery=feishu_delivery,
             aily_delivery=aily_delivery,
         ),
         sibling_planner=sibling_planner,
+        sibling_dispatcher=sibling_job_service,
         aily_data_identity_resolver=data_identity_resolver,
         clock=now,
     )

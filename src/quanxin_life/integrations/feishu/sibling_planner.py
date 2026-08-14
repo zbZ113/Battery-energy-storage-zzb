@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 
+from quanxin_life.application.engineering_recommendation_rules import (
+    ReviewedEngineeringRecommendationRulesetRegistry,
+)
 from quanxin_life.application.ingestion import VerifiedEarlyCycleBatchStore
 
 from .default_scenarios import ReviewedDefaultScenarioRegistry
@@ -28,12 +31,16 @@ class ProactiveFeishuSiblingPlanner:
         sibling_jobs: SqlAlchemyFeishuSiblingJobService,
         default_scenarios: ReviewedDefaultScenarioRegistry | None,
         clock: Callable[[], datetime],
+        recommendation_rulesets: (
+            ReviewedEngineeringRecommendationRulesetRegistry | None
+        ) = None,
     ) -> None:
         self._batch_store = batch_store
         self._context_store = context_store
         self._sibling_jobs = sibling_jobs
         self._default_scenarios = default_scenarios
         self._clock = clock
+        self._recommendation_rulesets = recommendation_rulesets
 
     def plan_validated_siblings(self, *, job: FeishuAnalysisJobRecord) -> None:
         if (
@@ -65,6 +72,7 @@ class ProactiveFeishuSiblingPlanner:
                 source_job_id=job.job_id,
                 task=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
             )
+            self._stage_recommendation(source_job_id=job.job_id)
             return
         assert self._default_scenarios is not None
         template = self._default_scenarios.create_context_template(
@@ -87,6 +95,22 @@ class ProactiveFeishuSiblingPlanner:
             default_scenario_profile_id=template.profile_id,
             default_scenario_profile_version=template.profile_version,
             default_scenario_profile_sha256=template.profile_sha256,
+        )
+        self._stage_recommendation(source_job_id=job.job_id)
+
+    def _stage_recommendation(self, *, source_job_id: str) -> None:
+        registry = self._recommendation_rulesets
+        if registry is None:
+            return
+        ruleset = registry.resolve_verified_engineering_recommendation_ruleset(
+            registry.default_ruleset_id
+        )
+        self._sibling_jobs.stage_sibling(
+            source_job_id=source_job_id,
+            task=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
+            recommendation_ruleset_id=ruleset.ruleset_id,
+            recommendation_ruleset_version=ruleset.ruleset_version,
+            recommendation_ruleset_sha256=ruleset.ruleset_manifest_sha256,
         )
 
     def _stage(

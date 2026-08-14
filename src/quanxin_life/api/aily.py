@@ -29,6 +29,7 @@ from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
 from quanxin_life.reporting.contracts import (
     AUDITED_REPORT_TOOL_NAME,
     AUDITED_REPORT_TOOL_VERSION,
+    RECOMMENDATION_REPORT_RENDERER_VERSION,
 )
 from quanxin_life.scenarios import (
     OperationScenario,
@@ -45,6 +46,7 @@ _SCENARIO_TASKS = frozenset(
         FeishuAnalysisTask.PROJECT_STORAGE_LIFETIME,
     }
 )
+_RECOMMENDATION_TASK = FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION
 
 
 class AilyConnectorConfig(BaseModel):
@@ -83,7 +85,12 @@ class AilyCreateAnalysisTaskRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_the_task_specific_reference(self) -> AilyCreateAnalysisTaskRequest:
-        if self.task_type in _SCENARIO_TASKS:
+        if self.task_type is _RECOMMENDATION_TASK:
+            if self.scenario_context_id is not None or self.data_batch_id is not None:
+                raise ValueError(
+                    "recommendation tasks accept only the source run reference"
+                )
+        elif self.task_type in _SCENARIO_TASKS:
             if self.scenario_context_id is None or self.data_batch_id is not None:
                 raise ValueError(
                     "scenario analysis tasks require only scenario_context_id"
@@ -374,7 +381,9 @@ def _require_audited_report_result(result: ToolResult) -> None:
     if (
         result.tool_name != AUDITED_REPORT_TOOL_NAME
         or result.tool_version != AUDITED_REPORT_TOOL_VERSION
-        or result.model_version != REPORTING_VERSION
+        or result.model_version
+        not in {REPORTING_VERSION, RECOMMENDATION_REPORT_RENDERER_VERSION}
+        or result.values.get("rendering_version") != result.model_version
     ):
         raise ValueError("result is not an audited report ToolResult")
 

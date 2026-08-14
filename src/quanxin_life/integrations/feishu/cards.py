@@ -30,6 +30,8 @@ from quanxin_life.tools.cell_metadata_evidence import (
 )
 from quanxin_life.tools.data_quality import DATA_QUALITY_TOOL_VERSION
 
+from .recommendation_presentation import engineering_recommendation_presentation
+
 _SAFE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}\Z")
 
 
@@ -327,6 +329,8 @@ class AuditedCardBuilder:
                 authorization=authorization,
                 image_key=image_key,
             )
+        if result.tool_name == "make_engineering_recommendation":
+            return _build_engineering_recommendation_card(result=result)
         if image_key is not None:
             raise AuditedCardError("images are only supported for plotted result cards")
         policy = _CARD_POLICIES.get((result.tool_name, result.tool_version))
@@ -567,6 +571,60 @@ def _build_soh_result_card(
             },
         },
         "elements": elements,
+    }
+
+
+def _build_engineering_recommendation_card(
+    *,
+    result: ToolResult,
+) -> dict[str, Any]:
+    try:
+        presentation = engineering_recommendation_presentation(result)
+    except ValueError as exc:
+        raise AuditedCardError(
+            "engineering recommendation result is invalid"
+        ) from exc
+    template = {
+        "ADOPTABLE": "green",
+        "RECHECK_REQUIRED": "orange",
+        "UNRESOLVED": "grey",
+    }[presentation.outcome]
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {
+                "tag": "plain_text",
+                "content": f"工程综合建议 | {presentation.label}",
+            },
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "fields": [
+                    _display_field(
+                        "综合建议",
+                        presentation.label,
+                        is_short=True,
+                    ),
+                    _display_field(
+                        "规则集版本",
+                        presentation.ruleset_version,
+                        is_short=True,
+                    ),
+                    _display_field(
+                        "建议原因",
+                        presentation.reason,
+                        is_short=False,
+                    ),
+                ],
+            },
+            _paragraph(
+                "**使用说明**\n"
+                "建议由受审规则集读取已登记 ToolResult 生成。"
+                "阈值、实际值和证据路径仅在详细报告中展示。"
+            ),
+        ],
     }
 
 

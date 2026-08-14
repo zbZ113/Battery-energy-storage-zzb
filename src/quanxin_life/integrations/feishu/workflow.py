@@ -33,6 +33,7 @@ class FeishuAnalysisTask(StrEnum):
     PROJECT_STORAGE_LIFETIME = "project_storage_lifetime"
     INGEST_OBSERVED_SOH = "ingest_observed_soh"
     UPDATE_TRAJECTORY = "update_trajectory"
+    MAKE_ENGINEERING_RECOMMENDATION = "make_engineering_recommendation"
 
 
 class FeishuRouteAuthorizer(Protocol):
@@ -72,6 +73,9 @@ _TASK_TO_TOOL = {
     ),
     FeishuAnalysisTask.INGEST_OBSERVED_SOH: StandardToolName.INGEST_NEWLY_OBSERVED_SOH,
     FeishuAnalysisTask.UPDATE_TRAJECTORY: StandardToolName.UPDATE_CELL_PARAMETERS,
+    FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION: (
+        StandardToolName.MAKE_ENGINEERING_RECOMMENDATION
+    ),
 }
 _MODEL_TOOLS = frozenset(
     {StandardToolName.PREDICT_CYCLE_LIFE, StandardToolName.PREDICT_SOH_TRAJECTORY}

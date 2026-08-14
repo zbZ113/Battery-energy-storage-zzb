@@ -1304,6 +1304,74 @@ def test_feishu_project_result_slot_rejects_unsupported_analysis_task() -> None:
             result=result,
         )
 
+
+def test_feishu_project_result_slot_accepts_engineering_recommendation() -> None:
+    fixture = _fixture()
+    context = fixture.context_service.resolve_feishu(
+        chat_id="oc-approved",
+        sender_open_id="ou-approved",
+    )
+    job_id = str(uuid4())
+    claim_token = "f" * 64
+    with session_scope(fixture.sessions) as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="evt-recommendation-slot-task",
+                event_type="feishu.analysis_job.derived_v1",
+                payload_sha256="e" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=job_id,
+                job_origin="FEISHU",
+                source_job_id=str(uuid4()),
+                job_status="RUNNING",
+                job_stage="RUNNING_TOOL",
+                task_type=StandardToolName.MAKE_ENGINEERING_RECOMMENDATION.value,
+                run_id=job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                recommendation_ruleset_id="reviewed-release-gate",
+                recommendation_ruleset_version="reviewed-release-gate-v1",
+                recommendation_ruleset_sha256="f" * 64,
+                job_claim_token=claim_token,
+                job_attempt_count=1,
+                job_lease_expires_at=NOW.replace(hour=13),
+                job_created_at=NOW,
+                job_updated_at=NOW,
+            )
+        )
+    result = ToolResult(
+        result_id=str(uuid4()),
+        tool_name=StandardToolName.MAKE_ENGINEERING_RECOMMENDATION.value,
+        tool_version="engineering-recommendation-tool-v1",
+        model_version="engineering-recommendation-rule-engine-v1",
+        data_version="reviewed-release-gate-v1",
+        feature_version="engineering-recommendation-evidence-v1",
+        input_hash="1" * 64,
+        values={"recommendation": "UNRESOLVED"},
+        provenance=list(_registration().provenance),
+        created_at=NOW,
+    )
+
+    committed = fixture.project_ledger.commit_feishu_result_slot(
+        context=context,
+        job_id=job_id,
+        claim_token=claim_token,
+        slot="ANALYSIS",
+        expected_task=StandardToolName.MAKE_ENGINEERING_RECOMMENDATION.value,
+        run_id=job_id,
+        chat_id="oc-approved",
+        sender_id="ou-approved",
+        result=result,
+    )
+
+    assert committed == result
+
 def test_feishu_project_result_slot_retry_requires_the_exact_project_binding() -> None:
     fixture = _fixture()
     context = fixture.context_service.resolve_feishu(

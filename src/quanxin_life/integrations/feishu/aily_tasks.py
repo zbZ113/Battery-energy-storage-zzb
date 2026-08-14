@@ -43,6 +43,8 @@ _DATA_TASKS = frozenset(
         FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
     }
 )
+_RECOMMENDATION_TASK = FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION
+_BITABLE_CURVE_TASKS = _SCENARIO_TASKS | _DATA_TASKS
 Clock = Callable[[], datetime]
 
 
@@ -116,7 +118,8 @@ class AilyAnalysisJobDelivery:
             authorizer=self._result_authorizer,
         )
         should_write_bitable = job.bitable_record_id is None or (
-            job.bitable_curve_file_token is None
+            job.task_type in _BITABLE_CURVE_TASKS
+            and job.bitable_curve_file_token is None
             and self._analysis_plotter is not None
             and self._bitable_media_uploader is not None
         )
@@ -125,12 +128,16 @@ class AilyAnalysisJobDelivery:
                 bitable_record_id=job.bitable_record_id,
                 report_file_key=None,
             )
-        curve_fields = prepare_audited_bitable_curve_fields(
-            job=job,
-            analysis_result=analysis_result,
-            analysis_plotter=self._analysis_plotter,
-            bitable_media_uploader=self._bitable_media_uploader,
-            checkpoint=checkpoint,
+        curve_fields = (
+            prepare_audited_bitable_curve_fields(
+                job=job,
+                analysis_result=analysis_result,
+                analysis_plotter=self._analysis_plotter,
+                bitable_media_uploader=self._bitable_media_uploader,
+                checkpoint=checkpoint,
+            )
+            if job.task_type in _BITABLE_CURVE_TASKS
+            else {}
         )
         fields = self._base_fields(job, task_status="SUCCEEDED")
         fields.update(
@@ -147,7 +154,7 @@ class AilyAnalysisJobDelivery:
         if job.task_type in _SCENARIO_TASKS:
             fields.update(_scenario_fields(job, analysis_result))
         fields.update(curve_fields)
-        if analysis_result.warnings:
+        if analysis_result.warnings and job.task_type is not _RECOMMENDATION_TASK:
             fields["warnings"] = "\n".join(analysis_result.warnings)
         if self._report_link_factory is not None:
             fields["report_link"] = self._report_link_factory(job, report_result)
@@ -255,6 +262,17 @@ class SqlAlchemyAilyAnalysisTaskGateway:
     ) -> AgentRunState:
         task = request.task_type
         scenario_context_id: str | None = None
+        if task is _RECOMMENDATION_TASK:
+            recommendation = self._job_store.get_recommendation_sibling(
+                source_job_id=request.source_run_id
+            )
+            if recommendation.record_batch_id is None:
+                raise ValueError("Aily recommendation data identity is incomplete")
+            self._data_identity_resolver.resolve_source_job(
+                source_run_id=request.source_run_id,
+                data_batch_id=recommendation.record_batch_id,
+            )
+            return _state(recommendation)
         if task in _SCENARIO_TASKS:
             if request.scenario_context_id is None:
                 raise ValueError(
@@ -302,8 +320,17 @@ class SqlAlchemyAilyAnalysisTaskGateway:
             job = self._job_store.get(run_id)
         except ValueError as exc:
             raise LookupError("Aily analysis task was not found") from exc
+        visible_recommendation = (
+            job.job_origin is FeishuAnalysisJobOrigin.FEISHU
+            and job.event_type == "feishu.analysis_job.derived_v1"
+            and job.task_type is _RECOMMENDATION_TASK
+            and job.scenario_context_id is None
+        )
         if (
-            job.job_origin is not FeishuAnalysisJobOrigin.AILY
+            (
+                job.job_origin is not FeishuAnalysisJobOrigin.AILY
+                and not visible_recommendation
+            )
             or job.job_request_sha256 is None
             or job.source_job_id is None
             or job.record_batch_id is None
@@ -313,6 +340,10 @@ class SqlAlchemyAilyAnalysisTaskGateway:
             )
             or (
                 job.task_type in _DATA_TASKS
+                and job.scenario_context_id is not None
+            )
+            or (
+                job.task_type is _RECOMMENDATION_TASK
                 and job.scenario_context_id is not None
             )
         ):
