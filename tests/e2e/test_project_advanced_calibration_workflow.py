@@ -112,7 +112,7 @@ from quanxin_life.tools.advanced_conformal import (
     execute_advanced_split_conformal_tool,
 )
 from quanxin_life.tools.advanced_cycle_life_prediction import (
-    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
     ADVANCED_RUL_PREDICTION_TOOL_VERSION,
 )
 from quanxin_life.tools.advanced_project_report import (
@@ -121,7 +121,7 @@ from quanxin_life.tools.advanced_project_report import (
     execute_generate_advanced_cell_report_tool,
 )
 from quanxin_life.tools.advanced_soh_prediction import (
-    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
     ADVANCED_SOH_PREDICTION_TOOL_VERSION,
 )
 from quanxin_life.tools.early_cycle_features import VerifiedEarlyCycleBatch
@@ -1162,7 +1162,7 @@ def _target_prediction(route: _Route) -> ToolResult:
     }
     artifact: dict[str, object]
     if route.task is AdvancedModelTask.RUL:
-        artifact_type = ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE
+        artifact_type = ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1
         tool_name = StandardToolName.PREDICT_CYCLE_LIFE
         tool_version = ADVANCED_RUL_PREDICTION_TOOL_VERSION
         artifact = {
@@ -1190,7 +1190,7 @@ def _target_prediction(route: _Route) -> ToolResult:
         }
     else:
         cycles = list(range(CUTOFF + 1, 501))
-        artifact_type = ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE
+        artifact_type = ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1
         tool_name = StandardToolName.PREDICT_SOH_TRAJECTORY
         tool_version = ADVANCED_SOH_PREDICTION_TOOL_VERSION
         artifact = {

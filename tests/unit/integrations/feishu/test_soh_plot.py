@@ -9,6 +9,7 @@ import pytest
 
 from quanxin_life.core import ProvenanceRecord, SourceKind, ToolResult
 from quanxin_life.integrations.feishu.soh_plot import (
+    SOH_PLOT_FONT_SHA256,
     FeishuSohPlotError,
     FeishuSohPlotter,
 )
@@ -69,6 +70,9 @@ def test_soh_plotter_renders_deterministic_png_from_tool_result_only() -> None:
     assert first.payload.startswith(b"\x89PNG\r\n\x1a\n")
     assert first.sha256 == sha256(first.payload).hexdigest()
     assert second.sha256 == first.sha256
+    assert SOH_PLOT_FONT_SHA256 == (
+        "cd42dca9abc49fc97b6e5426afd8bcf87b6b002ace89bb1d03e9b2f4ecfa32d5"
+    )
 
 
 def test_soh_plotter_rejects_non_soh_or_tampered_axes() -> None:

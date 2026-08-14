@@ -10,12 +10,14 @@ from quanxin_life.tools.advanced_input import (
 )
 from quanxin_life.tools.advanced_soh_prediction import (
     ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
     ADVANCED_SOH_PREDICTION_TOOL_VERSION,
     AdvancedSOHInference,
     PredictAdvancedSOHToolInput,
     execute_predict_advanced_soh_tool,
 )
 from tests.unit.tools.test_project_advanced_cycle_life_tool import (
+    _legacy_upstream_result,
     _ResultResolver,
 )
 from tests.unit.tools.test_project_advanced_input_tool import (
@@ -96,11 +98,16 @@ def test_project_advanced_soh_wraps_only_finite_model_trajectory() -> None:
 
     assert result.tool_version == ADVANCED_SOH_PREDICTION_TOOL_VERSION
     assert result.values["artifact_type"] == ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE
+    assert result.values["artifact_type"] == (
+        "quanxin_life.advanced_soh_trajectory.v2"
+    )
     artifact = result.values["artifact"]
     assert artifact["prediction_cycles"] == [21, 22, 23]
     assert artifact["predicted_soh"] == [0.99, 0.98, 0.97]
     assert artifact["route_role"] == AdvancedModelRouteRole.MEAN_ACCURACY.value
     assert artifact["horizon_end_cycle"] == 23
+    assert artifact["cell_metadata"]["chemistry"] == "LFP/graphite"
+    assert artifact["cell_metadata"]["nominal_capacity_ah"] == 1.1
     assert result.uncertainty == {
         "finite_horizon_only": True,
         "conformal_interval_included": False,
@@ -115,3 +122,22 @@ def test_project_advanced_soh_wraps_only_finite_model_trajectory() -> None:
             AdvancedModelRouteRole.MEAN_ACCURACY,
         )
     ]
+
+
+def test_legacy_input_keeps_soh_artifact_v1_without_metadata() -> None:
+    upstream = _legacy_upstream_result()
+
+    result = execute_predict_advanced_soh_tool(
+        PredictAdvancedSOHToolInput(
+            upstream_result_id=upstream.result_id,
+            route_role=AdvancedModelRouteRole.MEAN_ACCURACY,
+        ),
+        context=_context(),
+        result_resolver=_ResultResolver(upstream),
+        inference_service=_SOHService(_inference(upstream)),
+    )
+
+    assert result.values["artifact_type"] == (
+        ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1
+    )
+    assert "cell_metadata" not in result.values["artifact"]

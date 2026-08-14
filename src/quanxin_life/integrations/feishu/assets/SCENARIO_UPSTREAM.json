@@ -1,0 +1,19 @@
+{
+  "asset_id": "quanxin-analysis-sans-v2",
+  "family": "Noto Sans SC",
+  "upstream_version": "2.004-H2",
+  "license": "SIL Open Font License 1.1",
+  "source_css_api": "https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400&text=<printable-ascii-and-fixed-analysis-label-set>&display=swap",
+  "source_font_url_version": "fonts.gstatic.com/l/font v40",
+  "source_font_sha256": "76720579491b5e50b7059e2ec1284a787f97420c24e7c3ed1011c78ce9c7ce29",
+  "source_font_size_bytes": 34368,
+  "modified_family": "Quanxin Analysis Sans",
+  "modifications": [
+    "Subset to printable ASCII and the fixed Chinese labels used by feishu-scenario-plot-v2",
+    "Rename the modified font to avoid the upstream Reserved Font Name"
+  ],
+  "fonttools_version": "4.63.0",
+  "output_sha256": "b981c60b7f35d4730109fd6d0baee61d7b5bf29ea488cd2ddec87554b50fe457",
+  "output_size_bytes": 34356,
+  "retrieved_at_utc": "2026-08-14T09:08:04Z"
+}

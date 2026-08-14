@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime
 from itertools import pairwise
 from typing import TYPE_CHECKING, Annotated, Literal
@@ -31,13 +31,20 @@ from quanxin_life.tools.advanced_conformal import (
 )
 from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPES,
     ADVANCED_RUL_PREDICTION_TOOL_VERSION,
     AdvancedRULInference,
 )
 from quanxin_life.tools.advanced_soh_prediction import (
     ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES,
     ADVANCED_SOH_PREDICTION_TOOL_VERSION,
     AdvancedSOHInference,
+)
+from quanxin_life.tools.cell_metadata_evidence import (
+    validate_versioned_cell_metadata_evidence,
 )
 from quanxin_life.tools.registry import (
     RegisteredTool,
@@ -246,8 +253,17 @@ def _timestamp(clock: Clock) -> datetime:
     return value.astimezone(UTC)
 
 
-def _artifact(result: ToolResult, *, expected_type: str) -> Mapping[str, object]:
-    if result.values.get("artifact_type") != expected_type:
+def _artifact(
+    result: ToolResult,
+    *,
+    expected_type: str | Collection[str],
+) -> Mapping[str, object]:
+    expected_types = (
+        frozenset({expected_type})
+        if isinstance(expected_type, str)
+        else frozenset(expected_type)
+    )
+    if result.values.get("artifact_type") not in expected_types:
         raise ValueError("upstream ToolResult has an unsupported evidence artifact")
     artifact = result.values.get("artifact")
     if not isinstance(artifact, Mapping):
@@ -275,7 +291,13 @@ def _decode_rul(result: ToolResult) -> tuple[AdvancedRULInference, Mapping[str, 
         raise ValueError("RUL result is not a formal Advanced prediction")
     artifact = _artifact(
         result,
-        expected_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+        expected_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPES,
+    )
+    validate_versioned_cell_metadata_evidence(
+        artifact,
+        artifact_type=result.values.get("artifact_type"),
+        legacy_artifact_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+        metadata_artifact_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
     )
     inference = AdvancedRULInference.model_validate(
         {
@@ -319,7 +341,13 @@ def _decode_soh(result: ToolResult) -> tuple[AdvancedSOHInference, Mapping[str, 
         raise ValueError("SOH result is not a formal Advanced prediction")
     artifact = _artifact(
         result,
-        expected_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+        expected_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES,
+    )
+    validate_versioned_cell_metadata_evidence(
+        artifact,
+        artifact_type=result.values.get("artifact_type"),
+        legacy_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+        metadata_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
     )
     inference = AdvancedSOHInference.model_validate(
         {

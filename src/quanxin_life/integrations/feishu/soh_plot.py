@@ -16,7 +16,12 @@ from quanxin_life.integrations.feishu.scenario_plot import (
 )
 from quanxin_life.tools.advanced_soh_prediction import (
     ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES,
     ADVANCED_SOH_PREDICTION_TOOL_VERSION,
+)
+from quanxin_life.tools.cell_metadata_evidence import (
+    validate_versioned_cell_metadata_evidence,
 )
 
 SOH_PLOT_VERSION = "feishu-soh-plot-v1"
@@ -56,12 +61,22 @@ def _series(result: ToolResult) -> tuple[tuple[float, ...], tuple[float, ...], f
     if (
         result.tool_name != "predict_soh_trajectory"
         or result.tool_version != ADVANCED_SOH_PREDICTION_TOOL_VERSION
-        or result.values.get("artifact_type") != ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE
+        or result.values.get("artifact_type")
+        not in ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES
     ):
         raise FeishuSohPlotError("ToolResult is not a supported SOH result")
     artifact = result.values.get("artifact")
     if not isinstance(artifact, Mapping):
         raise FeishuSohPlotError("SOH artifact is invalid")
+    try:
+        validate_versioned_cell_metadata_evidence(
+            artifact,
+            artifact_type=result.values.get("artifact_type"),
+            legacy_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+            metadata_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+        )
+    except ValueError as exc:
+        raise FeishuSohPlotError("SOH cell metadata evidence is invalid") from exc
     cycles = _finite_axis(artifact.get("prediction_cycles"), label="prediction_cycles")
     soh = _finite_axis(artifact.get("predicted_soh"), label="predicted_soh")
     if len(cycles) < 2 or len(cycles) != len(soh):

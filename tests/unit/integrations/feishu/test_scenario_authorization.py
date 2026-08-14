@@ -17,10 +17,12 @@ from quanxin_life.scenarios import (
 )
 from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
     ADVANCED_RUL_PREDICTION_TOOL_VERSION,
 )
 from quanxin_life.tools.advanced_soh_prediction import (
     ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
     ADVANCED_SOH_PREDICTION_TOOL_VERSION,
 )
 from quanxin_life.tools.audited_report import (
@@ -297,6 +299,24 @@ def test_audited_scenario_authorizer_rejects_a_report_with_unbound_upstream() ->
     assert authorization.rejection_reason == "AUDITED_REPORT_UPSTREAM_INVALID"
 
 
+def _advanced_cell_metadata() -> dict[str, object]:
+    return {
+        "adapter_version": "matr-adapter-v1",
+        "cell_id": "MATR_b3c34",
+        "chemistry": "LFP/graphite",
+        "dataset_id": "MATR",
+        "eol_threshold": 0.8,
+        "nominal_capacity_ah": 1.1,
+        "protocol_description": "公开 MATR 小容量 LFP 循环测试",
+        "protocol_id": "MATR-standard",
+        "raw_cell_id": "b3c34",
+        "reference_capacity_ah": 1.0,
+        "schema_version": "cell-metadata-v1",
+        "source_sha256": "d" * 64,
+        "source_uri": "trusted-store://matr/b3c34",
+    }
+
+
 def _advanced_rul_result() -> ToolResult:
     artifact_id = str(uuid4())
     decision_event_id = str(uuid4())
@@ -314,6 +334,7 @@ def _advanced_rul_result() -> ToolResult:
                 "record_batch_id": str(uuid4()),
                 "dataset_id": "MATR",
                 "cell_id": "MATR_b3c34",
+                "cell_metadata": _advanced_cell_metadata(),
                 "cutoff_cycle": 20,
                 "cycle_life_prediction": {
                     "dataset_id": "MATR",
@@ -407,6 +428,37 @@ def test_audited_authorizer_allows_formal_advanced_rul_and_its_report() -> None:
     assert report_authorization == result_authorization
 
 
+def test_advanced_rul_authorization_enforces_metadata_artifact_version() -> None:
+    result = _advanced_rul_result()
+    artifact = result.values["artifact"]
+    missing_v2 = result.model_copy(
+        update={
+            "values": {
+                **result.values,
+                "artifact": {
+                    key: value
+                    for key, value in artifact.items()
+                    if key != "cell_metadata"
+                },
+            }
+        }
+    )
+    legacy_v1 = result.model_copy(
+        update={
+            "values": {
+                "artifact_type": ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+                "artifact": missing_v2.values["artifact"],
+            }
+        }
+    )
+    authorizer = AuditedScenarioResultAuthorizer(
+        result_resolver=AuditLedger((result,)),
+    )
+
+    assert authorizer.authorize(missing_v2).allowed is False
+    assert authorizer.authorize(legacy_v1).allowed is True
+
+
 def test_audited_authorizer_rejects_incomplete_advanced_rul_evidence() -> None:
     result = _advanced_rul_result().model_copy(
         update={"values": {"artifact_type": ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE}}
@@ -437,6 +489,7 @@ def _advanced_soh_result() -> ToolResult:
                 "record_batch_id": str(uuid4()),
                 "dataset_id": "MATR",
                 "cell_id": "MATR_b3c34",
+                "cell_metadata": _advanced_cell_metadata(),
                 "cutoff_cycle": 50,
                 "prediction_cycles": [51, 500],
                 "predicted_soh": [0.99, 0.87],
@@ -503,3 +556,34 @@ def test_audited_authorizer_accepts_only_complete_finite_soh_evidence() -> None:
     assert allowed.evidence_level is EvidenceLevel.MODEL_INFERENCE
     assert tampered.allowed is False
     assert tampered.rejection_reason == "ADVANCED_SOH_RESULT_CONTRACT_MISMATCH"
+
+
+def test_advanced_soh_authorization_enforces_metadata_artifact_version() -> None:
+    result = _advanced_soh_result()
+    artifact = result.values["artifact"]
+    missing_v2 = result.model_copy(
+        update={
+            "values": {
+                **result.values,
+                "artifact": {
+                    key: value
+                    for key, value in artifact.items()
+                    if key != "cell_metadata"
+                },
+            }
+        }
+    )
+    legacy_v1 = result.model_copy(
+        update={
+            "values": {
+                "artifact_type": ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+                "artifact": missing_v2.values["artifact"],
+            }
+        }
+    )
+    authorizer = AuditedScenarioResultAuthorizer(
+        result_resolver=AuditLedger((result,)),
+    )
+
+    assert authorizer.authorize(missing_v2).allowed is False
+    assert authorizer.authorize(legacy_v1).allowed is True

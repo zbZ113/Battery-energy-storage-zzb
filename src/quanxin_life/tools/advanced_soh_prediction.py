@@ -24,6 +24,7 @@ from quanxin_life.core import (
 from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.tools.advanced_input import (
     AdvancedInputEvidence,
+    cell_metadata_evidence_payload,
     decode_advanced_input_result,
 )
 from quanxin_life.tools.registry import (
@@ -40,8 +41,17 @@ if TYPE_CHECKING:
     )
 
 ADVANCED_SOH_PREDICTION_TOOL_VERSION = "advanced-soh-prediction-tool-v1"
-ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE = (
+ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1 = (
     "quanxin_life.advanced_soh_trajectory.v1"
+)
+ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE = (
+    "quanxin_life.advanced_soh_trajectory.v2"
+)
+ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES = frozenset(
+    {
+        ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+        ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    }
 )
 SOHValue = Annotated[float, Field(ge=0.0, le=1.5, allow_inf_nan=False)]
 Clock = Callable[[], datetime]
@@ -224,6 +234,12 @@ def execute_predict_advanced_soh_tool(
         validated_input.route_role,
     )
     created_at = _timestamp(clock)
+    cell_metadata = cell_metadata_evidence_payload(evidence.cell_metadata)
+    evidence_type = (
+        ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE
+        if cell_metadata is not None
+        else ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1
+    )
     return ToolResult(
         result_id=str(uuid4()),
         tool_name=StandardToolName.PREDICT_SOH_TRAJECTORY.value,
@@ -233,11 +249,16 @@ def execute_predict_advanced_soh_tool(
         feature_version=inference.feature_version,
         input_hash=sha256_canonical(validated_input.model_dump(mode="json")),
         values={
-            "artifact_type": ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+            "artifact_type": evidence_type,
             "artifact": {
                 "record_batch_id": evidence.record_batch_id,
                 "dataset_id": inference.dataset_id,
                 "cell_id": inference.cell_id,
+                **(
+                    {"cell_metadata": cell_metadata}
+                    if cell_metadata is not None
+                    else {}
+                ),
                 "cutoff_cycle": inference.cutoff_cycle,
                 "prediction_cycles": list(inference.prediction_cycles),
                 "predicted_soh": list(inference.predicted_soh),
@@ -317,6 +338,8 @@ def register_project_predict_advanced_soh_tool(
 
 __all__ = [
     "ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE",
+    "ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES",
+    "ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1",
     "ADVANCED_SOH_PREDICTION_TOOL_VERSION",
     "AdvancedSOHInference",
     "AdvancedSOHInferenceService",

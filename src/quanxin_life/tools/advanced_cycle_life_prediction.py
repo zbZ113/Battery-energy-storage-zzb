@@ -26,6 +26,7 @@ from quanxin_life.core import (
 from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.tools.advanced_input import (
     AdvancedInputEvidence,
+    cell_metadata_evidence_payload,
     decode_advanced_input_result,
 )
 from quanxin_life.tools.registry import (
@@ -42,8 +43,17 @@ if TYPE_CHECKING:
     )
 
 ADVANCED_RUL_PREDICTION_TOOL_VERSION = "advanced-rul-prediction-tool-v1"
-ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE = (
+ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1 = (
     "quanxin_life.advanced_rul_prediction.v1"
+)
+ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE = (
+    "quanxin_life.advanced_rul_prediction.v2"
+)
+ADVANCED_RUL_PREDICTION_EVIDENCE_TYPES = frozenset(
+    {
+        ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+        ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    }
 )
 Clock = Callable[[], datetime]
 
@@ -206,6 +216,12 @@ def execute_predict_advanced_rul_tool(
     )
     created_at = _timestamp(clock)
     prediction = inference.prediction
+    cell_metadata = cell_metadata_evidence_payload(evidence.cell_metadata)
+    evidence_type = (
+        ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE
+        if cell_metadata is not None
+        else ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1
+    )
     return ToolResult(
         result_id=str(uuid4()),
         tool_name=StandardToolName.PREDICT_CYCLE_LIFE.value,
@@ -215,11 +231,16 @@ def execute_predict_advanced_rul_tool(
         feature_version=prediction.feature_version,
         input_hash=sha256_canonical(validated_input.model_dump(mode="json")),
         values={
-            "artifact_type": ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+            "artifact_type": evidence_type,
             "artifact": {
                 "record_batch_id": evidence.record_batch_id,
                 "dataset_id": evidence.dataset_id,
                 "cell_id": evidence.cell_id,
+                **(
+                    {"cell_metadata": cell_metadata}
+                    if cell_metadata is not None
+                    else {}
+                ),
                 "cutoff_cycle": evidence.cutoff_cycle,
                 "cycle_life_prediction": prediction.model_dump(mode="json"),
                 "derived_remaining_cycles": prediction.derived_remaining_cycles,
@@ -295,6 +316,8 @@ def register_project_predict_advanced_rul_tool(
 
 __all__ = [
     "ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE",
+    "ADVANCED_RUL_PREDICTION_EVIDENCE_TYPES",
+    "ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1",
     "ADVANCED_RUL_PREDICTION_TOOL_VERSION",
     "AdvancedRULInference",
     "AdvancedRULInferenceService",

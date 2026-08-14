@@ -39,6 +39,7 @@ from quanxin_life.core import (
 )
 from quanxin_life.features import EarlyCycleFeatureConfig
 from quanxin_life.infrastructure.feishu_queue import FEISHU_ANALYSIS_TASK
+from quanxin_life.integrations.feishu.analysis_plots import FeishuAnalysisPlotter
 from quanxin_life.integrations.feishu.default_scenarios import (
     ReviewedDefaultScenarioRegistry,
 )
@@ -46,7 +47,6 @@ from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobOrigin,
     FeishuAnalysisJobStatus,
 )
-from quanxin_life.integrations.feishu.soh_plot import FeishuSohPlotter
 from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
 from quanxin_life.persistence import Base, create_session_factory
 from quanxin_life.persistence.models import (
@@ -165,10 +165,10 @@ def test_feishu_aily_assembly_shares_one_persistent_boundary(tmp_path) -> None:
         components.worker._sibling_planner._sibling_jobs
         is components.sibling_job_service
     )
-    assert isinstance(
-        components.worker._delivery._feishu_delivery._analysis_plotter,
-        FeishuSohPlotter,
-    )
+    analysis_plotter = components.worker._delivery._feishu_delivery._analysis_plotter
+    scenario_plotter = components.worker._delivery._feishu_delivery._scenario_plotter
+    assert isinstance(analysis_plotter, FeishuAnalysisPlotter)
+    assert scenario_plotter is analysis_plotter
     assert components.aily_http_adapter is not None
     assert components.feishu_http_adapter is not None
     assert FEISHU_ANALYSIS_TASK not in celery_app.tasks

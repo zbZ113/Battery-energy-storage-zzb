@@ -11,10 +11,22 @@ from numbers import Real
 from typing import Any, Protocol
 
 from quanxin_life.core import EvidenceLevel, ToolResult
+from quanxin_life.tools.advanced_cycle_life_prediction import (
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+)
+from quanxin_life.tools.advanced_soh_prediction import (
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+)
 from quanxin_life.tools.blast_scenarios import (
     COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
     PROJECT_STORAGE_LIFETIME_TOOL_VERSION,
     SCENARIO_FEATURE_VERSION,
+)
+from quanxin_life.tools.cell_metadata_evidence import (
+    CellMetadataEvidenceIdentityError,
+    validate_versioned_cell_metadata_evidence,
 )
 from quanxin_life.tools.data_quality import DATA_QUALITY_TOOL_VERSION
 
@@ -392,6 +404,12 @@ def _build_cycle_life_result_card(
         raise AuditedCardError("cycle-life cell identity is invalid")
     fields = [
         _display_field("电芯", cell_id, is_short=True),
+        *_cell_metadata_fields(
+            result,
+            expected_cell_id=cell_id,
+            legacy_artifact_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+            metadata_artifact_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+        ),
         _display_field(
             "已观测循环",
             _format_count(_resolve_scalar(mapping, "values.artifact.cutoff_cycle")),
@@ -441,7 +459,13 @@ def _build_cycle_life_result_card(
         "config": {"wide_screen_mode": True},
         "header": {
             "template": "green",
-            "title": {"tag": "plain_text", "content": "电芯寿命分析"},
+            "title": {
+                "tag": "plain_text",
+                "content": _bounded_text(
+                    f"{cell_id} | 早期寿命评估",
+                    field_name="card title",
+                ),
+            },
         },
         "elements": elements,
     }
@@ -473,6 +497,12 @@ def _build_soh_result_card(
         raise AuditedCardError("SOH cell identity is invalid")
     fields = [
         _display_field("电芯", cell_id, is_short=True),
+        *_cell_metadata_fields(
+            result,
+            expected_cell_id=cell_id,
+            legacy_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+            metadata_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+        ),
         _display_field(
             "已观测循环",
             _format_count(_resolve_scalar(mapping, "values.artifact.cutoff_cycle")),
@@ -528,10 +558,65 @@ def _build_soh_result_card(
         "config": {"wide_screen_mode": True},
         "header": {
             "template": "green",
-            "title": {"tag": "plain_text", "content": "有限时域 SOH 分析"},
+            "title": {
+                "tag": "plain_text",
+                "content": _bounded_text(
+                    f"{cell_id} | 有限时域 SOH",
+                    field_name="card title",
+                ),
+            },
         },
         "elements": elements,
     }
+
+
+def _cell_metadata_fields(
+    result: ToolResult,
+    *,
+    expected_cell_id: str,
+    legacy_artifact_type: str,
+    metadata_artifact_type: str,
+) -> list[dict[str, Any]]:
+    artifact = result.values.get("artifact")
+    if not isinstance(artifact, Mapping):
+        raise AuditedCardError("analysis artifact is invalid")
+    try:
+        metadata = validate_versioned_cell_metadata_evidence(
+            artifact,
+            artifact_type=result.values.get("artifact_type"),
+            legacy_artifact_type=legacy_artifact_type,
+            metadata_artifact_type=metadata_artifact_type,
+        )
+    except CellMetadataEvidenceIdentityError as exc:
+        raise AuditedCardError(
+            "cell metadata identity does not match the result"
+        ) from exc
+    except (TypeError, ValueError) as exc:
+        raise AuditedCardError("cell metadata does not satisfy its contract") from exc
+    if metadata is None:
+        return [
+            _display_field("化学体系", "未登记", is_short=True),
+            _display_field("标称容量", "未登记", is_short=True),
+            _display_field("数据来源", "未登记", is_short=False),
+            _display_field("测试规格", "未登记", is_short=False),
+        ]
+    if metadata.cell_id != expected_cell_id:
+        raise AuditedCardError("cell metadata identity does not match the result")
+    specification = (
+        metadata.protocol_description
+        or metadata.protocol_id
+        or metadata.schema_version
+    )
+    return [
+        _display_field("化学体系", metadata.chemistry, is_short=True),
+        _display_field(
+            "标称容量",
+            f"{_format_number(metadata.nominal_capacity_ah)} Ah",
+            is_short=True,
+        ),
+        _display_field("数据来源", metadata.dataset_id, is_short=False),
+        _display_field("测试规格", specification, is_short=False),
+    ]
 
 
 def _resolve_scalar(

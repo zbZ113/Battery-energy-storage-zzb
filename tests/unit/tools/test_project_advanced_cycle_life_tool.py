@@ -11,6 +11,7 @@ from quanxin_life.core import (
 )
 from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
     ADVANCED_RUL_PREDICTION_TOOL_VERSION,
     AdvancedRULInference,
     PredictAdvancedRULToolInput,
@@ -63,6 +64,22 @@ def _upstream_result() -> object:
     )
 
 
+def _legacy_upstream_result() -> object:
+    result = _upstream_result()
+    return result.model_copy(
+        update={
+            "values": {
+                "artifact_type": "quanxin_life.advanced_input_evidence.v1",
+                "artifact": {
+                    key: value
+                    for key, value in result.values["artifact"].items()
+                    if key != "cell_metadata"
+                },
+            }
+        }
+    )
+
+
 def _inference(upstream: object) -> AdvancedRULInference:
     artifact = upstream.values["artifact"]
     return AdvancedRULInference(
@@ -112,11 +129,16 @@ def test_project_advanced_rul_wraps_only_verified_matr_official_prediction() -> 
 
     assert result.tool_version == ADVANCED_RUL_PREDICTION_TOOL_VERSION
     assert result.values["artifact_type"] == ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE
+    assert result.values["artifact_type"] == (
+        "quanxin_life.advanced_rul_prediction.v2"
+    )
     artifact = result.values["artifact"]
     prediction = artifact["cycle_life_prediction"]
     assert prediction["target"] == PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE.value
     assert prediction["predicted_cycle"] == 812.5
     assert artifact["derived_remaining_cycles"] == 792.5
+    assert artifact["cell_metadata"]["chemistry"] == "LFP/graphite"
+    assert artifact["cell_metadata"]["nominal_capacity_ah"] == 1.1
     assert artifact["upstream_result_id"] == upstream.result_id
     assert artifact["artifact_manifest_sha256"] == "d" * 64
     assert result.uncertainty is None
@@ -130,3 +152,22 @@ def test_project_advanced_rul_wraps_only_verified_matr_official_prediction() -> 
             AdvancedModelRouteRole.DEFAULT,
         )
     ]
+
+
+def test_legacy_input_keeps_rul_artifact_v1_without_metadata() -> None:
+    upstream = _legacy_upstream_result()
+
+    result = execute_predict_advanced_rul_tool(
+        PredictAdvancedRULToolInput(
+            upstream_result_id=upstream.result_id,
+            route_role=AdvancedModelRouteRole.DEFAULT,
+        ),
+        context=_context(),
+        result_resolver=_ResultResolver(upstream),
+        inference_service=_InferenceService(_inference(upstream)),
+    )
+
+    assert result.values["artifact_type"] == (
+        ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1
+    )
+    assert "cell_metadata" not in result.values["artifact"]

@@ -175,8 +175,12 @@ def test_project_advanced_input_returns_only_audited_sequence_evidence() -> None
     assert result.input_hash == sha256_canonical(input_value.model_dump(mode="json"))
     assert set(result.values) == {"artifact_type", "artifact"}
     assert result.values["artifact_type"] == ADVANCED_INPUT_EVIDENCE_TYPE
+    assert result.values["artifact_type"] == (
+        "quanxin_life.advanced_input_evidence.v2"
+    )
     artifact = result.values["artifact"]
     assert set(artifact) == {
+        "cell_metadata",
         "cell_id",
         "condition_names",
         "cutoff_cycle",
@@ -196,6 +200,11 @@ def test_project_advanced_input_returns_only_audited_sequence_evidence() -> None
         asdict(transform_config)
     )
     assert artifact["normalization_version"] == "none"
+    assert artifact["cell_metadata"]["chemistry"] == "LFP/graphite"
+    assert artifact["cell_metadata"]["nominal_capacity_ah"] == 1.1
+    assert artifact["cell_metadata"]["source_uri"] == (
+        "trusted-store://advanced-input/metadata"
+    )
     assert "values" not in artifact
     assert "prediction" not in repr(result.values).casefold()
     assert "official_life_label" not in repr(result.values)
@@ -362,6 +371,62 @@ def test_advanced_input_result_decodes_as_strict_reusable_evidence() -> None:
     assert evidence.dataset_id == "MATR"
     assert evidence.cell_id == batch.metadata.cell_id
     assert evidence.cutoff_cycle == 20
+    assert evidence.cell_metadata is not None
+    assert evidence.cell_metadata.chemistry == "LFP/graphite"
+    assert evidence.cell_metadata.nominal_capacity_ah == 1.1
+    assert evidence.cell_metadata.official_life_label is None
+
+
+def test_advanced_input_decoder_rejects_label_bearing_metadata() -> None:
+    batch = _batch()
+    result = execute_prepare_advanced_input_tool(
+        PrepareAdvancedInputToolInput(record_batch_id=batch.record_batch_id),
+        context=_context(),
+        batch_resolver=_BatchResolver(batch),
+    )
+    artifact = result.values["artifact"]
+    tampered = result.model_copy(
+        update={
+            "values": {
+                **result.values,
+                "artifact": {
+                    **artifact,
+                    "cell_metadata": {
+                        **artifact["cell_metadata"],
+                        "official_life_label": 900,
+                    },
+                },
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="metadata"):
+        decode_advanced_input_result(tampered)
+
+
+def test_legacy_advanced_input_without_metadata_remains_readable() -> None:
+    batch = _batch()
+    result = execute_prepare_advanced_input_tool(
+        PrepareAdvancedInputToolInput(record_batch_id=batch.record_batch_id),
+        context=_context(),
+        batch_resolver=_BatchResolver(batch),
+    )
+    legacy = result.model_copy(
+        update={
+            "values": {
+                "artifact_type": "quanxin_life.advanced_input_evidence.v1",
+                "artifact": {
+                    key: value
+                    for key, value in result.values["artifact"].items()
+                    if key != "cell_metadata"
+                },
+            }
+        }
+    )
+
+    evidence = decode_advanced_input_result(legacy)
+
+    assert evidence.cell_metadata is None
 
 
 @pytest.mark.parametrize(

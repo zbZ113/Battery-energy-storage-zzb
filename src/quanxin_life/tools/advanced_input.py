@@ -8,19 +8,19 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import UUID, uuid4
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 
-from quanxin_life.core import (
-    SourceKind,
-    ToolResult,
-    sha256_canonical,
-)
+from quanxin_life.core import CellMetadata, SourceKind, ToolResult, sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.features.early_cycle_sequence import PHASE_NAMES, VARIABLE_NAMES
 from quanxin_life.features.multichannel_cycle import (
     CONDITION_NAMES,
     MultichannelCycleConfig,
     build_early_cycle_sequence,
+)
+from quanxin_life.tools.cell_metadata_evidence import (
+    cell_metadata_evidence_payload,
+    validate_versioned_cell_metadata_evidence,
 )
 from quanxin_life.tools.early_cycle_features import VerifiedEarlyCycleBatch
 from quanxin_life.tools.registry import (
@@ -38,7 +38,11 @@ if TYPE_CHECKING:
 
 PREPARE_ADVANCED_INPUT_TOOL_VERSION = "advanced-input-tool-v1"
 ADVANCED_INPUT_TRANSFORM_VERSION = "advanced-multichannel-transform-v1"
-ADVANCED_INPUT_EVIDENCE_TYPE = "quanxin_life.advanced_input_evidence.v1"
+ADVANCED_INPUT_EVIDENCE_TYPE_V1 = "quanxin_life.advanced_input_evidence.v1"
+ADVANCED_INPUT_EVIDENCE_TYPE = "quanxin_life.advanced_input_evidence.v2"
+ADVANCED_INPUT_EVIDENCE_TYPES = frozenset(
+    {ADVANCED_INPUT_EVIDENCE_TYPE_V1, ADVANCED_INPUT_EVIDENCE_TYPE}
+)
 Clock = Callable[[], datetime]
 
 
@@ -70,6 +74,7 @@ class AdvancedInputEvidence(ContractModel):
     record_batch_id: str
     dataset_id: Literal["MATR"]
     cell_id: str = Field(min_length=1)
+    cell_metadata: CellMetadata | None = None
     cutoff_cycle: int
     data_version: str = Field(min_length=1)
     feature_version: str = Field(min_length=1)
@@ -96,6 +101,21 @@ class AdvancedInputEvidence(ContractModel):
         if value not in {20, 50, 100, 150}:
             raise ValueError("cutoff_cycle must be an approved Advanced cutoff")
         return value
+
+    @model_validator(mode="after")
+    def require_cell_metadata_identity_match(self) -> AdvancedInputEvidence:
+        if self.cell_metadata is not None and (
+            self.cell_metadata.dataset_id != self.dataset_id
+            or self.cell_metadata.cell_id != self.cell_id
+        ):
+            raise ValueError("cell_metadata identity must match Advanced input evidence")
+        if self.cell_metadata is not None and (
+            self.cell_metadata.official_life_label is not None
+            or self.cell_metadata.official_life_label_name is not None
+            or self.cell_metadata.ingestion_parameters
+        ):
+            raise ValueError("cell_metadata must not contain training-only fields")
+        return self
 
 
 def _utc_now() -> datetime:
@@ -138,15 +158,25 @@ def decode_advanced_input_result(result: ToolResult) -> AdvancedInputEvidence:
         raise ValueError("Advanced input result versions are incomplete")
     if set(validated.values) != {"artifact_type", "artifact"}:
         raise ValueError("Advanced input result values do not match the approved contract")
-    if validated.values["artifact_type"] != ADVANCED_INPUT_EVIDENCE_TYPE:
+    artifact_type = validated.values["artifact_type"]
+    if artifact_type not in ADVANCED_INPUT_EVIDENCE_TYPES:
         raise ValueError("Advanced input result has an unexpected artifact_type")
     artifact = validated.values["artifact"]
     if not isinstance(artifact, dict):
         raise ValueError("Advanced input result artifact must be an object")
+    decoded_artifact: dict[str, object] = dict(artifact)
+    metadata = validate_versioned_cell_metadata_evidence(
+        decoded_artifact,
+        artifact_type=artifact_type,
+        legacy_artifact_type=ADVANCED_INPUT_EVIDENCE_TYPE_V1,
+        metadata_artifact_type=ADVANCED_INPUT_EVIDENCE_TYPE,
+    )
+    if metadata is not None:
+        decoded_artifact["cell_metadata"] = metadata
     try:
         evidence = AdvancedInputEvidence.model_validate(
             {
-                **artifact,
+                **decoded_artifact,
                 "data_version": validated.data_version,
                 "feature_version": validated.feature_version,
             }
@@ -216,6 +246,7 @@ def execute_prepare_advanced_input_tool(
                 "record_batch_id": batch.record_batch_id,
                 "dataset_id": batch.metadata.dataset_id,
                 "cell_id": batch.metadata.cell_id,
+                "cell_metadata": cell_metadata_evidence_payload(batch.metadata),
                 "cutoff_cycle": cutoff_cycle,
                 "raw_sequence_input_sha256": raw_sequence.input_hash,
                 "transform_config_sha256": sha256_canonical(
@@ -265,11 +296,14 @@ def register_project_prepare_advanced_input_tool(
 
 __all__ = [
     "ADVANCED_INPUT_EVIDENCE_TYPE",
+    "ADVANCED_INPUT_EVIDENCE_TYPES",
+    "ADVANCED_INPUT_EVIDENCE_TYPE_V1",
     "ADVANCED_INPUT_TRANSFORM_VERSION",
     "PREPARE_ADVANCED_INPUT_TOOL_VERSION",
     "AdvancedInputEvidence",
     "PrepareAdvancedInputToolInput",
     "ProjectEarlyCycleBatchResolver",
+    "cell_metadata_evidence_payload",
     "decode_advanced_input_result",
     "execute_prepare_advanced_input_tool",
     "register_project_prepare_advanced_input_tool",

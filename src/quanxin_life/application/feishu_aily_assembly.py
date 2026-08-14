@@ -54,6 +54,7 @@ from quanxin_life.integrations.feishu.aily_tasks import (
     AilyDataIdentityResolver,
     SqlAlchemyAilyAnalysisTaskGateway,
 )
+from quanxin_life.integrations.feishu.analysis_plots import FeishuAnalysisPlotter
 from quanxin_life.integrations.feishu.attachments import (
     FeishuAttachmentPolicy,
     VerifiedFeishuAttachment,
@@ -92,7 +93,6 @@ from quanxin_life.integrations.feishu.scenario_authorization import (
 from quanxin_life.integrations.feishu.scenario_contexts import (
     SqlAlchemyFeishuScenarioContextStore,
 )
-from quanxin_life.integrations.feishu.scenario_plot import FeishuScenarioPlotter
 from quanxin_life.integrations.feishu.scenario_reports import (
     FeishuScenarioReportResultFactory,
 )
@@ -103,7 +103,6 @@ from quanxin_life.integrations.feishu.security import (
 from quanxin_life.integrations.feishu.sibling_planner import (
     ProactiveFeishuSiblingPlanner,
 )
-from quanxin_life.integrations.feishu.soh_plot import FeishuSohPlotter
 from quanxin_life.integrations.feishu.sqlalchemy_receipts import (
     SqlAlchemyFeishuReceiptStore,
 )
@@ -532,6 +531,7 @@ def create_feishu_aily_components(
         app_token=config.bitable_app_token,
         table_id=config.bitable_table_id,
     )
+    analysis_plotter = FeishuAnalysisPlotter()
     feishu_delivery = FeishuAnalysisJobDelivery(
         client=client,
         card_builder=AuditedCardBuilder(
@@ -546,8 +546,8 @@ def create_feishu_aily_components(
             result_resolver=result_resolver,
         ),
         result_authorizer=authorizer,
-        scenario_plotter=FeishuScenarioPlotter(),
-        analysis_plotter=FeishuSohPlotter(),
+        scenario_plotter=analysis_plotter,
+        analysis_plotter=analysis_plotter,
     )
     aily_delivery = AilyAnalysisJobDelivery(
         bitable_writer=bitable_writer,

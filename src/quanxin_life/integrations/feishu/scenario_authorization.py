@@ -21,16 +21,23 @@ from quanxin_life.reporting.contracts import AUDITED_REPORT_TOOL_VERSION
 from quanxin_life.scenarios import BlastRouteManifest, load_packaged_blast_route_catalog
 from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPES,
     ADVANCED_RUL_PREDICTION_TOOL_VERSION,
 )
 from quanxin_life.tools.advanced_soh_prediction import (
     ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES,
     ADVANCED_SOH_PREDICTION_TOOL_VERSION,
     AdvancedSOHInference,
 )
 from quanxin_life.tools.blast_scenarios import (
     COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
     PROJECT_STORAGE_LIFETIME_TOOL_VERSION,
+)
+from quanxin_life.tools.cell_metadata_evidence import (
+    validate_versioned_cell_metadata_evidence,
 )
 from quanxin_life.tools.data_quality import (
     DATA_QUALITY_MODEL_VERSION,
@@ -230,6 +237,12 @@ def _authorize_advanced_rul(result: ToolResult) -> AuditedResultAuthorization:
         if not isinstance(artifact_value, Mapping):
             raise ValueError("Advanced RUL artifact is invalid")
         artifact = artifact_value
+        validate_versioned_cell_metadata_evidence(
+            artifact,
+            artifact_type=checked.values.get("artifact_type"),
+            legacy_artifact_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+            metadata_artifact_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+        )
         prediction_value = artifact.get("cycle_life_prediction")
         prediction = CycleLifePrediction.model_validate(prediction_value)
         route_role_value = artifact.get("route_role")
@@ -247,7 +260,7 @@ def _authorize_advanced_rul(result: ToolResult) -> AuditedResultAuthorization:
     if (
         checked.tool_version != ADVANCED_RUL_PREDICTION_TOOL_VERSION
         or checked.values.get("artifact_type")
-        != ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE
+        not in ADVANCED_RUL_PREDICTION_EVIDENCE_TYPES
         or prediction.target is not PredictionTarget.MATR_OFFICIAL_CYCLE_LIFE
         or not prediction.right_censored
         or prediction.observed_cycle is not None
@@ -346,6 +359,12 @@ def _authorize_advanced_soh(result: ToolResult) -> AuditedResultAuthorization:
         if not isinstance(artifact_value, Mapping):
             raise ValueError("Advanced SOH artifact is invalid")
         artifact = artifact_value
+        validate_versioned_cell_metadata_evidence(
+            artifact,
+            artifact_type=checked.values.get("artifact_type"),
+            legacy_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+            metadata_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+        )
         inference = AdvancedSOHInference.model_validate(
             {
                 **{
@@ -367,7 +386,7 @@ def _authorize_advanced_soh(result: ToolResult) -> AuditedResultAuthorization:
     if (
         checked.tool_version != ADVANCED_SOH_PREDICTION_TOOL_VERSION
         or checked.values.get("artifact_type")
-        != ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE
+        not in ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES
         or inference.task is not AdvancedModelTask.SOH
         or inference.output_target != "soh_trajectory"
         or inference.route_role

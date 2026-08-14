@@ -7,6 +7,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
+from importlib.resources import as_file, files
 from itertools import pairwise
 from numbers import Real
 from typing import Any
@@ -18,7 +19,11 @@ from quanxin_life.tools.blast_scenarios import (
     PROJECT_STORAGE_LIFETIME_TOOL_VERSION,
 )
 
-SCENARIO_PLOT_VERSION = "feishu-scenario-plot-v1"
+SCENARIO_PLOT_VERSION = "feishu-scenario-plot-v2"
+SCENARIO_PLOT_FONT_SHA256 = (
+    "b981c60b7f35d4730109fd6d0baee61d7b5bf29ea488cd2ddec87554b50fe457"
+)
+_SCENARIO_PLOT_FONT_RESOURCE = "assets/QuanxinScenarioSans-Regular.ttf"
 
 
 class FeishuScenarioPlotError(ValueError):
@@ -47,10 +52,12 @@ class _ProjectionSeries:
 class FeishuScenarioPlotter:
     """Create one deterministic comparison PNG without accepting caller numbers."""
 
+    renderer_version = SCENARIO_PLOT_VERSION
+
     def render(self, result: ToolResult) -> FeishuScenarioPlotArtifact:
         checked = ToolResult.model_validate(result.model_dump(mode="json"))
         series = _series_from_result(checked)
-        payload = _render_png(series, result_id=checked.result_id)
+        payload = _render_png(series)
         return FeishuScenarioPlotArtifact(
             source_result_id=checked.result_id,
             filename=f"scenario-{checked.result_id}.png",
@@ -123,73 +130,90 @@ def _projection(value: object) -> _ProjectionSeries:
 
 def _render_png(
     series: tuple[_ProjectionSeries, ...],
-    *,
-    result_id: str,
 ) -> bytes:
     try:
         import matplotlib
 
         matplotlib.use("Agg", force=True)
         import matplotlib.pyplot as plt
+        from matplotlib.font_manager import FontProperties
     except ImportError as exc:  # pragma: no cover - dependency gate
         raise RuntimeError("scenario plot rendering requires matplotlib") from exc
 
-    figure, axis = plt.subplots(figsize=(8.4, 5.2), constrained_layout=True)
-    for item in series:
-        line = axis.plot(
-            item.natural_years,
-            item.soh,
-            linewidth=2.0,
-            label=item.scenario_id,
-        )[0]
-        if item.eol_year is not None:
-            axis.scatter(
-                [item.eol_year],
-                [item.eol_threshold],
-                color=line.get_color(),
-                edgecolor="black",
-                linewidth=0.5,
-                zorder=3,
-            )
-    for threshold in dict.fromkeys(item.eol_threshold for item in series):
-        axis.axhline(
-            threshold,
-            color="#A61B1B",
-            linestyle="--",
-            linewidth=1.0,
-            alpha=0.7,
+    font_resource = files("quanxin_life.integrations.feishu").joinpath(
+        _SCENARIO_PLOT_FONT_RESOURCE
+    )
+    if sha256(font_resource.read_bytes()).hexdigest() != SCENARIO_PLOT_FONT_SHA256:
+        raise FeishuScenarioPlotError(
+            "reviewed scenario plot font SHA-256 does not match"
         )
-    axis.set(
-        xlabel="Natural year",
-        ylabel="State of health",
-        title="Audited BLAST reference scenarios",
-    )
-    axis.grid(alpha=0.25)
-    axis.legend(fontsize=8)
-    baseline = series[0]
-    tick_indices = _tick_indices(len(baseline.natural_years), maximum=6)
-    top = axis.twiny()
-    top.set_xlim(axis.get_xlim())
-    top.set_xticks([baseline.natural_years[index] for index in tick_indices])
-    top.set_xticklabels(
-        [format(baseline.equivalent_full_cycles[index], ".0f") for index in tick_indices]
-    )
-    top.set_xlabel("Baseline scheduled equivalent full cycles")
-    figure.text(
-        0.01,
-        0.01,
-        f"ToolResult: {result_id} | deterministic scenario, not a confidence interval",
-        fontsize=7,
-        color="#555555",
-    )
-    buffer = io.BytesIO()
-    figure.savefig(
-        buffer,
-        format="png",
-        dpi=160,
-        metadata={"Software": SCENARIO_PLOT_VERSION},
-    )
-    plt.close(figure)
+    with as_file(font_resource) as font_path:
+        font = FontProperties(fname=str(font_path))
+        figure, axis = plt.subplots(figsize=(8.4, 5.2), constrained_layout=True)
+        for index, item in enumerate(series):
+            if len(series) == 1:
+                label = "参考工况"
+            elif index == 0:
+                label = "基准工况"
+            else:
+                label = f"对比工况 {index}"
+            line = axis.plot(
+                item.natural_years,
+                item.soh,
+                linewidth=2.0,
+                label=label,
+            )[0]
+            if item.eol_year is not None:
+                axis.scatter(
+                    [item.eol_year],
+                    [item.eol_threshold],
+                    color=line.get_color(),
+                    edgecolor="black",
+                    linewidth=0.5,
+                    zorder=3,
+                )
+        for threshold in dict.fromkeys(item.eol_threshold for item in series):
+            axis.axhline(
+                threshold,
+                color="#A61B1B",
+                linestyle="--",
+                linewidth=1.0,
+                alpha=0.7,
+            )
+        axis.set_xlabel("自然年", fontproperties=font)
+        axis.set_ylabel("健康状态 SOH", fontproperties=font)
+        axis.set_title("BLAST-Lite 参考工况退化对比", fontproperties=font)
+        axis.grid(alpha=0.25)
+        axis.legend(prop=font)
+        baseline = series[0]
+        tick_indices = _tick_indices(len(baseline.natural_years), maximum=6)
+        top = axis.twiny()
+        top.set_xlim(axis.get_xlim())
+        top.set_xticks([baseline.natural_years[index] for index in tick_indices])
+        top.set_xticklabels(
+            [
+                format(baseline.equivalent_full_cycles[index], ".0f")
+                for index in tick_indices
+            ],
+            fontproperties=font,
+        )
+        top.set_xlabel("基准工况计划等效全循环 EFC", fontproperties=font)
+        figure.text(
+            0.01,
+            0.01,
+            "受控工具结果绘制; 不含统计置信区间, 不代表目标电芯寿命承诺",
+            fontsize=7,
+            color="#555555",
+            fontproperties=font,
+        )
+        buffer = io.BytesIO()
+        figure.savefig(
+            buffer,
+            format="png",
+            dpi=160,
+            metadata={"Software": SCENARIO_PLOT_VERSION},
+        )
+        plt.close(figure)
     return buffer.getvalue()
 
 

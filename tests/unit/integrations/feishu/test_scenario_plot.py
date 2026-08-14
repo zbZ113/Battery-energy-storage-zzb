@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import warnings
 from datetime import UTC, datetime
 from hashlib import sha256
 from uuid import uuid4
 
 from quanxin_life.core import ProvenanceRecord, SourceKind, ToolResult
-from quanxin_life.integrations.feishu.scenario_plot import FeishuScenarioPlotter
+from quanxin_life.integrations.feishu.scenario_plot import (
+    SCENARIO_PLOT_FONT_SHA256,
+    FeishuScenarioPlotter,
+)
 from quanxin_life.tools.blast_scenarios import (
     COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
 )
@@ -73,8 +77,10 @@ def test_scenario_plotter_renders_deterministic_png_from_tool_result_only() -> N
     result = _result()
     plotter = FeishuScenarioPlotter()
 
-    first = plotter.render(result)
-    second = plotter.render(result)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        first = plotter.render(result)
+        second = plotter.render(result)
 
     assert first.source_result_id == result.result_id
     assert first.media_type == "image/png"
@@ -82,3 +88,7 @@ def test_scenario_plotter_renders_deterministic_png_from_tool_result_only() -> N
     assert first.payload.startswith(b"\x89PNG\r\n\x1a\n")
     assert first.sha256 == sha256(first.payload).hexdigest()
     assert second.sha256 == first.sha256
+    assert plotter.renderer_version == "feishu-scenario-plot-v2"
+    assert SCENARIO_PLOT_FONT_SHA256 == (
+        "b981c60b7f35d4730109fd6d0baee61d7b5bf29ea488cd2ddec87554b50fe457"
+    )

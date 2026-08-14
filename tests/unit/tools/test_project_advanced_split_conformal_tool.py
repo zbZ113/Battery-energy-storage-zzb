@@ -33,10 +33,10 @@ from quanxin_life.tools.advanced_conformal import (
     register_project_advanced_split_conformal_tool,
 )
 from quanxin_life.tools.advanced_cycle_life_prediction import (
-    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
 )
 from quanxin_life.tools.advanced_soh_prediction import (
-    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
 )
 from quanxin_life.tools.registry import (
     StandardToolName,
@@ -253,7 +253,7 @@ def test_project_rul_conformal_calibrates_and_issues_coverage_interval() -> None
     assert calibration.values["artifact"]["route_role"] == "DEFAULT"
 
     prediction = _result(
-        ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+        ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
         {
             **runtime,
             "record_batch_id": str(uuid4()),
@@ -325,7 +325,7 @@ def test_project_rul_conformal_rejects_point_accuracy_prediction() -> None:
         role=AdvancedModelRouteRole.POINT_ACCURACY,
     )
     prediction = _result(
-        ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+        ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
         {
             **runtime,
             "record_batch_id": str(uuid4()),
@@ -631,7 +631,7 @@ def test_project_soh_conformal_calibrates_simultaneous_finite_band() -> None:
     )
 
     prediction = _result(
-        ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+        ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
         {
             **runtime,
             "record_batch_id": str(uuid4()),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime
 from itertools import pairwise
 from typing import TYPE_CHECKING, Annotated, Literal, Protocol
@@ -47,9 +47,16 @@ from quanxin_life.core import (
 from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+    ADVANCED_RUL_PREDICTION_EVIDENCE_TYPES,
 )
 from quanxin_life.tools.advanced_soh_prediction import (
     ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+    ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES,
+)
+from quanxin_life.tools.cell_metadata_evidence import (
+    validate_versioned_cell_metadata_evidence,
 )
 from quanxin_life.tools.registry import (
     RegisteredTool,
@@ -510,7 +517,13 @@ def _decode_soh_sample(result: ToolResult) -> AdvancedSOHCalibrationSample:
 
 
 def _decode_rul_prediction(result: ToolResult) -> AdvancedRULPointPrediction:
-    artifact = _artifact(result, ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE)
+    artifact = _artifact(result, ADVANCED_RUL_PREDICTION_EVIDENCE_TYPES)
+    validate_versioned_cell_metadata_evidence(
+        artifact,
+        artifact_type=result.values.get("artifact_type"),
+        legacy_artifact_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE_V1,
+        metadata_artifact_type=ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
+    )
     _require_tool_name(result, StandardToolName.PREDICT_CYCLE_LIFE)
     prediction = CycleLifePrediction.model_validate(
         artifact["cycle_life_prediction"]
@@ -552,7 +565,13 @@ def _decode_rul_prediction(result: ToolResult) -> AdvancedRULPointPrediction:
 
 
 def _decode_soh_prediction(result: ToolResult) -> AdvancedSOHPointPrediction:
-    artifact = _artifact(result, ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE)
+    artifact = _artifact(result, ADVANCED_SOH_PREDICTION_EVIDENCE_TYPES)
+    validate_versioned_cell_metadata_evidence(
+        artifact,
+        artifact_type=result.values.get("artifact_type"),
+        legacy_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE_V1,
+        metadata_artifact_type=ADVANCED_SOH_PREDICTION_EVIDENCE_TYPE,
+    )
     _require_tool_name(result, StandardToolName.PREDICT_SOH_TRAJECTORY)
     runtime = _runtime_from_result(result, artifact)
     _require_result_versions(
@@ -673,11 +692,19 @@ def _tool_result(
     )
 
 
-def _artifact(result: ToolResult, expected_type: str) -> dict[str, object]:
+def _artifact(
+    result: ToolResult,
+    expected_type: str | Collection[str],
+) -> dict[str, object]:
     values = result.values
     if set(values) != {"artifact_type", "artifact"}:
         raise ValueError("Advanced Conformal dependency has an invalid envelope")
-    if values["artifact_type"] != expected_type:
+    expected_types = (
+        frozenset({expected_type})
+        if isinstance(expected_type, str)
+        else frozenset(expected_type)
+    )
+    if values["artifact_type"] not in expected_types:
         raise ValueError("Advanced Conformal dependency artifact type is invalid")
     artifact = values["artifact"]
     if not isinstance(artifact, dict):

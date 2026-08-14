@@ -127,6 +127,24 @@ def _validation_result() -> ToolResult:
     )
 
 
+def _cell_metadata() -> dict[str, object]:
+    return {
+        "dataset_id": "MATR",
+        "cell_id": "MATR_b3c34",
+        "raw_cell_id": "b3c34",
+        "chemistry": "LFP/graphite",
+        "nominal_capacity_ah": 1.1,
+        "reference_capacity_ah": 1.0,
+        "eol_threshold": 0.8,
+        "protocol_id": "MATR-standard",
+        "protocol_description": "公开 MATR 小容量 LFP 循环测试",
+        "source_uri": "trusted-store://matr/b3c34",
+        "source_sha256": "d" * 64,
+        "schema_version": "cell-metadata-v1",
+        "adapter_version": "matr-adapter-v1",
+    }
+
+
 def _cycle_life_result() -> ToolResult:
     return ToolResult(
         result_id=str(uuid4()),
@@ -137,8 +155,10 @@ def _cycle_life_result() -> ToolResult:
         feature_version="cyclepatch-multichannel-v1",
         input_hash="b" * 64,
         values={
-            "artifact_type": "quanxin_life.advanced_rul_prediction.v1",
+            "artifact_type": "quanxin_life.advanced_rul_prediction.v2",
             "artifact": {
+                "cell_metadata": _cell_metadata(),
+                "dataset_id": "MATR",
                 "cell_id": "MATR_b3c34",
                 "cutoff_cycle": 50,
                 "cycle_life_prediction": {"predicted_cycle": 1074.4998779296875},
@@ -162,8 +182,10 @@ def _soh_result() -> ToolResult:
         feature_version="cyclepatch-multichannel-v1",
         input_hash="c" * 64,
         values={
-            "artifact_type": "quanxin_life.advanced_soh_trajectory.v1",
+            "artifact_type": "quanxin_life.advanced_soh_trajectory.v2",
             "artifact": {
+                "cell_metadata": _cell_metadata(),
+                "dataset_id": "MATR",
                 "cell_id": "MATR_b3c34",
                 "cutoff_cycle": 50,
                 "prediction_cycles": [51, 500],
@@ -212,8 +234,17 @@ def test_cycle_life_card_is_a_chinese_engineering_analysis_sheet() -> None:
 
     rendered = json.dumps(card, ensure_ascii=False)
 
-    assert "电芯寿命分析" in rendered
+    assert "MATR_b3c34 | 早期寿命评估" in rendered
     assert "MATR_b3c34" in rendered
+    assert "化学体系" in rendered
+    assert "LFP/graphite" in rendered
+    assert "标称容量" in rendered
+    assert "1.1 Ah" in rendered
+    assert "数据来源" in rendered
+    assert "**数据来源**\\nMATR" in rendered
+    assert "trusted-store://matr/b3c34" not in rendered
+    assert "测试规格" in rendered
+    assert "公开 MATR 小容量 LFP 循环测试" in rendered
     assert "已观测循环" in rendered
     assert "50" in rendered
     assert "预测总循环寿命" in rendered
@@ -244,8 +275,10 @@ def test_soh_card_explains_the_finite_cycle_boundary_without_confidence_claims()
 
     rendered = json.dumps(card, ensure_ascii=False)
 
-    assert "有限时域 SOH 分析" in rendered
+    assert "MATR_b3c34 | 有限时域 SOH" in rendered
     assert "MATR_b3c34" in rendered
+    assert "LFP/graphite" in rendered
+    assert "1.1 Ah" in rendered
     assert "已观测循环" in rendered
     assert "50" in rendered
     assert "预测边界循环" in rendered
@@ -257,6 +290,86 @@ def test_soh_card_explains_the_finite_cycle_boundary_without_confidence_claims()
     assert "可信度" not in rendered
     assert result.result_id not in rendered
     assert result.model_version not in rendered
+
+
+def test_missing_cell_metadata_is_explicitly_unavailable_instead_of_guessed() -> None:
+    result = _cycle_life_result().model_copy(
+        update={
+            "values": {
+                **_cycle_life_result().values,
+                "artifact_type": "quanxin_life.advanced_rul_prediction.v1",
+                "artifact": {
+                    key: value
+                    for key, value in _cycle_life_result().values["artifact"].items()
+                    if key != "cell_metadata"
+                },
+            }
+        }
+    )
+
+    card = AuditedCardBuilder(
+        AuditLedger((result,)),
+        authorizer=_ModelAuthorizer(),
+        binding_verifier=_BindingVerifier(),
+    ).build_result_card(run_id="run-safe", result_id=result.result_id)
+    rendered = json.dumps(card, ensure_ascii=False)
+
+    assert "化学体系" in rendered
+    assert "标称容量" in rendered
+    assert "数据来源" in rendered
+    assert "测试规格" in rendered
+    assert rendered.count("未登记") >= 4
+    assert "1.1 Ah" not in rendered
+
+
+def test_v2_result_without_cell_metadata_is_rejected() -> None:
+    result = _cycle_life_result()
+    artifact = result.values["artifact"]
+    damaged = result.model_copy(
+        update={
+            "values": {
+                **result.values,
+                "artifact": {
+                    key: value
+                    for key, value in artifact.items()
+                    if key != "cell_metadata"
+                },
+            }
+        }
+    )
+
+    with pytest.raises(AuditedCardError, match="metadata"):
+        AuditedCardBuilder(
+            AuditLedger((damaged,)),
+            authorizer=_ModelAuthorizer(),
+            binding_verifier=_BindingVerifier(),
+        ).build_result_card(run_id="run-safe", result_id=damaged.result_id)
+
+
+def test_cell_metadata_dataset_identity_mismatch_is_rejected() -> None:
+    result = _cycle_life_result()
+    artifact = result.values["artifact"]
+    mismatched = result.model_copy(
+        update={
+            "values": {
+                **result.values,
+                "artifact": {
+                    **artifact,
+                    "cell_metadata": {
+                        **artifact["cell_metadata"],
+                        "dataset_id": "OTHER",
+                    },
+                },
+            }
+        }
+    )
+
+    with pytest.raises(AuditedCardError, match="identity"):
+        AuditedCardBuilder(
+            AuditLedger((mismatched,)),
+            authorizer=_ModelAuthorizer(),
+            binding_verifier=_BindingVerifier(),
+        ).build_result_card(run_id="run-safe", result_id=mismatched.result_id)
 
 
 def test_audited_card_public_api_rejects_caller_supplied_numeric_value() -> None:

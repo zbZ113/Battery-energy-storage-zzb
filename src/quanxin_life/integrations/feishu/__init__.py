@@ -3,6 +3,14 @@
 from importlib import import_module
 from typing import TYPE_CHECKING
 
+from .analysis_plots import (
+    ANALYSIS_PLOT_DISPATCHER_VERSION,
+    AnalysisPlotPlan,
+    AnalysisPlotTemplate,
+    FeishuAnalysisPlotArtifact,
+    FeishuAnalysisPlotError,
+    FeishuAnalysisPlotter,
+)
 from .bitable import (
     BITABLE_RUN_FIELD_NAMES,
     BitableConflictError,
@@ -111,11 +119,14 @@ def __getattr__(name: str) -> object:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
+    "ANALYSIS_PLOT_DISPATCHER_VERSION",
     "BITABLE_RUN_FIELD_NAMES",
     "SCENARIO_PLOT_VERSION",
     "AilyAnalysisJobDelivery",
     "AilyBitableWriter",
     "AilyScenarioReferenceUseAuthorizer",
+    "AnalysisPlotPlan",
+    "AnalysisPlotTemplate",
     "AuditedCardBuilder",
     "AuditedCardError",
     "AuditedResultAuthorization",
@@ -128,6 +139,9 @@ __all__ = [
     "BitableWriterError",
     "BlastScenarioResultAuthorizer",
     "FeishuAesCbcDecryptor",
+    "FeishuAnalysisPlotArtifact",
+    "FeishuAnalysisPlotError",
+    "FeishuAnalysisPlotter",
     "FeishuBitableWriter",
     "FeishuCardStatus",
     "FeishuDecryptorError",
