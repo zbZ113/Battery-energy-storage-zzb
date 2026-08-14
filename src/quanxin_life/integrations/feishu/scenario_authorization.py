@@ -24,6 +24,9 @@ from quanxin_life.reporting.contracts import (
     AUDITED_REPORT_TOOL_VERSION,
     RECOMMENDATION_REPORT_RENDERER_VERSION,
 )
+from quanxin_life.reporting.engineering_recommendation import (
+    render_engineering_recommendation_markdown,
+)
 from quanxin_life.scenarios import BlastRouteManifest, load_packaged_blast_route_catalog
 from quanxin_life.tools.advanced_cycle_life_prediction import (
     ADVANCED_RUL_PREDICTION_EVIDENCE_TYPE,
@@ -688,6 +691,10 @@ def _matches_recommendation_report(
     upstream: ToolResult,
 ) -> bool:
     markdown = report.values.get("markdown")
+    try:
+        expected_markdown = render_engineering_recommendation_markdown(upstream)
+    except (TypeError, ValueError):
+        return False
     return (
         report.model_version == RECOMMENDATION_REPORT_RENDERER_VERSION
         and report.data_version == upstream.data_version
@@ -703,8 +710,7 @@ def _matches_recommendation_report(
         and report.values.get("report_id") == report.result_id
         and report.values.get("rendering_version")
         == RECOMMENDATION_REPORT_RENDERER_VERSION
-        and isinstance(markdown, str)
-        and markdown.startswith("# 工程综合建议审计报告\n")
+        and markdown == expected_markdown
     )
 
 

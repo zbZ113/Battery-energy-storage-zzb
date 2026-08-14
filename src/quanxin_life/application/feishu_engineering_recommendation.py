@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
-import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol, cast
 from uuid import uuid4
@@ -27,6 +25,9 @@ from quanxin_life.reporting.contracts import (
     AUDITED_REPORT_TOOL_VERSION,
     RECOMMENDATION_REPORT_RENDERER_VERSION,
 )
+from quanxin_life.reporting.engineering_recommendation import (
+    render_engineering_recommendation_markdown,
+)
 from quanxin_life.tools import StandardToolName
 from quanxin_life.tools.engineering_recommendation import (
     ENGINEERING_RECOMMENDATION_TOOL_VERSION,
@@ -44,13 +45,6 @@ _TERMINAL_STATUSES = frozenset(
         FeishuAnalysisJobStatus.FAILED.value,
     }
 )
-_RECOMMENDATION_LABELS = {
-    "ADOPTABLE": "建议采用",
-    "RECHECK_REQUIRED": "建议复检",
-    "UNRESOLVED": "暂无法判断",
-}
-
-
 class RegisteredResultResolver(Protocol):
     def resolve_registered_result(self, result_id: str) -> ToolResult: ...
 
@@ -256,7 +250,7 @@ class FeishuEngineeringRecommendationExecutor:
                 context,
                 job.report_result_id,
             )
-        _validate_report_result(report, analysis_result_id=analysis.result_id)
+        _validate_report_result(report, analysis_result=analysis)
         return analysis, report
 
     def _validated_inputs(
@@ -337,7 +331,7 @@ def build_engineering_recommendation_report_result(
         values={
             "report_id": result_id,
             "rendering_version": RECOMMENDATION_REPORT_RENDERER_VERSION,
-            "markdown": _render_recommendation_markdown(checked),
+            "markdown": render_engineering_recommendation_markdown(checked),
             "upstream_result_ids": [checked.result_id],
         },
         warnings=list(checked.warnings),
@@ -367,105 +361,34 @@ def _validate_analysis_result(
         raise ValueError("persisted recommendation ToolResult contract is invalid")
 
 
-def _validate_report_result(result: ToolResult, *, analysis_result_id: str) -> None:
+def _validate_report_result(
+    result: ToolResult,
+    *,
+    analysis_result: ToolResult,
+) -> None:
     checked = ToolResult.model_validate(result.model_dump(mode="json"))
     if (
         checked.tool_name != StandardToolName.GENERATE_AUDITED_REPORT.value
         or checked.tool_version != AUDITED_REPORT_TOOL_VERSION
-        or checked.values.get("upstream_result_ids") != [analysis_result_id]
+        or checked.model_version != RECOMMENDATION_REPORT_RENDERER_VERSION
+        or checked.data_version != analysis_result.data_version
+        or checked.feature_version != analysis_result.feature_version
+        or checked.input_hash
+        != sha256_canonical(
+            {
+                "schema_version": "engineering-recommendation-report-input-v1",
+                "analysis_result_id": analysis_result.result_id,
+                "analysis_input_hash": analysis_result.input_hash,
+            }
+        )
+        or checked.values.get("report_id") != checked.result_id
+        or checked.values.get("rendering_version")
+        != RECOMMENDATION_REPORT_RENDERER_VERSION
+        or checked.values.get("markdown")
+        != render_engineering_recommendation_markdown(analysis_result)
+        or checked.values.get("upstream_result_ids") != [analysis_result.result_id]
     ):
         raise ValueError("persisted recommendation report contract is invalid")
-
-
-def _render_recommendation_markdown(result: ToolResult) -> str:
-    recommendation = result.values.get("recommendation")
-    if not isinstance(recommendation, str):
-        raise ValueError("recommendation result has no controlled outcome")
-    label = _RECOMMENDATION_LABELS.get(recommendation)
-    if label is None:
-        raise ValueError("recommendation result has an invalid controlled outcome")
-    ruleset_id = _markdown_text(result.values.get("ruleset_id"))
-    ruleset_version = _markdown_text(result.values.get("ruleset_version"))
-    reason_codes = _text_list(result.values.get("reason_codes"), "reason_codes")
-    resolution_issues = _text_list(
-        result.values.get("resolution_issues"),
-        "resolution_issues",
-    )
-    threshold_evidence = result.values.get("threshold_evidence")
-    if not isinstance(threshold_evidence, list):
-        raise ValueError("recommendation threshold evidence is invalid")
-    lines = [
-        "# 工程综合建议审计报告",
-        "",
-        f"- 综合建议: {label}",
-        f"- 规则集: {ruleset_id}",
-        f"- 规则集版本: {ruleset_version}",
-        f"- 推荐结果 ID: {result.result_id}",
-        "",
-        "## 原因与缺口",
-        "",
-    ]
-    messages = [*reason_codes, *resolution_issues]
-    lines.extend(f"- {_markdown_text(item)}" for item in messages)
-    if not messages:
-        lines.append("- 已登记证据满足全部受审规则。")
-    lines.extend(("", "## 受审规则证据", ""))
-    if not threshold_evidence:
-        lines.append("当前没有可用于阈值核验的完整数值证据。")
-        return "\n".join(lines) + "\n"
-    lines.extend(
-        (
-            "| 规则 | 来源结果 | JSON 路径 | 比较符 | 审核阈值 | 实际值 | 通过 |",
-            "| --- | --- | --- | --- | ---: | ---: | --- |",
-        )
-    )
-    for item in threshold_evidence:
-        if not isinstance(item, Mapping):
-            raise ValueError("recommendation threshold evidence entry is invalid")
-        threshold = _finite_number(item.get("threshold"), field_name="threshold")
-        actual = _finite_number(item.get("actual_value"), field_name="actual_value")
-        passed = item.get("comparison_passed")
-        if not isinstance(passed, bool):
-            raise ValueError("recommendation comparison outcome is invalid")
-        lines.append(
-            "| "
-            + " | ".join(
-                (
-                    _markdown_text(item.get("rule_id")),
-                    _markdown_text(item.get("result_id")),
-                    _markdown_text(item.get("value_path")),
-                    _markdown_text(item.get("comparator")),
-                    json.dumps(threshold, ensure_ascii=True, allow_nan=False),
-                    json.dumps(actual, ensure_ascii=True, allow_nan=False),
-                    "是" if passed else "否",
-                )
-            )
-            + " |"
-        )
-    return "\n".join(lines) + "\n"
-
-
-def _markdown_text(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError("recommendation report text evidence is invalid")
-    normalized = value.strip().replace("|", "\\|").replace("\r", " ").replace("\n", " ")
-    if not normalized or any(ord(character) < 32 for character in normalized):
-        raise ValueError("recommendation report text evidence is unsafe")
-    return normalized
-
-
-def _text_list(value: object, field_name: str) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        raise ValueError(f"recommendation {field_name} is invalid")
-    return tuple(_markdown_text(item) for item in value)
-
-
-def _finite_number(value: object, *, field_name: str) -> int | float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError(f"recommendation {field_name} is not numeric")
-    if not math.isfinite(float(value)):
-        raise ValueError(f"recommendation {field_name} is not finite")
-    return value
 
 
 def _utc_timestamp(value: datetime) -> datetime:

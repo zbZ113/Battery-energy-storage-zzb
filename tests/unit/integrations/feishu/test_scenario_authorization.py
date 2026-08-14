@@ -616,6 +616,16 @@ def test_audited_authorizer_allows_recommendation_and_exact_report_only() -> Non
     assert recommendation_authorization.evidence_level is EvidenceLevel.DOMAIN_KNOWLEDGE
     assert report_authorization.allowed is True
     assert report_authorization.route_id == recommendation_authorization.route_id
+    tampered_report = report.model_copy(
+        update={
+            "values": {
+                **report.values,
+                "markdown": report.values["markdown"]
+                + "\n未追溯的阈值数字: 999\n",
+            }
+        }
+    )
+    assert authorizer.authorize(tampered_report).allowed is False
     delivered = validate_delivery_results(
         task=FeishuAnalysisTask.MAKE_ENGINEERING_RECOMMENDATION,
         expected_analysis_result_id=recommendation.result_id,

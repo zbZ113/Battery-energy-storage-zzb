@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy import (
     DateTime as SQLAlchemyDateTime,
@@ -1333,6 +1334,20 @@ class FeishuEventReceipt(Base):
         Index("ix_feishu_receipts_job_status_updated", "job_status", "job_updated_at"),
         Index("ix_feishu_receipts_scenario_context_id", "scenario_context_id"),
         Index("ix_feishu_receipts_source_job_id", "source_job_id", "task_type"),
+        Index(
+            "uq_feishu_receipts_proactive_source_task",
+            "source_job_id",
+            "task_type",
+            unique=True,
+            postgresql_where=text(
+                "source_job_id IS NOT NULL AND job_origin = 'FEISHU' AND "
+                "event_type = 'feishu.analysis_job.derived_v1'"
+            ),
+            sqlite_where=text(
+                "source_job_id IS NOT NULL AND job_origin = 'FEISHU' AND "
+                "event_type = 'feishu.analysis_job.derived_v1'"
+            ),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
