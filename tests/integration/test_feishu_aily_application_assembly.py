@@ -97,7 +97,12 @@ class _NoNetworkTransport:
         raise AssertionError("assembly must not access Feishu while being constructed")
 
 
-def _config(data_root: Path) -> FeishuAilyAssemblyConfig:
+def _config(
+    data_root: Path,
+    *,
+    recheck_table_id: str | None = None,
+    recheck_permission_reference: str | None = None,
+) -> FeishuAilyAssemblyConfig:
     return FeishuAilyAssemblyConfig(
         app_id="cli_test_app",
         app_secret=SecretStr("app-secret"),
@@ -110,6 +115,8 @@ def _config(data_root: Path) -> FeishuAilyAssemblyConfig:
         data_root=data_root,
         allow_candidate_scenario_execution=True,
         allow_candidate_scenario_results=True,
+        recheck_table_id=recheck_table_id,
+        recheck_permission_reference=recheck_permission_reference,
     )
 
 
@@ -185,8 +192,69 @@ def test_feishu_aily_assembly_shares_one_persistent_boundary(tmp_path) -> None:
         is CHINESE_ANALYSIS_BITABLE_PROFILE
     )
     assert components.aily_http_adapter is not None
+    assert "/v1/aily/recheck-actions" not in {
+        getattr(route, "path", None)
+        for route in components.aily_http_adapter.router.routes
+    }
     assert components.feishu_http_adapter is not None
     assert FEISHU_ANALYSIS_TASK not in celery_app.tasks
+
+
+def test_feishu_aily_assembly_mounts_recheck_only_with_project_authorization(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = create_session_factory(engine)
+    config = _config(
+        tmp_path / "batches",
+        recheck_table_id="tbl-reviewed-rechecks",
+        recheck_permission_reference="permission-reviewed-v1",
+    )
+
+    with pytest.raises(ValueError, match="recheck actions require project"):
+        create_feishu_aily_components(
+            session_factory=sessions,
+            celery_app=_CeleryApp(),
+            config=config,
+            feishu_transport=_NoNetworkTransport(),
+            default_scenarios=ReviewedDefaultScenarioRegistry(),
+            clock=lambda: NOW,
+        )
+
+    context_service = ProjectInvocationContextService(sessions, clock=lambda: NOW)
+    components = create_feishu_aily_components(
+        session_factory=sessions,
+        celery_app=_CeleryApp(),
+        config=config,
+        feishu_transport=_NoNetworkTransport(),
+        default_scenarios=ReviewedDefaultScenarioRegistry(),
+        project_model_dependencies=FeishuProjectModelDependencies(
+            context_service=context_service,
+            project_ledger=SqlProjectAuditLedger(
+                sessions,
+                context_validator=context_service,
+                clock=lambda: NOW,
+            ),
+            project_tool_service=SimpleNamespace(
+                invoke_in_project=lambda *_args, **_kwargs: None
+            ),
+        ),
+        clock=lambda: NOW,
+    )
+
+    assert "/v1/aily/recheck-actions" in {
+        getattr(route, "path", None)
+        for route in components.aily_http_adapter.router.routes
+    }
+
+
+def test_feishu_aily_config_rejects_partial_recheck_identity(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="recheck table and permission"):
+        _config(
+            tmp_path / "batches",
+            recheck_table_id="tbl-reviewed-rechecks",
+        )
 
 
 def test_application_package_lazily_exports_the_feishu_aily_assembly() -> None:

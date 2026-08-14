@@ -352,6 +352,10 @@ def create_competition_runtime(
                 allow_candidate_scenario_results=(
                     integration.allow_candidate_scenario_results
                 ),
+                recheck_table_id=integration.recheck_table_id,
+                recheck_permission_reference=(
+                    integration.recheck_permission_reference
+                ),
             ),
             registration_resolver=RegisteredFeishuCsvRegistrationResolver(
                 load_feishu_csv_registrations(integration.csv_registrations_file)

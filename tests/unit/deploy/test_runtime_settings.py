@@ -56,6 +56,47 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     }
 
 
+def _complete_feishu_environment(tmp_path: Path) -> dict[str, str]:
+    environment = _environment(tmp_path)
+    for secret_key in (
+        "QUANXIN_FEISHU_APP_SECRET_FILE",
+        "QUANXIN_FEISHU_VERIFICATION_TOKEN_FILE",
+        "QUANXIN_FEISHU_ENCRYPT_KEY_FILE",
+        "QUANXIN_AILY_CONNECTOR_API_KEY_FILE",
+    ):
+        path = tmp_path / secret_key.casefold()
+        path.write_text("reviewed-secret\n", encoding="utf-8")
+        environment[secret_key] = str(path)
+    csv_registrations = tmp_path / "feishu-csv-registrations.json"
+    csv_registrations.write_text(
+        '{"schema_version":"feishu-canonical-csv-registration-registry-v1",'
+        '"registrations":[]}\n',
+        encoding="utf-8",
+    )
+    default_scenarios = tmp_path / "feishu-default-scenario-profiles.json"
+    default_scenarios.write_text(
+        '{"schema_version":"feishu-default-scenario-registry-v1",'
+        '"profiles":[]}\n',
+        encoding="utf-8",
+    )
+    environment.update(
+        {
+            "QUANXIN_FEISHU_AILY_ENABLED": "true",
+            "QUANXIN_FEISHU_APP_ID": "cli-reviewed-app",
+            "QUANXIN_FEISHU_BITABLE_APP_TOKEN": "bascn-reviewed",
+            "QUANXIN_FEISHU_BITABLE_TABLE_ID": "tbl-reviewed",
+            "QUANXIN_EXTERNAL_HTTPS_BASE_URL": "https://integration.example.test",
+            "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE": str(csv_registrations),
+            "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE": str(
+                default_scenarios
+            ),
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION": "false",
+            "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS": "false",
+        }
+    )
+    return environment
+
+
 def test_runtime_settings_load_only_explicit_files_and_paths(tmp_path: Path) -> None:
     settings = CompetitionRuntimeSettings.from_environment(
         _environment(tmp_path)
@@ -179,6 +220,10 @@ def test_runtime_settings_load_complete_feishu_aily_bundle_from_secret_files(
             "QUANXIN_FEISHU_ENGINEERING_RULESETS_SHA256": (
                 "5f36b2ea290645ee34d943220a14b54ee5ea5be5b0c32ef47eb3291b6f214a1e"
             ),
+            "QUANXIN_FEISHU_RECHECK_TABLE_ID": "tbl-reviewed-rechecks",
+            "QUANXIN_FEISHU_RECHECK_PERMISSION_REFERENCE": (
+                "permission-reviewed-v1"
+            ),
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION": "true",
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS": "false",
         }
@@ -202,6 +247,8 @@ def test_runtime_settings_load_complete_feishu_aily_bundle_from_secret_files(
     assert integration.engineering_recommendation_rulesets_sha256 == (
         "5f36b2ea290645ee34d943220a14b54ee5ea5be5b0c32ef47eb3291b6f214a1e"
     )
+    assert integration.recheck_table_id == "tbl-reviewed-rechecks"
+    assert integration.recheck_permission_reference == "permission-reviewed-v1"
     assert integration.allow_candidate_scenario_execution is True
     assert integration.allow_candidate_scenario_results is False
     rendered = repr(settings) + str(settings)
@@ -268,6 +315,16 @@ def test_runtime_settings_reject_partial_recommendation_ruleset_configuration(
     )
 
     with pytest.raises(ValueError, match="recommendation ruleset"):
+        CompetitionRuntimeSettings.from_environment(environment)
+
+
+def test_runtime_settings_reject_partial_recheck_action_configuration(
+    tmp_path: Path,
+) -> None:
+    environment = _complete_feishu_environment(tmp_path)
+    environment["QUANXIN_FEISHU_RECHECK_TABLE_ID"] = "tbl-reviewed-rechecks"
+
+    with pytest.raises(ValueError, match="recheck table and permission"):
         CompetitionRuntimeSettings.from_environment(environment)
 
 

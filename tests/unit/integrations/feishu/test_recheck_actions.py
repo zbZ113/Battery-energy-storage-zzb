@@ -19,6 +19,7 @@ from quanxin_life.integrations.feishu.events import (
     FeishuReceiptClaimStatus,
 )
 from quanxin_life.integrations.feishu.recheck_actions import (
+    CHINESE_RECHECK_ACTION_FIELD_PROFILE,
     FeishuRecheckActionService,
     RecheckActionAuthorizationError,
     RecheckActionInProgressError,
@@ -115,7 +116,9 @@ class _ReceiptStore:
             if status is FeishuReceiptClaimStatus.IN_PROGRESS:
                 return FeishuReceiptClaim(status=status)
             assert status is FeishuReceiptClaimStatus.RETRYABLE
-            attempt = int(row["attempt"]) + 1
+            previous_attempt = row["attempt"]
+            assert isinstance(previous_attempt, int)
+            attempt = previous_attempt + 1
             token = "b" * 64
             row.update(
                 status=FeishuReceiptClaimStatus.IN_PROGRESS,
@@ -210,10 +213,13 @@ def _service(
     *,
     receipts: object | None = None,
     clock: object | None = None,
+    field_profile: object | None = None,
 ) -> FeishuRecheckActionService:
     kwargs: dict[str, object] = {}
     if clock is not None:
         kwargs["clock"] = clock
+    if field_profile is not None:
+        kwargs["field_profile"] = field_profile
     return FeishuRecheckActionService(
         client=client,  # type: ignore[arg-type]
         app_token="app_actions",
@@ -309,6 +315,45 @@ def test_creates_once_and_returns_the_same_remote_recheck_record() -> None:
         "created_at_utc": "2026-08-14T01:30:00+00:00",
         "updated_at_utc": "2026-08-14T01:30:00+00:00",
     }
+
+
+def test_chinese_profile_writes_engineer_facing_recheck_fields() -> None:
+    class ChineseClient:
+        def __init__(self) -> None:
+            self.search_field_name: str | None = None
+            self.remote_fields: dict[str, object] = {}
+
+        def search_bitable_records(self, **kwargs: object) -> dict[str, object]:
+            self.search_field_name = str(kwargs["field_name"])
+            return {"items": []}
+
+        def create_bitable_record(self, **kwargs: object) -> dict[str, object]:
+            fields = kwargs["fields"]
+            assert isinstance(fields, Mapping)
+            self.remote_fields = dict(fields)
+            return {"record": {"record_id": "rec_chinese_recheck"}}
+
+    source_run_id, source_result_id = _references()
+    client = ChineseClient()
+    receipt = _service(
+        client,
+        _AuthorizationVerifier(),
+        field_profile=CHINESE_RECHECK_ACTION_FIELD_PROFILE,
+    ).create_recheck_action(
+        source_run_id=source_run_id,
+        source_result_id=source_result_id,
+        responsibility_reference="ou_battery_owner",
+        permission_reference="perm_recheck_live_v1",
+    )
+
+    assert receipt.status == "PENDING"
+    assert client.search_field_name == "复检建单键"
+    assert client.remote_fields["来源任务ID"] == source_run_id
+    assert client.remote_fields["来源建议结果ID"] == source_result_id
+    assert client.remote_fields["动作类型"] == "发起复检"
+    assert client.remote_fields["责任人"] == "ou_battery_owner"
+    assert client.remote_fields["权限依据"] == "perm_recheck_live_v1"
+    assert client.remote_fields["任务状态"] == "待处理"
 
 
 def test_bitable_failure_releases_the_durable_claim_for_retry() -> None:

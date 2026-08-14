@@ -26,6 +26,8 @@ _FEISHU_AILY_CONFIGURATION_KEYS = (
     "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE",
     "QUANXIN_FEISHU_ENGINEERING_RULESETS_FILE",
     "QUANXIN_FEISHU_ENGINEERING_RULESETS_SHA256",
+    "QUANXIN_FEISHU_RECHECK_TABLE_ID",
+    "QUANXIN_FEISHU_RECHECK_PERMISSION_REFERENCE",
     "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
     "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
 )
@@ -49,6 +51,8 @@ class FeishuAilyRuntimeSettings:
     allow_candidate_scenario_results: bool
     engineering_recommendation_rulesets_file: Path | None = None
     engineering_recommendation_rulesets_sha256: str | None = None
+    recheck_table_id: str | None = None
+    recheck_permission_reference: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +248,9 @@ def _feishu_aily_settings(
     recommendation_rulesets_file, recommendation_rulesets_sha256 = (
         _optional_recommendation_rulesets(environment)
     )
+    recheck_table_id, recheck_permission_reference = _optional_recheck_action(
+        environment
+    )
     return FeishuAilyRuntimeSettings(
         app_id=_required(environment, "QUANXIN_FEISHU_APP_ID"),
         app_secret=_secret_text(
@@ -287,6 +294,8 @@ def _feishu_aily_settings(
         ),
         engineering_recommendation_rulesets_file=recommendation_rulesets_file,
         engineering_recommendation_rulesets_sha256=recommendation_rulesets_sha256,
+        recheck_table_id=recheck_table_id,
+        recheck_permission_reference=recheck_permission_reference,
         allow_candidate_scenario_execution=_strict_boolean(
             environment,
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
@@ -319,6 +328,26 @@ def _optional_recommendation_rulesets(
     if _SHA256.fullmatch(digest) is None:
         raise ValueError("engineering recommendation ruleset SHA-256 is invalid")
     return _regular_file(environment, path_key), digest
+
+
+def _optional_recheck_action(
+    environment: Mapping[str, str],
+) -> tuple[str | None, str | None]:
+    table_key = "QUANXIN_FEISHU_RECHECK_TABLE_ID"
+    permission_key = "QUANXIN_FEISHU_RECHECK_PERMISSION_REFERENCE"
+    has_table = isinstance(environment.get(table_key), str) and bool(
+        environment[table_key].strip()
+    )
+    has_permission = isinstance(environment.get(permission_key), str) and bool(
+        environment[permission_key].strip()
+    )
+    if has_table != has_permission:
+        raise ValueError(
+            "Feishu recheck table and permission reference must be configured together"
+        )
+    if not has_table:
+        return None, None
+    return _required(environment, table_key), _required(environment, permission_key)
 
 
 def _trusted_origin(value: str) -> str:

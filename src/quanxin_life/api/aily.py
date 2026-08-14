@@ -21,8 +21,17 @@ from pydantic import (
     model_validator,
 )
 
-from quanxin_life.core import AgentRunState, ToolResult
+from quanxin_life.core import AgentRunState, Decision, ToolResult
+from quanxin_life.integrations.feishu.bitable import (
+    BitableConflictError,
+    BitableValidationError,
+)
 from quanxin_life.integrations.feishu.cards import AuditedResultAuthorizer
+from quanxin_life.integrations.feishu.recheck_actions import (
+    RecheckActionAuthorizationError,
+    RecheckActionInProgressError,
+    RecheckActionReceipt,
+)
 from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
 from quanxin_life.reporting import AuditedReportArtifact, ReportArtifactFormat
 from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
@@ -166,6 +175,70 @@ class AilyAnalysisTaskGateway(Protocol):
     def get_analysis_task(self, run_id: str) -> AgentRunState: ...
 
 
+class AilyCreateRecheckActionRequest(BaseModel):
+    """Reference-only recheck command; no recommendation values are accepted."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_run_id: str = Field(min_length=1, max_length=200)
+    source_result_id: str = Field(min_length=1, max_length=200)
+    responsibility_reference: str = Field(min_length=1, max_length=200)
+
+    @field_validator(
+        "source_run_id",
+        "source_result_id",
+        "responsibility_reference",
+    )
+    @classmethod
+    def references_are_safe(cls, value: str) -> str:
+        return _reference(value, field_name="recheck action reference")
+
+
+class AilyRecheckActionState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    action_key: str
+    record_id: str
+    source_run_id: str
+    source_result_id: str
+    action_type: Decision
+    responsibility_reference: str
+    permission_reference: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator(
+        "action_key",
+        "record_id",
+        "source_run_id",
+        "source_result_id",
+        "responsibility_reference",
+        "permission_reference",
+        "status",
+    )
+    @classmethod
+    def state_references_are_safe(cls, value: str) -> str:
+        return _reference(value, field_name="recheck action state reference")
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def timestamps_are_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("recheck action timestamp must include a timezone")
+        return value.astimezone(UTC)
+
+
+class AilyRecheckActionGateway(Protocol):
+    def create_recheck_action(
+        self,
+        *,
+        source_run_id: str,
+        source_result_id: str,
+        responsibility_reference: str,
+    ) -> RecheckActionReceipt: ...
+
+
 class AilyScenarioContextGateway(Protocol):
     def create_scenario_context(
         self,
@@ -196,6 +269,7 @@ def create_aily_http_adapter(
     audit_ledger: AilyResultResolver,
     report_exporter: AilyReportExporter,
     result_authorizer: AuditedResultAuthorizer,
+    recheck_action_gateway: AilyRecheckActionGateway | None = None,
 ) -> AilyHttpAdapter:
     """Expose stable Aily operations without accepting model-produced numbers."""
 
@@ -264,6 +338,54 @@ def create_aily_http_adapter(
             raise HTTPException(
                 status_code=503, detail="aily_analysis_task_unavailable"
             ) from exc
+
+    if recheck_action_gateway is not None:
+
+        @router.post(
+            "/recheck-actions",
+            response_model=AilyRecheckActionState,
+            status_code=201,
+        )
+        def create_recheck_action(
+            request: AilyCreateRecheckActionRequest,
+        ) -> AilyRecheckActionState:
+            try:
+                receipt = recheck_action_gateway.create_recheck_action(
+                    source_run_id=request.source_run_id,
+                    source_result_id=request.source_result_id,
+                    responsibility_reference=request.responsibility_reference,
+                )
+                return AilyRecheckActionState.model_validate(
+                    {
+                        "action_key": receipt.action_key,
+                        "record_id": receipt.record_id,
+                        "source_run_id": receipt.source_run_id,
+                        "source_result_id": receipt.source_result_id,
+                        "action_type": receipt.action_type,
+                        "responsibility_reference": (
+                            receipt.responsibility_reference
+                        ),
+                        "permission_reference": receipt.permission_reference,
+                        "status": receipt.status,
+                        "created_at": receipt.created_at,
+                        "updated_at": receipt.updated_at,
+                    }
+                )
+            except (BitableValidationError, RecheckActionAuthorizationError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="aily_recheck_action_rejected",
+                ) from exc
+            except (BitableConflictError, RecheckActionInProgressError) as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="aily_recheck_action_conflict",
+                ) from exc
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="aily_recheck_action_unavailable",
+                ) from exc
 
     @router.get(
         "/analysis-tasks/{run_id}",
@@ -400,9 +522,12 @@ __all__ = [
     "AilyCompareScenarioContextRequest",
     "AilyConnectorConfig",
     "AilyCreateAnalysisTaskRequest",
+    "AilyCreateRecheckActionRequest",
     "AilyCreateScenarioContextRequest",
     "AilyHttpAdapter",
     "AilyProjectLifetimeScenarioContextRequest",
+    "AilyRecheckActionGateway",
+    "AilyRecheckActionState",
     "AilyReportExporter",
     "AilyResultResolver",
     "AilyScenarioContextGateway",

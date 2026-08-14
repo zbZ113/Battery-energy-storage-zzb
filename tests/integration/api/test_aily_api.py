@@ -12,6 +12,7 @@ from quanxin_life.api.aily import (
     AilyCompareScenarioContextRequest,
     AilyConnectorConfig,
     AilyCreateAnalysisTaskRequest,
+    AilyProjectLifetimeScenarioContextRequest,
     AilyScenarioContextState,
     create_aily_http_adapter,
 )
@@ -19,12 +20,14 @@ from quanxin_life.audit import AuditLedger
 from quanxin_life.core import (
     AgentRunState,
     AgentRunStatus,
+    Decision,
     EvidenceLevel,
     ProvenanceRecord,
     SourceKind,
     ToolResult,
 )
 from quanxin_life.integrations.feishu.cards import AuditedResultAuthorization
+from quanxin_life.integrations.feishu.recheck_actions import RecheckActionReceipt
 from quanxin_life.integrations.feishu.scenario_authorization import (
     AuditedScenarioResultAuthorizer,
 )
@@ -74,7 +77,10 @@ class _ScenarioGateway:
 
     def create_scenario_context(
         self,
-        request: AilyCompareScenarioContextRequest,
+        request: (
+            AilyCompareScenarioContextRequest
+            | AilyProjectLifetimeScenarioContextRequest
+        ),
     ) -> AilyScenarioContextState:
         self.create_calls.append(request)
         return self.state
@@ -115,6 +121,26 @@ class _Authorizer:
         )
 
 
+class _RecheckGateway:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    def create_recheck_action(self, **kwargs: str) -> RecheckActionReceipt:
+        self.calls.append(dict(kwargs))
+        return RecheckActionReceipt(
+            action_key="a" * 64,
+            record_id="rec_recheck",
+            source_run_id=kwargs["source_run_id"],
+            source_result_id=kwargs["source_result_id"],
+            action_type=Decision.RECHECK,
+            responsibility_reference=kwargs["responsibility_reference"],
+            permission_reference="permission-reviewed-v1",
+            status="PENDING",
+            created_at=NOW,
+            updated_at=NOW,
+        )
+
+
 def _result(
     result_id: str, *, warnings: list[str] | None = None
 ) -> ToolResult:
@@ -152,7 +178,11 @@ def _report_result(result_id: str) -> ToolResult:
         data_version="registered-batch-v1",
         feature_version="canonical-csv-v1",
         input_hash="4" * 64,
-        values={"report_kind": "audited_markdown", "markdown": "# Audited report\n"},
+        values={
+            "report_kind": "audited_markdown",
+            "rendering_version": REPORTING_VERSION,
+            "markdown": "# Audited report\n",
+        },
         uncertainty=None,
         warnings=[],
         provenance=[
@@ -210,7 +240,9 @@ def _strict_validation_result(result_id: str) -> ToolResult:
 
 
 def _client(
-    *, result_warnings: list[str] | None = None
+    *,
+    result_warnings: list[str] | None = None,
+    recheck_gateway: _RecheckGateway | None = None,
 ) -> tuple[TestClient, _Gateway, _ScenarioGateway, ToolResult, str, _Exporter]:
     result = _result(str(uuid4()), warnings=result_warnings)
     report_result_id = str(uuid4())
@@ -234,6 +266,7 @@ def _client(
         audit_ledger=AuditLedger((result, report_result)),
         report_exporter=exporter,
         result_authorizer=_Authorizer(),
+        recheck_action_gateway=recheck_gateway,
     )
     app = FastAPI()
     app.include_router(adapter.router)
@@ -505,3 +538,44 @@ def test_aily_rejects_analysis_requests_without_a_source_upload_reference() -> N
 
     assert response.status_code == 422
     assert gateway.create_calls == []
+
+
+def test_aily_creates_authorized_recheck_action_from_references_only() -> None:
+    rechecks = _RecheckGateway()
+    client, _gateway, _, _, _, _ = _client(recheck_gateway=rechecks)
+    source_run_id = str(uuid4())
+    source_result_id = str(uuid4())
+
+    response = client.post(
+        "/v1/aily/recheck-actions",
+        json={
+            "source_run_id": source_run_id,
+            "source_result_id": source_result_id,
+            "responsibility_reference": "ou_battery_owner",
+        },
+        headers=_headers(),
+    )
+
+    assert response.status_code == 201
+    assert response.json()["source_run_id"] == source_run_id
+    assert response.json()["source_result_id"] == source_result_id
+    assert response.json()["action_type"] == Decision.RECHECK.value
+    assert response.json()["status"] == "PENDING"
+    assert rechecks.calls == [
+        {
+            "source_run_id": source_run_id,
+            "source_result_id": source_result_id,
+            "responsibility_reference": "ou_battery_owner",
+        }
+    ]
+
+    rejected = client.post(
+        "/v1/aily/recheck-actions",
+        json={
+            "source_run_id": source_run_id,
+            "source_result_id": source_result_id,
+        },
+        headers=_headers(),
+    )
+    assert rejected.status_code == 422
+    assert len(rechecks.calls) == 1

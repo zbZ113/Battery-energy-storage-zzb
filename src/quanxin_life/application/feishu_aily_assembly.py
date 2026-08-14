@@ -40,6 +40,9 @@ from quanxin_life.application.feishu_project_models import (
     FeishuProjectResultResolver,
     ProjectToolInvocationPort,
 )
+from quanxin_life.application.feishu_recheck_authorization import (
+    ProjectBoundRecheckActionAuthorizationVerifier,
+)
 from quanxin_life.application.ingestion import (
     CanonicalCsvBatchRegistration,
     FileSystemVerifiedEarlyCycleBatchStore,
@@ -91,6 +94,11 @@ from quanxin_life.integrations.feishu.jobs import (
     SqlAlchemyFeishuJobRouter,
     SqlAlchemyFeishuJobStore,
     SqlAlchemyFeishuSiblingJobService,
+)
+from quanxin_life.integrations.feishu.recheck_actions import (
+    CHINESE_RECHECK_ACTION_FIELD_PROFILE,
+    FeishuRecheckActionService,
+    RecheckActionReceipt,
 )
 from quanxin_life.integrations.feishu.report_delivery import FeishuReportDelivery
 from quanxin_life.integrations.feishu.routing import (
@@ -225,6 +233,8 @@ class FeishuAilyAssemblyConfig:
     data_root: Path
     allow_candidate_scenario_execution: bool = False
     allow_candidate_scenario_results: bool = False
+    recheck_table_id: str | None = None
+    recheck_permission_reference: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("app_id", "bitable_app_token", "bitable_table_id"):
@@ -244,6 +254,22 @@ class FeishuAilyAssemblyConfig:
             raise TypeError("allow_candidate_scenario_execution must be a bool")
         if not isinstance(self.allow_candidate_scenario_results, bool):
             raise TypeError("allow_candidate_scenario_results must be a bool")
+        recheck_values = (
+            self.recheck_table_id,
+            self.recheck_permission_reference,
+        )
+        if any(value is None for value in recheck_values) and any(
+            value is not None for value in recheck_values
+        ):
+            raise ValueError(
+                "recheck table and permission reference must be configured together"
+            )
+        for field_name in ("recheck_table_id", "recheck_permission_reference"):
+            value = getattr(self, field_name)
+            if value is not None and (
+                not isinstance(value, str) or not value.strip()
+            ):
+                raise ValueError(f"{field_name} must not be blank")
         _https_base_url(self.external_https_base_url)
 
 
@@ -356,6 +382,33 @@ class _ProjectBoundAilyDataIdentityResolver:
             raise ValueError("Aily data identity is not authorized") from exc
 
 
+class _ConfiguredRecheckActionGateway:
+    """Inject operator-owned permission evidence into reference-only Aily calls."""
+
+    def __init__(
+        self,
+        service: FeishuRecheckActionService,
+        *,
+        permission_reference: str,
+    ) -> None:
+        self._service = service
+        self._permission_reference = permission_reference
+
+    def create_recheck_action(
+        self,
+        *,
+        source_run_id: str,
+        source_result_id: str,
+        responsibility_reference: str,
+    ) -> RecheckActionReceipt:
+        return self._service.create_recheck_action(
+            source_run_id=source_run_id,
+            source_result_id=source_result_id,
+            responsibility_reference=responsibility_reference,
+            permission_reference=self._permission_reference,
+        )
+
+
 def _source_canonical_sha256(source: FeishuAnalysisJobRecord) -> str:
     raw_sha256 = source.input_file_sha256
     if raw_sha256 is None:
@@ -413,6 +466,8 @@ def create_feishu_aily_components(
 
     now = clock or _utc_now
     checked_base_url = _https_base_url(config.external_https_base_url)
+    if config.recheck_table_id is not None and project_model_dependencies is None:
+        raise ValueError("recheck actions require project model dependencies")
     batch_store = FileSystemVerifiedEarlyCycleBatchStore(config.data_root)
     audit_ledger = SqlAuditLedger(session_factory, clock=now)
     receipt_store = SqlAlchemyFeishuReceiptStore(session_factory)
@@ -567,6 +622,33 @@ def create_feishu_aily_components(
         app_token=config.bitable_app_token,
     )
     analysis_plotter = FeishuAnalysisPlotter()
+    recheck_action_gateway = None
+    if config.recheck_table_id is not None:
+        assert config.recheck_permission_reference is not None
+        assert project_model_dependencies is not None
+        recheck_action_gateway = _ConfiguredRecheckActionGateway(
+            FeishuRecheckActionService(
+                client=client,
+                app_token=config.bitable_app_token,
+                table_id=config.recheck_table_id,
+                authorization_verifier=(
+                    ProjectBoundRecheckActionAuthorizationVerifier(
+                        session_factory=session_factory,
+                        job_store=job_store,
+                        result_resolver=result_resolver,
+                        result_authorizer=authorizer,
+                        context_service=project_model_dependencies.context_service,
+                        expected_permission_reference=(
+                            config.recheck_permission_reference
+                        ),
+                    )
+                ),
+                receipt_store=receipt_store,
+                clock=now,
+                field_profile=CHINESE_RECHECK_ACTION_FIELD_PROFILE,
+            ),
+            permission_reference=config.recheck_permission_reference,
+        )
     feishu_delivery = FeishuAnalysisJobDelivery(
         client=client,
         card_builder=AuditedCardBuilder(
@@ -650,6 +732,7 @@ def create_feishu_aily_components(
         audit_ledger=result_resolver,
         report_exporter=artifact_exporter,
         result_authorizer=authorizer,
+        recheck_action_gateway=recheck_action_gateway,
     )
     return FeishuAilyComponents(
         audit_ledger=audit_ledger,

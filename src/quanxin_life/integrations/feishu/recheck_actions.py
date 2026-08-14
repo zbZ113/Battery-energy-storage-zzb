@@ -7,6 +7,7 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import MappingProxyType
 from typing import Protocol
 from uuid import UUID
 
@@ -26,6 +27,44 @@ _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}\Z")
 _INITIAL_STATUS = "PENDING"
 RECHECK_ACTION_EVENT_TYPE = "quanxin_life.recheck_action.v1"
 Clock = Callable[[], datetime]
+_ACTION_FIELDS = frozenset(
+    {
+        "action_key",
+        "source_run_id",
+        "source_result_id",
+        "action_type",
+        "responsibility_reference",
+        "permission_reference",
+        "status",
+        "created_at_utc",
+        "updated_at_utc",
+    }
+)
+
+
+def _profile_identifier(value: object, *, field_name: str) -> str:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if _SAFE_IDENTIFIER.fullmatch(normalized) is None:
+        raise BitableValidationError(f"{field_name} must be a safe identifier")
+    return normalized
+
+
+def _profile_field_name(value: object, *, field_name: str) -> str:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if (
+        not normalized
+        or len(normalized) > 100
+        or any(ord(character) < 32 for character in normalized)
+    ):
+        raise BitableValidationError(f"{field_name} must be a safe field name")
+    return normalized
+
+
+def _profile_text(value: object, *, field_name: str) -> str:
+    normalized = value.strip() if isinstance(value, str) else ""
+    if not normalized or len(normalized) > 200:
+        raise BitableValidationError(f"{field_name} must be safe text")
+    return normalized
 
 
 def _utc_now() -> datetime:
@@ -52,6 +91,69 @@ class RecheckActionAuthorizationVerifier(Protocol):
         responsibility_reference: str,
         permission_reference: str,
     ) -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RecheckActionFieldProfile:
+    profile_id: str
+    field_names: Mapping[str, str]
+    value_labels: Mapping[str, Mapping[str, str]]
+
+    def __post_init__(self) -> None:
+        _profile_identifier(self.profile_id, field_name="profile_id")
+        if set(self.field_names) != _ACTION_FIELDS:
+            raise BitableValidationError(
+                "recheck action field profile must map every action field"
+            )
+        names = {
+            key: _profile_field_name(value, field_name=f"field_names.{key}")
+            for key, value in self.field_names.items()
+        }
+        if len(set(names.values())) != len(names):
+            raise BitableValidationError(
+                "recheck action field profile names must be unique"
+            )
+        labels: dict[str, Mapping[str, str]] = {}
+        for field_name, mapping in self.value_labels.items():
+            if field_name not in _ACTION_FIELDS or not isinstance(mapping, Mapping):
+                raise BitableValidationError(
+                    "recheck action value labels are invalid"
+                )
+            labels[field_name] = MappingProxyType(
+                {
+                    _profile_text(key, field_name="value label key"): (
+                        _profile_text(value, field_name="value label value")
+                    )
+                    for key, value in mapping.items()
+                }
+            )
+        object.__setattr__(self, "field_names", MappingProxyType(names))
+        object.__setattr__(self, "value_labels", MappingProxyType(labels))
+
+
+IDENTITY_RECHECK_ACTION_FIELD_PROFILE = RecheckActionFieldProfile(
+    profile_id="recheck-fields-identity-v1",
+    field_names={name: name for name in _ACTION_FIELDS},
+    value_labels={},
+)
+CHINESE_RECHECK_ACTION_FIELD_PROFILE = RecheckActionFieldProfile(
+    profile_id="recheck-fields-zh-cn-v1",
+    field_names={
+        "action_key": "复检建单键",
+        "source_run_id": "来源任务ID",
+        "source_result_id": "来源建议结果ID",
+        "action_type": "动作类型",
+        "responsibility_reference": "责任人",
+        "permission_reference": "权限依据",
+        "status": "任务状态",
+        "created_at_utc": "创建时间UTC",
+        "updated_at_utc": "更新时间UTC",
+    },
+    value_labels={
+        "action_type": {Decision.RECHECK.value: "发起复检"},
+        "status": {_INITIAL_STATUS: "待处理"},
+    },
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +184,9 @@ class FeishuRecheckActionService:
         authorization_verifier: RecheckActionAuthorizationVerifier,
         receipt_store: FeishuReceiptStore,
         clock: Clock = _utc_now,
+        field_profile: RecheckActionFieldProfile = (
+            IDENTITY_RECHECK_ACTION_FIELD_PROFILE
+        ),
     ) -> None:
         if not callable(getattr(client, "search_bitable_records", None)):
             raise TypeError("client must support Bitable record search")
@@ -94,12 +199,15 @@ class FeishuRecheckActionService:
                 raise TypeError("receipt_store must persist recheck action claims")
         if not callable(clock):
             raise TypeError("clock must be callable")
+        if not isinstance(field_profile, RecheckActionFieldProfile):
+            raise TypeError("field_profile must be a RecheckActionFieldProfile")
         self._client = client
         self._app_token = _safe_identifier(app_token, field_name="app_token")
         self._table_id = _safe_identifier(table_id, field_name="table_id")
         self._authorization_verifier = authorization_verifier
         self._receipt_store = receipt_store
         self._clock = clock
+        self._field_profile = field_profile
         self._lock = threading.RLock()
 
     def create_recheck_action(
@@ -214,11 +322,15 @@ class FeishuRecheckActionService:
                 items[0],
                 expected_fields=expected_fields,
                 action_type=action_type,
+                field_profile=self._field_profile,
             )
         response = self._client.create_bitable_record(
             app_token=self._app_token,
             table_id=self._table_id,
-            fields=expected_fields,
+            fields=_encode_action_fields(
+                expected_fields,
+                field_profile=self._field_profile,
+            ),
         )
         return RecheckActionReceipt(
             action_key=action_key,
@@ -249,13 +361,14 @@ class FeishuRecheckActionService:
             items[0],
             expected_fields=expected_fields,
             action_type=action_type,
+            field_profile=self._field_profile,
         )
 
     def _search(self, action_key: str) -> list[Mapping[str, object]]:
         search = self._client.search_bitable_records(
             app_token=self._app_token,
             table_id=self._table_id,
-            field_name="action_key",
+            field_name=self._field_profile.field_names["action_key"],
             field_value=action_key,
         )
         items = _search_items(search)
@@ -308,11 +421,40 @@ def derive_recheck_action_key(source_run_id: str, source_result_id: str) -> str:
     )
 
 
+def _encode_action_fields(
+    fields: Mapping[str, str],
+    *,
+    field_profile: RecheckActionFieldProfile,
+) -> dict[str, str]:
+    if set(fields) != _ACTION_FIELDS:
+        raise BitableValidationError("recheck action fields are incomplete")
+    encoded: dict[str, str] = {}
+    for field_name, value in fields.items():
+        labels = field_profile.value_labels.get(field_name, {})
+        encoded[field_profile.field_names[field_name]] = labels.get(value, value)
+    return encoded
+
+
+def _decoded_action_value(
+    stored_fields: Mapping[str, object],
+    *,
+    field_name: str,
+    field_profile: RecheckActionFieldProfile,
+) -> object:
+    remote_value = stored_fields.get(field_profile.field_names[field_name])
+    labels = field_profile.value_labels.get(field_name, {})
+    reverse = {label: value for value, label in labels.items()}
+    if isinstance(remote_value, str):
+        return reverse.get(remote_value, remote_value)
+    return remote_value
+
+
 def _existing_receipt(
     item: Mapping[str, object],
     *,
     expected_fields: Mapping[str, str],
     action_type: Decision,
+    field_profile: RecheckActionFieldProfile,
 ) -> RecheckActionReceipt:
     record_id = _record_id(item, response_label="search response")
     stored_fields = item.get("fields")
@@ -327,17 +469,36 @@ def _existing_receipt(
         "permission_reference",
     )
     for field_name in identity_fields:
-        if stored_fields.get(field_name) != expected_fields[field_name]:
+        if _decoded_action_value(
+            stored_fields,
+            field_name=field_name,
+            field_profile=field_profile,
+        ) != expected_fields[field_name]:
             raise BitableConflictError(
                 f"stored recheck action {field_name} conflicts with the requested action"
             )
-    status = _safe_stored_text(stored_fields.get("status"), field_name="status")
+    status = _safe_stored_text(
+        _decoded_action_value(
+            stored_fields,
+            field_name="status",
+            field_profile=field_profile,
+        ),
+        field_name="status",
+    )
     created_at = _stored_timestamp(
-        stored_fields.get("created_at_utc"),
+        _decoded_action_value(
+            stored_fields,
+            field_name="created_at_utc",
+            field_profile=field_profile,
+        ),
         field_name="created_at_utc",
     )
     updated_at = _stored_timestamp(
-        stored_fields.get("updated_at_utc"),
+        _decoded_action_value(
+            stored_fields,
+            field_name="updated_at_utc",
+            field_profile=field_profile,
+        ),
         field_name="updated_at_utc",
     )
     if created_at > updated_at:
@@ -435,10 +596,13 @@ def _safe_stored_text(value: object, *, field_name: str) -> str:
 
 
 __all__ = [
+    "CHINESE_RECHECK_ACTION_FIELD_PROFILE",
+    "IDENTITY_RECHECK_ACTION_FIELD_PROFILE",
     "RECHECK_ACTION_EVENT_TYPE",
     "FeishuRecheckActionService",
     "RecheckActionAuthorizationError",
     "RecheckActionAuthorizationVerifier",
+    "RecheckActionFieldProfile",
     "RecheckActionInProgressError",
     "RecheckActionReceipt",
     "derive_recheck_action_key",
