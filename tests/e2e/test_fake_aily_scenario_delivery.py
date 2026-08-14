@@ -337,7 +337,7 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
     assert fields["曲线来源结果ID"] == job.analysis_result_id
     assert fields["曲线渲染器版本"] == job.bitable_curve_renderer_version
     assert fields["曲线SHA256"] == job.bitable_curve_sha256
-    assert fields["曲线模板"] == "SCENARIO_COMPARISON"
+    assert fields["曲线模板"] == "工况退化对比"
     assert all(
         not isinstance(value, list | dict)
         for key, value in fields.items()

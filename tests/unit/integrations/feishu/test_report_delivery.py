@@ -99,7 +99,14 @@ def _result(*, audited_report: bool = True) -> ToolResult:
         data_version="registered-data-v1",
         feature_version="registered-features-v1",
         input_hash="1" * 64,
-        values={"report_kind": "audited_markdown"},
+        values={
+            "report_kind": "audited_markdown",
+            **(
+                {"rendering_version": REPORTING_VERSION}
+                if audited_report
+                else {}
+            ),
+        },
         uncertainty=None,
         warnings=[],
         provenance=[
