@@ -182,12 +182,23 @@ class FeishuProjectResultResolver:
             )
             if len(jobs) != 1:
                 raise ValueError("ToolResult is not uniquely bound to an analysis job")
-            job_origin = jobs[0].job_origin
-            chat_id = jobs[0].chat_id
-            sender_id = jobs[0].sender_id
+            job = jobs[0]
+            job_origin = job.job_origin
+            chat_id = job.chat_id
+            sender_id = job.sender_id
+            if job_origin == "AILY":
+                source = session.scalar(
+                    select(FeishuEventReceipt).where(
+                        FeishuEventReceipt.job_id == job.source_job_id
+                    )
+                )
+                if not _is_anchored_aily_project_job(job, source):
+                    raise ValueError(
+                        "Aily project ToolResult is not bound to an authorized upload"
+                    )
 
         context: VerifiedProjectInvocationContext | None = None
-        if job_origin == "FEISHU":
+        if job_origin in {"FEISHU", "AILY"}:
             if not chat_id or not sender_id:
                 raise ValueError("Feishu ToolResult identity is unavailable")
             try:
@@ -203,8 +214,8 @@ class FeishuProjectResultResolver:
             return self._global_resolver.resolve_registered_result(checked_result_id)
         except ValueError:
             pass
-        if job_origin != "FEISHU" or context is None:
-            raise ValueError("project ToolResult is not bound to a Feishu job")
+        if job_origin not in {"FEISHU", "AILY"} or context is None:
+            raise ValueError("project ToolResult is not bound to an authorized job")
         try:
             result = self._project_ledger.resolve_registered_result(
                 context,
@@ -692,6 +703,38 @@ def _soh_report_paths(analysis: ToolResult) -> tuple[str, str]:
     return (
         "values.artifact.horizon_end_cycle",
         f"values.artifact.predicted_soh.{last_index}",
+    )
+
+
+def _is_anchored_aily_project_job(
+    job: FeishuEventReceipt,
+    source: FeishuEventReceipt | None,
+) -> bool:
+    return bool(
+        source is not None
+        and job.event_type == "aily.analysis_task.create_v2"
+        and job.source_job_id == source.job_id
+        and job.task_type
+        in {
+            StandardToolName.PREDICT_CYCLE_LIFE.value,
+            StandardToolName.PREDICT_SOH_TRAJECTORY.value,
+            StandardToolName.COMPARE_OPERATION_SCENARIOS.value,
+            StandardToolName.PROJECT_STORAGE_LIFETIME.value,
+        }
+        and job.message_id is None
+        and job.file_key is None
+        and source.job_origin == "FEISHU"
+        and source.event_type == "im.message.receive_v1"
+        and source.source_job_id is None
+        and source.task_type == StandardToolName.PREDICT_CYCLE_LIFE.value
+        and source.job_status == "SUCCEEDED"
+        and source.validation_result_id is not None
+        and job.record_batch_id == source.record_batch_id
+        and job.cell_reference == source.cell_reference
+        and job.input_file_sha256 == source.input_file_sha256
+        and job.chat_id == source.chat_id
+        and job.sender_id == source.sender_id
+        and job.receive_id_type == source.receive_id_type
     )
 
 

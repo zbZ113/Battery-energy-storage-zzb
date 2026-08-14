@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 
 from quanxin_life.application.feishu_project_models import (
     FeishuProjectResultResolver,
@@ -124,6 +124,10 @@ def test_resolver_reads_global_and_exact_feishu_project_results() -> None:
         context,
         _result(tool_name="predict_cycle_life"),
     )
+    aily_analysis = project_ledger.register_result(
+        context,
+        _result(tool_name="predict_soh_trajectory"),
+    )
     with session_scope(sessions) as session:
         session.add(
             FeishuEventReceipt(
@@ -165,6 +169,47 @@ def test_resolver_reads_global_and_exact_feishu_project_results() -> None:
         task=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
     )
     assert jobs.get(sibling_id).validation_result_id is None
+    aily_job_id = str(uuid4())
+    with session_scope(sessions) as session:
+        source = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == job_id)
+        )
+        assert source is not None
+        source.job_status = "SUCCEEDED"
+        source.job_stage = "SUCCEEDED"
+        source.job_completed_at = NOW
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="aily:anchored-project-result",
+                event_type="aily.analysis_task.create_v2",
+                payload_sha256="f" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=aily_job_id,
+                job_origin="AILY",
+                job_request_sha256="f" * 64,
+                source_job_id=job_id,
+                job_status="SUCCEEDED",
+                job_stage="SUCCEEDED",
+                task_type="predict_soh_trajectory",
+                run_id=aily_job_id,
+                chat_id="oc-approved",
+                sender_id="ou-approved",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                record_batch_id="canonical-csv-" + "d" * 64,
+                cell_reference="MATR_b3c34",
+                input_file_sha256="e" * 64,
+                analysis_result_id=aily_analysis.result_id,
+                job_attempt_count=1,
+                job_created_at=NOW,
+                job_updated_at=NOW,
+                job_completed_at=NOW,
+            )
+        )
     resolver = FeishuProjectResultResolver(
         session_factory=sessions,
         global_resolver=global_ledger,
@@ -174,6 +219,7 @@ def test_resolver_reads_global_and_exact_feishu_project_results() -> None:
 
     assert resolver.resolve_registered_result(validation.result_id) == validation
     assert resolver.resolve_registered_result(analysis.result_id) == analysis
+    assert resolver.resolve_registered_result(aily_analysis.result_id) == aily_analysis
 
     with session_scope(sessions) as session:
         original = session.get(FeishuBindingRow, binding_id)
@@ -184,6 +230,8 @@ def test_resolver_reads_global_and_exact_feishu_project_results() -> None:
         resolver.resolve_registered_result(validation.result_id)
     with pytest.raises(ValueError, match="active Feishu binding"):
         resolver.resolve_registered_result(analysis.result_id)
+    with pytest.raises(ValueError, match="active Feishu binding"):
+        resolver.resolve_registered_result(aily_analysis.result_id)
 
     with session_scope(sessions) as session:
         session.add(
@@ -203,3 +251,162 @@ def test_resolver_reads_global_and_exact_feishu_project_results() -> None:
     with pytest.raises(ValueError, match="exact Feishu binding"):
         resolver.resolve_registered_result(analysis.result_id)
     assert resolver.resolve_registered_result(validation.result_id) == validation
+
+
+def _anchored_aily_global_result(
+    *,
+    task_type: str,
+    job_status: str,
+    tool_name: str,
+    bind_as_validation: bool = False,
+) -> tuple[FeishuProjectResultResolver, ToolResult]:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = create_session_factory(engine)
+    user_id = str(uuid4())
+    project_id = str(uuid4())
+    root_job_id = str(uuid4())
+    aily_job_id = str(uuid4())
+    with session_scope(sessions) as session:
+        session.add_all(
+            (
+                User(
+                    id=user_id,
+                    username=f"aily-result-{aily_job_id}@example.test",
+                    credential_hash="not-used-by-feishu",
+                    must_change_credential=False,
+                    role=UserRole.ADMIN.value,
+                    status=UserStatus.ACTIVE.value,
+                    created_at=NOW,
+                    updated_at=NOW,
+                ),
+                Project(
+                    id=project_id,
+                    owner_user_id=user_id,
+                    name="Anchored Aily result project",
+                    status=ProjectStatus.ACTIVE.value,
+                    created_at=NOW,
+                    updated_at=NOW,
+                ),
+                FeishuBindingRow(
+                    id=str(uuid4()),
+                    project_id=project_id,
+                    chat_id="oc-anchored-aily",
+                    bitable_app_token=None,
+                    bitable_table_id=None,
+                    user_open_id_map_json={user_id: "ou-anchored-aily"},
+                    binding_version="feishu-binding-v1",
+                    status="ACTIVE",
+                    created_at=NOW,
+                ),
+            )
+        )
+    context_service = ProjectInvocationContextService(sessions, clock=lambda: NOW)
+    global_ledger = SqlAuditLedger(sessions, clock=lambda: NOW)
+    project_ledger = SqlProjectAuditLedger(
+        sessions,
+        context_validator=context_service,
+        clock=lambda: NOW,
+    )
+    root_validation = global_ledger.register_result(
+        _result(tool_name="validate_battery_data")
+    )
+    target = global_ledger.register_result(_result(tool_name=tool_name))
+    with session_scope(sessions) as session:
+        session.add_all(
+            (
+                FeishuEventReceipt(
+                    id=str(uuid4()),
+                    event_id=f"evt-upload-{root_job_id}",
+                    event_type="im.message.receive_v1",
+                    payload_sha256="c" * 64,
+                    status="PROCESSED",
+                    attempt_count=1,
+                    received_at=NOW,
+                    processed_at=NOW,
+                    job_id=root_job_id,
+                    job_origin="FEISHU",
+                    job_status="SUCCEEDED",
+                    job_stage="SUCCEEDED",
+                    task_type="predict_cycle_life",
+                    run_id=root_job_id,
+                    chat_id="oc-anchored-aily",
+                    sender_id="ou-anchored-aily",
+                    receive_id_type="chat_id",
+                    event_time=NOW,
+                    record_batch_id="canonical-csv-" + "d" * 64,
+                    cell_reference="MATR_b3c34",
+                    input_file_sha256="e" * 64,
+                    validation_result_id=root_validation.result_id,
+                    job_attempt_count=1,
+                    job_created_at=NOW,
+                    job_updated_at=NOW,
+                    job_completed_at=NOW,
+                ),
+                FeishuEventReceipt(
+                    id=str(uuid4()),
+                    event_id=f"aily:anchored-{aily_job_id}",
+                    event_type="aily.analysis_task.create_v2",
+                    payload_sha256="f" * 64,
+                    status="PROCESSED",
+                    attempt_count=1,
+                    received_at=NOW,
+                    processed_at=NOW,
+                    job_id=aily_job_id,
+                    job_origin="AILY",
+                    job_request_sha256="f" * 64,
+                    source_job_id=root_job_id,
+                    job_status=job_status,
+                    job_stage=job_status,
+                    task_type=task_type,
+                    run_id=aily_job_id,
+                    chat_id="oc-anchored-aily",
+                    sender_id="ou-anchored-aily",
+                    receive_id_type="chat_id",
+                    event_time=NOW,
+                    record_batch_id="canonical-csv-" + "d" * 64,
+                    cell_reference="MATR_b3c34",
+                    input_file_sha256="e" * 64,
+                    validation_result_id=(
+                        target.result_id if bind_as_validation else None
+                    ),
+                    analysis_result_id=(
+                        None if bind_as_validation else target.result_id
+                    ),
+                    job_attempt_count=1,
+                    job_created_at=NOW,
+                    job_updated_at=NOW,
+                    job_completed_at=NOW,
+                ),
+            )
+        )
+    return (
+        FeishuProjectResultResolver(
+            session_factory=sessions,
+            global_resolver=global_ledger,
+            project_ledger=project_ledger,
+            context_service=context_service,
+        ),
+        target,
+    )
+
+
+def test_resolver_reads_feishu_anchored_aily_scenario_global_result() -> None:
+    resolver, result = _anchored_aily_global_result(
+        task_type="compare_operation_scenarios",
+        job_status="SUCCEEDED",
+        tool_name="compare_operation_scenarios",
+    )
+
+    assert resolver.resolve_registered_result(result.result_id) == result
+
+
+def test_resolver_reads_rejected_feishu_anchored_aily_validation_result() -> None:
+    resolver, result = _anchored_aily_global_result(
+        task_type="predict_cycle_life",
+        job_status="REJECTED",
+        tool_name="validate_battery_data",
+        bind_as_validation=True,
+    )
+
+    assert resolver.resolve_registered_result(result.result_id) == result

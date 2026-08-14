@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from pydantic import SecretStr
 from sqlalchemy import create_engine
 
 import quanxin_life.application as application_package
+from quanxin_life.api.aily import AilyCreateAnalysisTaskRequest
 from quanxin_life.application import (
     FeishuAilyAssemblyConfig as ExportedFeishuAilyAssemblyConfig,
 )
@@ -24,16 +27,45 @@ from quanxin_life.application.feishu_aily_assembly import (
 from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
 from quanxin_life.application.invocation_context import ProjectInvocationContextService
 from quanxin_life.audit import SqlProjectAuditLedger
-from quanxin_life.core import CellMetadata, ProvenanceRecord, SourceKind
+from quanxin_life.core import (
+    CellMetadata,
+    DatasetStatus,
+    ProjectStatus,
+    ProvenanceRecord,
+    SourceKind,
+    UserRole,
+    UserStatus,
+    sha256_canonical,
+)
 from quanxin_life.features import EarlyCycleFeatureConfig
 from quanxin_life.infrastructure.feishu_queue import FEISHU_ANALYSIS_TASK
 from quanxin_life.integrations.feishu.default_scenarios import (
     ReviewedDefaultScenarioRegistry,
 )
+from quanxin_life.integrations.feishu.jobs import (
+    FeishuAnalysisJobOrigin,
+    FeishuAnalysisJobStatus,
+)
 from quanxin_life.integrations.feishu.soh_plot import FeishuSohPlotter
+from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
 from quanxin_life.persistence import Base, create_session_factory
+from quanxin_life.persistence.models import (
+    Dataset,
+    FeishuBindingRow,
+    FeishuEventReceipt,
+    Project,
+    RecordBatchBinding,
+    User,
+)
 
 NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+CSV = (
+    b"dataset_id,cell_id,cycle_index,sample_index,time_s,voltage_v,current_a,"
+    b"temperature_c,charge_capacity_ah,discharge_capacity_ah,"
+    b"internal_resistance_ohm,diagnostic,valid\n"
+    b"UPLOAD,registered-cell,1,0,0.0,3.6,1.0,25.0,1.2,1.1,0.02,true,true\n"
+    b"UPLOAD,registered-cell,20,0,0.0,3.5,1.0,25.0,1.1,1.0,0.03,true,true\n"
+)
 
 
 class _AsyncResult:
@@ -231,6 +263,188 @@ def test_feishu_aily_assembly_injects_existing_project_model_runtime(tmp_path) -
     assert executor._project_ledger is project_ledger
     assert executor._project_tool_service is project_tool_service
     assert components.worker._result_resolver is not components.audit_ledger
+
+
+def test_project_runtime_authorizes_only_the_anchored_frozen_aily_batch(
+    tmp_path,
+) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = create_session_factory(engine)
+    context_service = ProjectInvocationContextService(sessions, clock=lambda: NOW)
+    project_ledger = SqlProjectAuditLedger(
+        sessions,
+        context_validator=context_service,
+        clock=lambda: NOW,
+    )
+    celery_app = _CeleryApp()
+    components = create_feishu_aily_components(
+        session_factory=sessions,
+        celery_app=celery_app,
+        config=_config(tmp_path / "batches"),
+        feishu_transport=_NoNetworkTransport(),
+        default_scenarios=ReviewedDefaultScenarioRegistry(),
+        project_model_dependencies=FeishuProjectModelDependencies(
+            context_service=context_service,
+            project_ledger=project_ledger,
+            project_tool_service=SimpleNamespace(
+                invoke_in_project=lambda *_args, **_kwargs: None
+            ),
+        ),
+        clock=lambda: NOW,
+    )
+    digest = sha256(CSV).hexdigest()
+    raw_upload_digest = "b" * 64
+    mapping_evidence = {
+        "raw_sha256": raw_upload_digest,
+        "canonical_sha256": digest,
+        "profile_id": "reviewed-layout",
+        "profile_version": "reviewed-layout-v1",
+        "profile_sha256": "c" * 64,
+        "column_evidence": [],
+    }
+    registration = _registration(
+        metadata_sha256=digest,
+        observed_sha256=digest,
+    )
+    content_batch_id = components.batch_store.register_canonical_csv(
+        CSV,
+        registration=registration,
+    )
+    content_batch = components.batch_store.resolve_verified_early_cycle_batch(
+        content_batch_id
+    )
+    user_id = str(uuid4())
+    project_id = str(uuid4())
+    dataset_id = str(uuid4())
+    source_run_id = str(uuid4())
+    with sessions.begin() as session:
+        session.add_all(
+            (
+                User(
+                    id=user_id,
+                    username="aily-project@example.test",
+                    credential_hash="not-used-by-feishu",
+                    must_change_credential=False,
+                    role=UserRole.ADMIN.value,
+                    status=UserStatus.ACTIVE.value,
+                    created_at=NOW,
+                    updated_at=NOW,
+                ),
+                Project(
+                    id=project_id,
+                    owner_user_id=user_id,
+                    name="Aily project",
+                    status=ProjectStatus.ACTIVE.value,
+                    created_at=NOW,
+                    updated_at=NOW,
+                ),
+                Dataset(
+                    id=dataset_id,
+                    project_id=project_id,
+                    name="Aily frozen dataset",
+                    data_version=registration.data_version,
+                    schema_version=registration.metadata.schema_version,
+                    status=DatasetStatus.FROZEN.value,
+                    manifest_uri=None,
+                    manifest_sha256=None,
+                    created_at=NOW,
+                    frozen_at=NOW,
+                ),
+                RecordBatchBinding(
+                    id=str(uuid4()),
+                    binding_schema_version="record-batch-binding-v1",
+                    content_batch_id=content_batch_id,
+                    project_id=project_id,
+                    dataset_id=dataset_id,
+                    source_manifest_sha256=content_batch.source_manifest_hash,
+                    registration_sha256=sha256_canonical(
+                        registration.model_dump(mode="json")
+                    ),
+                    content_dataset_id=registration.metadata.dataset_id,
+                    dataset_schema_version=registration.metadata.schema_version,
+                    cell_id=registration.metadata.cell_id,
+                    cutoff_cycle=registration.feature_config.cutoff_cycle,
+                    data_version=registration.data_version,
+                    split_version=registration.split_version,
+                    feature_version=registration.feature_config.feature_version,
+                    created_by_user_id=user_id,
+                    created_at=NOW,
+                ),
+                FeishuBindingRow(
+                    id=str(uuid4()),
+                    project_id=project_id,
+                    chat_id="oc-aily-project",
+                    bitable_app_token=None,
+                    bitable_table_id=None,
+                    user_open_id_map_json={user_id: "ou-aily-project"},
+                    binding_version="feishu-binding-v1",
+                    status="ACTIVE",
+                    created_at=NOW,
+                ),
+                FeishuEventReceipt(
+                    id=str(uuid4()),
+                    event_id="evt-aily-project-source",
+                    event_type="im.message.receive_v1",
+                    payload_sha256="a" * 64,
+                    status="PROCESSED",
+                    attempt_count=1,
+                    received_at=NOW,
+                    processed_at=NOW,
+                    job_id=source_run_id,
+                    job_origin=FeishuAnalysisJobOrigin.FEISHU.value,
+                    job_status=FeishuAnalysisJobStatus.SUCCEEDED.value,
+                    job_stage="SUCCEEDED",
+                    task_type=FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value,
+                    run_id=source_run_id,
+                    chat_id="oc-aily-project",
+                    sender_id="ou-aily-project",
+                    receive_id_type="chat_id",
+                    event_time=NOW,
+                    record_batch_id=content_batch_id,
+                    cell_reference=registration.metadata.cell_id,
+                    input_file_sha256=raw_upload_digest,
+                    csv_mapping_status="MAPPED",
+                    csv_mapping_evidence_json=mapping_evidence,
+                    csv_mapping_evidence_sha256=sha256_canonical(mapping_evidence),
+                    validation_result_id=str(uuid4()),
+                    job_attempt_count=1,
+                    job_created_at=NOW,
+                    job_updated_at=NOW,
+                    job_completed_at=NOW,
+                ),
+            )
+        )
+
+    created = components.aily_task_gateway.create_analysis_task(
+        AilyCreateAnalysisTaskRequest(
+            task_type=FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+            source_run_id=source_run_id,
+            data_batch_id=content_batch_id,
+        )
+    )
+
+    persisted = components.job_store.get(created.run_id)
+    assert persisted.job_origin is FeishuAnalysisJobOrigin.AILY
+    assert persisted.source_job_id == source_run_id
+    assert persisted.record_batch_id == content_batch_id
+    assert len(celery_app.sent) == 1
+
+    with sessions.begin() as session:
+        dataset = session.get(Dataset, dataset_id)
+        assert dataset is not None
+        dataset.status = DatasetStatus.DRAFT.value
+        dataset.frozen_at = None
+
+    with pytest.raises(ValueError, match="not authorized"):
+        components.aily_task_gateway.create_analysis_task(
+            AilyCreateAnalysisTaskRequest(
+                task_type=FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+                source_run_id=source_run_id,
+                data_batch_id=content_batch_id,
+            )
+        )
+    assert len(celery_app.sent) == 1
 
 
 def test_feishu_file_registration_is_fail_closed_without_trusted_metadata(

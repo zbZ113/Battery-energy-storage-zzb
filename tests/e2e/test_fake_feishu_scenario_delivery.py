@@ -72,6 +72,7 @@ from quanxin_life.tools.data_quality import (
 )
 
 NOW = datetime(2026, 8, 11, 15, 0, tzinfo=UTC)
+SOURCE_RUN_ID = "d9d05347-682e-46ac-9658-2b04dca645f7"
 CSV_PAYLOAD = (
     b"dataset_id,cell_id,cycle_index,sample_index,time_s,voltage_v,current_a,"
     b"temperature_c,charge_capacity_ah,discharge_capacity_ah,"
@@ -116,6 +117,11 @@ class _SandboxAsgiTransport:
             json_body=json_body,
             body=response.content,
         )
+
+
+class _FixtureDataIdentity:
+    def resolve_source_job(self, **_: object) -> None:
+        return None
 
 
 class _Queue:
@@ -215,11 +221,12 @@ def test_fake_feishu_scenario_pipeline_delivers_only_audited_results() -> None:
     context = SqlAlchemyAilyScenarioContextGateway(
         context_store=contexts,
         batch_store=batches,
-        created_by_reference="aily-connector",
+        data_identity_resolver=_FixtureDataIdentity(),
         clock=lambda: NOW,
     ).create_scenario_context(
         AilyCompareScenarioContextRequest(
             task_type=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+            source_run_id=SOURCE_RUN_ID,
             data_batch_id=batch_id,
             cell_format="prismatic",
             baseline=_scenario(

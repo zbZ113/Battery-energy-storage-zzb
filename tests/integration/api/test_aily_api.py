@@ -25,6 +25,9 @@ from quanxin_life.core import (
     ToolResult,
 )
 from quanxin_life.integrations.feishu.cards import AuditedResultAuthorization
+from quanxin_life.integrations.feishu.scenario_authorization import (
+    AuditedScenarioResultAuthorizer,
+)
 from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
 from quanxin_life.reporting import AuditedReportArtifact, ReportArtifactFormat
 from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
@@ -33,6 +36,10 @@ from quanxin_life.reporting.contracts import (
     AUDITED_REPORT_TOOL_VERSION,
 )
 from quanxin_life.scenarios import OperationScenario, ScenarioSegment
+from quanxin_life.tools.data_quality import (
+    DATA_QUALITY_MODEL_VERSION,
+    DATA_QUALITY_TOOL_VERSION,
+)
 
 NOW = datetime(2026, 8, 7, 10, 0, tzinfo=UTC)
 
@@ -162,6 +169,46 @@ def _report_result(result_id: str) -> ToolResult:
     )
 
 
+def _strict_validation_result(result_id: str) -> ToolResult:
+    return ToolResult(
+        result_id=result_id,
+        tool_name="validate_battery_data",
+        tool_version=DATA_QUALITY_TOOL_VERSION,
+        model_version=DATA_QUALITY_MODEL_VERSION,
+        data_version="registered-batch-v1",
+        feature_version="canonical-csv-v1",
+        input_hash="5" * 64,
+        values={
+            "dataset_id": "batch-safe",
+            "blocked": True,
+            "quality_score": 0.0,
+            "issue_count": 1,
+            "issues": [
+                {
+                    "code": "MISSING_REQUIRED_CYCLE",
+                    "severity": "blocking",
+                    "message": "Required cycle is missing.",
+                    "cell_id": "cell-1",
+                    "cycle_index": None,
+                }
+            ],
+        },
+        uncertainty=None,
+        warnings=["MISSING_REQUIRED_CYCLE"],
+        provenance=[
+            ProvenanceRecord(
+                source_id="batch-safe",
+                source_kind=SourceKind.OBSERVED,
+                uri="record-batch:batch-safe",
+                sha256="6" * 64,
+                description="Registered canonical CSV batch",
+                created_at=NOW,
+            )
+        ],
+        created_at=NOW,
+    )
+
+
 def _client(
     *, result_warnings: list[str] | None = None
 ) -> tuple[TestClient, _Gateway, _ScenarioGateway, ToolResult, str, _Exporter]:
@@ -208,6 +255,7 @@ def test_aily_requires_the_configured_bearer_token() -> None:
     client, gateway, _, _, _, _ = _client()
     body = {
         "task_type": FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value,
+        "source_run_id": str(uuid4()),
         "data_batch_id": "batch-safe",
     }
 
@@ -230,6 +278,7 @@ def test_aily_creates_and_reads_an_existing_agent_run_state() -> None:
         "/v1/aily/analysis-tasks",
         json={
             "task_type": FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY.value,
+            "source_run_id": str(uuid4()),
             "data_batch_id": "batch-safe",
         },
         headers=_headers(),
@@ -259,6 +308,41 @@ def test_aily_returns_only_a_run_bound_ledger_tool_result() -> None:
     assert response.status_code == 200
     assert response.json() == result.model_dump(mode="json")
     assert unbound.status_code == 404
+
+
+def test_aily_returns_a_run_bound_validation_result_with_production_authorization() -> None:
+    result = _strict_validation_result(str(uuid4()))
+    ledger = AuditLedger((result,))
+    state = AgentRunState(
+        run_id=str(uuid4()),
+        intent_id=str(uuid4()),
+        plan_hash="7" * 64,
+        status=AgentRunStatus.FAILED,
+        completed_step_ids=("validate",),
+        result_ids=(result.result_id,),
+        updated_at=NOW,
+    )
+    gateway = _Gateway(state)
+    adapter = create_aily_http_adapter(
+        AilyConnectorConfig(api_key=SecretStr("connector-secret")),
+        gateway=gateway,
+        scenario_context_gateway=_ScenarioGateway(),
+        audit_ledger=ledger,
+        report_exporter=_Exporter(str(uuid4())),
+        result_authorizer=AuditedScenarioResultAuthorizer(
+            result_resolver=ledger
+        ),
+    )
+    app = FastAPI()
+    app.include_router(adapter.router)
+
+    response = TestClient(app).get(
+        f"/v1/aily/analysis-tasks/{state.run_id}/results/{result.result_id}",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == result.model_dump(mode="json")
 
 
 def test_aily_does_not_return_values_for_an_inactive_model_result() -> None:
@@ -339,6 +423,7 @@ def test_aily_creates_reference_only_scenario_contexts_from_public_contracts() -
         "/v1/aily/scenario-contexts",
         json={
             "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "source_run_id": str(uuid4()),
             "data_batch_id": "batch-safe",
             "cell_format": "prismatic",
             "baseline": _scenario(scenario_id="baseline"),
@@ -363,6 +448,7 @@ def test_aily_rejects_caller_generated_scenario_outputs_before_the_gateway() -> 
         "/v1/aily/scenario-contexts",
         json={
             "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "source_run_id": str(uuid4()),
             "data_batch_id": "batch-safe",
             "cell_format": "prismatic",
             "baseline": _scenario(scenario_id="baseline"),
@@ -383,6 +469,7 @@ def test_aily_scenario_tasks_require_a_persisted_context_reference() -> None:
         "/v1/aily/analysis-tasks",
         json={
             "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "source_run_id": str(uuid4()),
             "scenario_context_id": scenario_gateway.state.scenario_context_id,
         },
         headers=_headers(),
@@ -391,6 +478,7 @@ def test_aily_scenario_tasks_require_a_persisted_context_reference() -> None:
         "/v1/aily/analysis-tasks",
         json={
             "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "source_run_id": str(uuid4()),
             "data_batch_id": "batch-safe",
         },
         headers=_headers(),
@@ -401,3 +489,19 @@ def test_aily_scenario_tasks_require_a_persisted_context_reference() -> None:
     assert gateway.create_calls[-1].scenario_context_id == (
         scenario_gateway.state.scenario_context_id
     )
+
+
+def test_aily_rejects_analysis_requests_without_a_source_upload_reference() -> None:
+    client, gateway, _, _, _, _ = _client()
+
+    response = client.post(
+        "/v1/aily/analysis-tasks",
+        json={
+            "task_type": FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value,
+            "data_batch_id": "batch-safe",
+        },
+        headers=_headers(),
+    )
+
+    assert response.status_code == 422
+    assert gateway.create_calls == []

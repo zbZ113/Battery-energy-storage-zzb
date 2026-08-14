@@ -42,6 +42,7 @@ from quanxin_life.integrations.feishu.delivery_contract import (
     FeishuDeliveryResultContractError,
 )
 from quanxin_life.integrations.feishu.jobs import (
+    FeishuAnalysisJobOrigin,
     FeishuAnalysisJobStatus,
     FeishuAnalysisJobWorker,
     FeishuJobDeliveryProgress,
@@ -120,6 +121,37 @@ class _RouteAuthorizer:
     def authorize(self, **_: object) -> None:
         if not self.active:
             raise FeishuWorkflowRejected("MODEL_ROUTE_NOT_ACTIVATED")
+
+
+class _AilyDataIdentityResolver:
+    def __init__(self, *, active: bool) -> None:
+        self.active = active
+        self.calls: list[tuple[str, str]] = []
+
+    def resolve_source_job(
+        self,
+        *,
+        source_run_id: str,
+        data_batch_id: str,
+    ) -> None:
+        self.calls.append((source_run_id, data_batch_id))
+        if not self.active:
+            raise ValueError("Aily data identity is not authorized")
+
+
+class _ScenarioInputResolver:
+    def __init__(self, *, created_by_reference: str, data_batch_id: str) -> None:
+        self.created_by_reference = created_by_reference
+        self.data_batch_id = data_batch_id
+
+    def resolve_created_by_reference(self, scenario_context_id: str) -> str:
+        return self.created_by_reference
+
+    def resolve_data_batch_id(self, scenario_context_id: str) -> str:
+        return self.data_batch_id
+
+    def resolve_analysis_input(self, **_: object) -> Mapping[str, object]:
+        return {}
 
 
 class _InputBinder:
@@ -473,6 +505,8 @@ def _worker(
     project_model_crash_before_return: bool = False,
     sibling_planner: FeishuValidatedSiblingPlanner | None = None,
     audit_ledger: AuditLedger | None = None,
+    aily_data_identity_resolver: _AilyDataIdentityResolver | None = None,
+    scenario_input_resolver: _ScenarioInputResolver | None = None,
 ) -> FeishuAnalysisJobWorker:
     service, ledger = _tool_service(
         prediction_calls=prediction_calls,
@@ -533,12 +567,14 @@ def _worker(
         batch_store=batch_store or InMemoryVerifiedEarlyCycleBatchStore(),
         registration_resolver=lambda job, attachment, now: _registration(job, attachment),
         analysis_input_factory=analysis_input,
+        scenario_input_resolver=scenario_input_resolver,
         workflow=workflow,
         result_resolver=ledger,
         report_result_factory=report_result,
         project_model_executor=project_executor,
         delivery=delivery,
         sibling_planner=sibling_planner,
+        aily_data_identity_resolver=aily_data_identity_resolver,
         clock=lambda: NOW,
         heartbeat_interval_seconds=30,
         max_attempts=max_attempts,
@@ -583,6 +619,230 @@ def test_worker_uses_project_model_executor_after_global_validation() -> None:
     assert delivery.successes == [
         (snapshot.run_id, snapshot.analysis_result_id, snapshot.report_result_id)
     ]
+
+
+@pytest.mark.parametrize(
+    "task",
+    [
+        FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+    ],
+)
+def test_aily_data_job_uses_registered_batch_without_redownloading(
+    task: FeishuAnalysisTask,
+) -> None:
+    jobs, source_job_id = _job()
+    batches = InMemoryVerifiedEarlyCycleBatchStore()
+    ledger = AuditLedger()
+    source_worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        batch_store=batches,
+        audit_ledger=ledger,
+    )
+    assert (
+        source_worker.execute(job_id=source_job_id)
+        is FeishuAnalysisJobStatus.SUCCEEDED
+    )
+    source = jobs.get(source_job_id)
+    assert source.record_batch_id is not None
+    assert source.validation_result_id is not None
+    staged = jobs.stage_aily(
+        task=task,
+        source_job_id=source_job_id,
+        record_batch_id=source.record_batch_id,
+        scenario_context_id=None,
+        staged_at=NOW,
+    )
+    delivery = _Delivery()
+    identities = _AilyDataIdentityResolver(active=True)
+    worker = _worker(
+        jobs=jobs,
+        client_response=AssertionError("Aily registered batch must not download"),
+        route_active=False,
+        prediction_calls=[],
+        delivery=delivery,
+        enable_project_model=True,
+        batch_store=batches,
+        audit_ledger=ledger,
+        aily_data_identity_resolver=identities,
+    )
+
+    assert worker.execute(job_id=staged.job_id) is FeishuAnalysisJobStatus.SUCCEEDED
+
+    completed = jobs.get(staged.job_id)
+    assert completed.job_origin is FeishuAnalysisJobOrigin.AILY
+    assert completed.source_job_id == source_job_id
+    assert completed.validation_result_id is not None
+    assert completed.validation_result_id != source.validation_result_id
+    assert completed.analysis_result_id is not None
+    assert completed.report_result_id is not None
+    assert worker._client.calls == 0
+    assert delivery.successes == [
+        (completed.run_id, completed.analysis_result_id, completed.report_result_id)
+    ]
+    assert identities.calls == [(source_job_id, source.record_batch_id)]
+
+
+def test_aily_worker_rejects_when_the_source_identity_was_revoked() -> None:
+    jobs, source_job_id = _job()
+    batches = InMemoryVerifiedEarlyCycleBatchStore()
+    ledger = AuditLedger()
+    source_worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        batch_store=batches,
+        audit_ledger=ledger,
+    )
+    assert (
+        source_worker.execute(job_id=source_job_id)
+        is FeishuAnalysisJobStatus.SUCCEEDED
+    )
+    source = jobs.get(source_job_id)
+    assert source.record_batch_id is not None
+    staged = jobs.stage_aily(
+        task=FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        source_job_id=source_job_id,
+        record_batch_id=source.record_batch_id,
+        scenario_context_id=None,
+        staged_at=NOW,
+    )
+    delivery = _Delivery()
+    identities = _AilyDataIdentityResolver(active=False)
+    worker = _worker(
+        jobs=jobs,
+        client_response=AssertionError("revoked Aily job must not download"),
+        route_active=False,
+        prediction_calls=[],
+        delivery=delivery,
+        enable_project_model=True,
+        batch_store=batches,
+        audit_ledger=ledger,
+        aily_data_identity_resolver=identities,
+    )
+
+    status = worker.execute(job_id=staged.job_id)
+
+    snapshot = jobs.get(staged.job_id)
+    assert status is FeishuAnalysisJobStatus.REJECTED
+    assert snapshot.job_last_error_code == "AILY_DATA_IDENTITY_REVOKED"
+    assert snapshot.validation_result_id is None
+    assert snapshot.analysis_result_id is None
+    assert worker._client.calls == 0
+    assert delivery.rejections == [
+        (snapshot.run_id, "AILY_DATA_IDENTITY_REVOKED", None)
+    ]
+
+
+def test_aily_worker_rejects_a_scenario_context_owned_by_another_source() -> None:
+    jobs, source_job_id = _job()
+    batches = InMemoryVerifiedEarlyCycleBatchStore()
+    source_worker = _worker(
+        jobs=jobs,
+        client_response=_response(VALID_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        batch_store=batches,
+    )
+    assert (
+        source_worker.execute(job_id=source_job_id)
+        is FeishuAnalysisJobStatus.SUCCEEDED
+    )
+    source = jobs.get(source_job_id)
+    assert source.record_batch_id is not None
+    staged = jobs.stage_aily(
+        task=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+        source_job_id=source_job_id,
+        record_batch_id=source.record_batch_id,
+        scenario_context_id=str(uuid4()),
+        staged_at=NOW,
+    )
+    delivery = _Delivery()
+    worker = _worker(
+        jobs=jobs,
+        client_response=AssertionError("Aily scenario job must not download"),
+        route_active=True,
+        prediction_calls=[],
+        delivery=delivery,
+        batch_store=batches,
+        aily_data_identity_resolver=_AilyDataIdentityResolver(active=True),
+        scenario_input_resolver=_ScenarioInputResolver(
+            created_by_reference="8bad3b0d-e49a-484c-ae5d-2ae251f067b2",
+            data_batch_id=source.record_batch_id,
+        ),
+    )
+
+    status = worker.execute(job_id=staged.job_id)
+
+    snapshot = jobs.get(staged.job_id)
+    assert status is FeishuAnalysisJobStatus.REJECTED
+    assert snapshot.job_last_error_code == "AILY_SCENARIO_CONTEXT_REVOKED"
+    assert snapshot.validation_result_id is None
+    assert snapshot.analysis_result_id is None
+    assert delivery.rejections == [
+        (snapshot.run_id, "AILY_SCENARIO_CONTEXT_REVOKED", None)
+    ]
+
+
+def test_mapped_aily_scenario_keeps_the_raw_upload_sha_anchor() -> None:
+    jobs, source_job_id = _job()
+    batches = InMemoryVerifiedEarlyCycleBatchStore()
+    source_worker = _worker(
+        jobs=jobs,
+        client_response=_response(REVIEWED_CSV),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        enable_project_model=True,
+        batch_store=batches,
+        csv_normalizer=_reviewed_normalizer(),
+    )
+    assert (
+        source_worker.execute(job_id=source_job_id)
+        is FeishuAnalysisJobStatus.SUCCEEDED
+    )
+    source = jobs.get(source_job_id)
+    assert source.record_batch_id is not None
+    assert source.csv_mapping_status == "MAPPED"
+    assert source.csv_mapping_evidence is not None
+    assert source.input_file_sha256 == source.csv_mapping_evidence["raw_sha256"]
+    assert source.input_file_sha256 != source.csv_mapping_evidence["canonical_sha256"]
+    staged = jobs.stage_aily(
+        task=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+        source_job_id=source_job_id,
+        record_batch_id=source.record_batch_id,
+        scenario_context_id=str(uuid4()),
+        staged_at=NOW,
+    )
+    worker = _worker(
+        jobs=jobs,
+        client_response=AssertionError("Aily scenario job must not download"),
+        route_active=False,
+        prediction_calls=[],
+        delivery=_Delivery(),
+        batch_store=batches,
+        aily_data_identity_resolver=_AilyDataIdentityResolver(active=True),
+        scenario_input_resolver=_ScenarioInputResolver(
+            created_by_reference=source_job_id,
+            data_batch_id=source.record_batch_id,
+        ),
+    )
+
+    with pytest.raises(FeishuJobRetryableError, match="UNEXPECTED_WORKER_ERROR"):
+        worker.execute(job_id=staged.job_id)
+
+    child = jobs.get(staged.job_id)
+    assert child.input_file_sha256 == source.input_file_sha256
 
 
 def test_worker_retries_sibling_planning_without_revalidating_root() -> None:

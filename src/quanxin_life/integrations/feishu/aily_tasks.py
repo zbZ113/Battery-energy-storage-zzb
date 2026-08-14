@@ -12,6 +12,7 @@ from .bitable import BitableWriteResult
 from .cards import AuditedResultAuthorizer
 from .delivery_contract import validate_delivery_results
 from .jobs import (
+    AilyDataIdentityResolver,
     FeishuAnalysisJobOrigin,
     FeishuAnalysisJobRecord,
     FeishuAnalysisJobStatus,
@@ -30,6 +31,12 @@ _SCENARIO_TASKS = frozenset(
     {
         FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
         FeishuAnalysisTask.PROJECT_STORAGE_LIFETIME,
+    }
+)
+_DATA_TASKS = frozenset(
+    {
+        FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
     }
 )
 Clock = Callable[[], datetime]
@@ -116,7 +123,8 @@ class AilyAnalysisJobDelivery:
                 "evidence_level": authorization.evidence_level.value,
             }
         )
-        fields.update(_scenario_fields(job, analysis_result))
+        if job.task_type in _SCENARIO_TASKS:
+            fields.update(_scenario_fields(job, analysis_result))
         if analysis_result.warnings:
             fields["warnings"] = "\n".join(analysis_result.warnings)
         if self._report_link_factory is not None:
@@ -209,11 +217,13 @@ class SqlAlchemyAilyAnalysisTaskGateway:
         *,
         job_store: SqlAlchemyFeishuJobStore,
         scenario_context_store: SqlAlchemyFeishuScenarioContextStore,
+        data_identity_resolver: AilyDataIdentityResolver,
         queue: FeishuJobQueue,
         clock: Clock,
     ) -> None:
         self._job_store = job_store
         self._scenario_context_store = scenario_context_store
+        self._data_identity_resolver = data_identity_resolver
         self._queue = queue
         self._clock = clock
 
@@ -222,16 +232,36 @@ class SqlAlchemyAilyAnalysisTaskGateway:
         request: AilyCreateAnalysisTaskRequest,
     ) -> AgentRunState:
         task = request.task_type
-        if task not in _SCENARIO_TASKS or request.scenario_context_id is None:
-            raise ValueError(
-                "Aily durable analysis requires a persisted scenario context"
-            )
-        context = self._scenario_context_store.get(request.scenario_context_id)
-        if context.task is not task:
-            raise ValueError("scenario context task does not match the Aily request")
+        scenario_context_id: str | None = None
+        if task in _SCENARIO_TASKS:
+            if request.scenario_context_id is None:
+                raise ValueError(
+                    "Aily durable scenario analysis requires a persisted context"
+                )
+            context = self._scenario_context_store.get(request.scenario_context_id)
+            if context.task is not task:
+                raise ValueError("scenario context task does not match the Aily request")
+            if context.created_by_reference != request.source_run_id:
+                raise ValueError(
+                    "scenario context is not bound to the requested source upload"
+                )
+            data_batch_id = context.data_batch_id
+            scenario_context_id = context.scenario_context_id
+        elif task in _DATA_TASKS:
+            if request.data_batch_id is None:
+                raise ValueError("Aily data analysis requires a persisted batch")
+            data_batch_id = request.data_batch_id
+        else:
+            raise ValueError("Aily durable analysis task is not supported")
+        self._data_identity_resolver.resolve_source_job(
+            source_run_id=request.source_run_id,
+            data_batch_id=data_batch_id,
+        )
         staged = self._job_store.stage_aily(
             task=task,
-            scenario_context_id=context.scenario_context_id,
+            source_job_id=request.source_run_id,
+            record_batch_id=data_batch_id,
+            scenario_context_id=scenario_context_id,
             staged_at=self._now(),
         )
         if not staged.dispatched:
@@ -243,7 +273,7 @@ class SqlAlchemyAilyAnalysisTaskGateway:
                 task_id=dispatched.task_id,
                 dispatched_at=self._now(),
             )
-        return self.get_analysis_task(staged.job_id)
+        return _state(self._job_store.get(staged.job_id))
 
     def get_analysis_task(self, run_id: str) -> AgentRunState:
         try:
@@ -253,9 +283,37 @@ class SqlAlchemyAilyAnalysisTaskGateway:
         if (
             job.job_origin is not FeishuAnalysisJobOrigin.AILY
             or job.job_request_sha256 is None
-            or job.scenario_context_id is None
+            or job.source_job_id is None
+            or job.record_batch_id is None
+            or (
+                job.task_type in _SCENARIO_TASKS
+                and job.scenario_context_id is None
+            )
+            or (
+                job.task_type in _DATA_TASKS
+                and job.scenario_context_id is not None
+            )
         ):
             raise LookupError("Aily analysis task was not found")
+        source_job_id = job.source_job_id
+        data_batch_id = job.record_batch_id
+        assert source_job_id is not None
+        assert data_batch_id is not None
+        if job.task_type in _SCENARIO_TASKS:
+            assert job.scenario_context_id is not None
+            context = self._scenario_context_store.get(job.scenario_context_id)
+            if (
+                context.task is not job.task_type
+                or context.data_batch_id != data_batch_id
+                or context.created_by_reference != source_job_id
+            ):
+                raise ValueError(
+                    "Aily scenario task is not bound to its source upload"
+                )
+        self._data_identity_resolver.resolve_source_job(
+            source_run_id=source_job_id,
+            data_batch_id=data_batch_id,
+        )
         return _state(job)
 
     def _now(self) -> datetime:
@@ -266,9 +324,9 @@ class SqlAlchemyAilyAnalysisTaskGateway:
 
 
 def _state(job: FeishuAnalysisJobRecord) -> AgentRunState:
-    scenario_context_id = job.scenario_context_id
+    intent_id = job.scenario_context_id or job.source_job_id
     request_sha256 = job.job_request_sha256
-    if scenario_context_id is None or request_sha256 is None:
+    if intent_id is None or request_sha256 is None:
         raise ValueError("Aily analysis task metadata is incomplete")
     result_ids = tuple(
         result_id
@@ -293,7 +351,7 @@ def _state(job: FeishuAnalysisJobRecord) -> AgentRunState:
     )
     return AgentRunState(
         run_id=job.run_id,
-        intent_id=scenario_context_id,
+        intent_id=intent_id,
         plan_hash=request_sha256,
         status=_run_status(job.job_status),
         completed_step_ids=completed_steps,
@@ -317,5 +375,6 @@ def _run_status(status: FeishuAnalysisJobStatus) -> AgentRunStatus:
 __all__ = [
     "AilyAnalysisJobDelivery",
     "AilyBitableWriter",
+    "AilyDataIdentityResolver",
     "SqlAlchemyAilyAnalysisTaskGateway",
 ]

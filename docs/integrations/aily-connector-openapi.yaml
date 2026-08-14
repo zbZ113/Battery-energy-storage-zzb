@@ -1,10 +1,11 @@
 openapi: 3.1.0
 info:
   title: Quanxin Life Aily Connector
-  version: audited-scenarios-v1
+  version: project-bound-analysis-v2
   description: >-
-    Reference-only facade over durable analysis jobs, audited ToolResults, and
-    support-bounded battery operating scenarios. The connector accepts scenario
+    Reference-only facade over project-bound durable analysis jobs, audited
+    ToolResults, and support-bounded battery operating scenarios. Every task is
+    anchored to a completed Feishu upload run. The connector accepts scenario
     assumptions but never caller-supplied SOH, EOL, lifetime, or interval outputs.
 servers:
   - url: https://YOUR_REVIEWED_HOST
@@ -139,17 +140,42 @@ components:
         format: uuid
   schemas:
     CreateAnalysisTaskRequest:
-      $ref: '#/components/schemas/ScenarioAnalysisTaskRequest'
+      oneOf:
+        - $ref: '#/components/schemas/BatchAnalysisTaskRequest'
+        - $ref: '#/components/schemas/ScenarioAnalysisTaskRequest'
+      discriminator:
+        propertyName: task_type
+        mapping:
+          predict_cycle_life: '#/components/schemas/BatchAnalysisTaskRequest'
+          predict_soh_trajectory: '#/components/schemas/BatchAnalysisTaskRequest'
+          compare_operation_scenarios: '#/components/schemas/ScenarioAnalysisTaskRequest'
+          project_storage_lifetime: '#/components/schemas/ScenarioAnalysisTaskRequest'
+    BatchAnalysisTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [task_type, source_run_id, data_batch_id]
+      properties:
+        task_type:
+          type: string
+          enum:
+            - predict_cycle_life
+            - predict_soh_trajectory
+        source_run_id:
+          $ref: '#/components/schemas/SafeReference'
+        data_batch_id:
+          $ref: '#/components/schemas/SafeReference'
     ScenarioAnalysisTaskRequest:
       type: object
       additionalProperties: false
-      required: [task_type, scenario_context_id]
+      required: [task_type, source_run_id, scenario_context_id]
       properties:
         task_type:
           type: string
           enum:
             - compare_operation_scenarios
             - project_storage_lifetime
+        source_run_id:
+          $ref: '#/components/schemas/SafeReference'
         scenario_context_id:
           $ref: '#/components/schemas/SafeReference'
     CreateScenarioContextRequest:
@@ -164,10 +190,12 @@ components:
     CompareScenarioContextRequest:
       type: object
       additionalProperties: false
-      required: [task_type, data_batch_id, cell_format, baseline, comparisons]
+      required: [task_type, source_run_id, data_batch_id, cell_format, baseline, comparisons]
       properties:
         task_type:
           const: compare_operation_scenarios
+        source_run_id:
+          $ref: '#/components/schemas/SafeReference'
         data_batch_id:
           $ref: '#/components/schemas/SafeReference'
         cell_format:
@@ -187,10 +215,12 @@ components:
     ProjectLifetimeScenarioContextRequest:
       type: object
       additionalProperties: false
-      required: [task_type, data_batch_id, cell_format, scenario]
+      required: [task_type, source_run_id, data_batch_id, cell_format, scenario]
       properties:
         task_type:
           const: project_storage_lifetime
+        source_run_id:
+          $ref: '#/components/schemas/SafeReference'
         data_batch_id:
           $ref: '#/components/schemas/SafeReference'
         cell_format:

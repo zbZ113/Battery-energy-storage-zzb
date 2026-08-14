@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -50,6 +51,18 @@ class _Authorizer:
             activation_status="REGISTERED_CANDIDATE",
             evidence_level=EvidenceLevel.PHYSICS_REFERENCE,
             supported_domain="manifest-bounded-reference-scenario",
+        )
+
+
+class _ModelAuthorizer:
+    def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
+        assert result.tool_name in {"predict_cycle_life", "generate_audited_report"}
+        return AuditedResultAuthorization(
+            allowed=True,
+            route_id="cyclepatch-direct-v3",
+            activation_status="ACTIVE",
+            evidence_level=EvidenceLevel.MODEL_INFERENCE,
+            supported_domain="project-bound MATR cycle-life route",
         )
 
 
@@ -247,3 +260,60 @@ def test_aily_rejection_delivery_needs_no_chat_target() -> None:
     assert receipt.report_file_key is None
     assert bitable.fields[0]["task_status"] == "REJECTED"
     assert bitable.fields[0]["warnings"] == "SCENARIO_CONTEXT_REJECTED"
+
+
+def test_aily_non_scenario_success_does_not_require_scenario_projection() -> None:
+    bitable = _Bitable()
+    delivery = AilyAnalysisJobDelivery(
+        bitable_writer=bitable,
+        result_authorizer=_ModelAuthorizer(),
+    )
+    job = replace(
+        _job(),
+        task_type=FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        scenario_context_id=None,
+    )
+    assert job.analysis_result_id is not None
+    assert job.report_result_id is not None
+    analysis = ToolResult(
+        result_id=job.analysis_result_id,
+        tool_name="predict_cycle_life",
+        tool_version="advanced-rul-prediction-tool-v1",
+        model_version="cyclepatch-direct-v3",
+        data_version="matr-project-v1",
+        feature_version="advanced-input-v1",
+        input_hash="8" * 64,
+        values={"artifact": {"record_batch_id": job.record_batch_id}},
+        warnings=[],
+        provenance=[
+            ProvenanceRecord(
+                source_id="project-batch",
+                source_kind=SourceKind.OBSERVED,
+                uri="record-batch:project-batch",
+                sha256="9" * 64,
+                description="Authorized project batch.",
+                created_at=NOW,
+            )
+        ],
+        created_at=NOW,
+    )
+    report = _report(job).model_copy(
+        update={
+            "values": {
+                "report_kind": "lifetime_decision",
+                "upstream_result_ids": [analysis.result_id],
+            }
+        }
+    )
+
+    delivery.deliver_success(
+        job=job,
+        analysis_result=analysis,
+        report_result=report,
+    )
+
+    fields = bitable.fields[0]
+    assert fields["task_type"] == FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value
+    assert fields["evidence_level"] == EvidenceLevel.MODEL_INFERENCE.value
+    assert "scenario_id" not in fields
+    assert "scenario_version" not in fields

@@ -99,6 +99,13 @@ _SCENARIO_TASKS = frozenset(
         FeishuAnalysisTask.PROJECT_STORAGE_LIFETIME,
     }
 )
+_AILY_DATA_TASKS = frozenset(
+    {
+        FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+        FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+    }
+)
+_AILY_TASKS = _SCENARIO_TASKS | _AILY_DATA_TASKS
 
 
 class FeishuJobClaimStatus(StrEnum):
@@ -242,6 +249,17 @@ class RegisteredResultResolver(Protocol):
     def resolve_registered_result(self, result_id: str) -> ToolResult: ...
 
 
+class AilyDataIdentityResolver(Protocol):
+    """Revalidate one persisted Feishu upload used by an Aily job."""
+
+    def resolve_source_job(
+        self,
+        *,
+        source_run_id: str,
+        data_batch_id: str,
+    ) -> None: ...
+
+
 class FeishuProjectModelExecutorPort(Protocol):
     def execute(
         self,
@@ -257,6 +275,8 @@ class BatteryCsvNormalizerPort(Protocol):
 
 
 class FeishuScenarioInputResolver(Protocol):
+    def resolve_created_by_reference(self, scenario_context_id: str) -> str: ...
+
     def resolve_data_batch_id(self, scenario_context_id: str) -> str: ...
 
     def resolve_analysis_input(
@@ -450,22 +470,50 @@ class SqlAlchemyFeishuJobStore:
         self,
         *,
         task: FeishuAnalysisTask,
-        scenario_context_id: str,
+        source_job_id: str,
+        record_batch_id: str,
+        scenario_context_id: str | None,
         staged_at: datetime,
     ) -> _StagedJob:
-        if task not in _SCENARIO_TASKS:
-            raise ValueError("Aily durable analysis supports only scenario tasks")
-        context_id = validate_feishu_job_id(scenario_context_id)
-        now = _utc(staged_at)
-        request_sha256 = sha256_canonical(
-            {
-                "job_origin": FeishuAnalysisJobOrigin.AILY.value,
-                "task_type": task.value,
-                "scenario_context_id": context_id,
-            }
+        if task not in _AILY_TASKS:
+            raise ValueError("Aily durable analysis task is not supported")
+        checked_source_job_id = validate_feishu_job_id(source_job_id)
+        checked_record_batch_id = _delivery_reference(
+            record_batch_id,
+            field_name="record_batch_id",
         )
+        context_id = (
+            validate_feishu_job_id(scenario_context_id)
+            if scenario_context_id is not None
+            else None
+        )
+        if task in _SCENARIO_TASKS and context_id is None:
+            raise ValueError("Aily scenario analysis requires a persisted context")
+        if task in _AILY_DATA_TASKS and context_id is not None:
+            raise ValueError("Aily data analysis cannot carry a scenario context")
+        now = _utc(staged_at)
         session = self._session_factory()
         try:
+            source = session.scalar(
+                select(FeishuEventReceipt)
+                .where(FeishuEventReceipt.job_id == checked_source_job_id)
+                .with_for_update()
+            )
+            self._require_aily_source(
+                source,
+                record_batch_id=checked_record_batch_id,
+            )
+            assert source is not None
+            request_sha256 = sha256_canonical(
+                {
+                    "schema_version": "aily-analysis-task-v2",
+                    "job_origin": FeishuAnalysisJobOrigin.AILY.value,
+                    "source_job_id": checked_source_job_id,
+                    "record_batch_id": checked_record_batch_id,
+                    "task_type": task.value,
+                    "scenario_context_id": context_id,
+                }
+            )
             existing = session.scalar(
                 select(FeishuEventReceipt)
                 .where(FeishuEventReceipt.job_request_sha256 == request_sha256)
@@ -474,7 +522,9 @@ class SqlAlchemyFeishuJobStore:
             if existing is not None:
                 staged = self._existing_aily_job(
                     existing,
+                    source=source,
                     task=task,
+                    record_batch_id=checked_record_batch_id,
                     scenario_context_id=context_id,
                     request_sha256=request_sha256,
                 )
@@ -485,7 +535,7 @@ class SqlAlchemyFeishuJobStore:
                 FeishuEventReceipt(
                     id=str(uuid4()),
                     event_id=f"aily:{request_sha256}",
-                    event_type="aily.analysis_task.create_v1",
+                    event_type="aily.analysis_task.create_v2",
                     payload_sha256=request_sha256,
                     status=FeishuReceiptClaimStatus.PROCESSED.value,
                     attempt_count=1,
@@ -494,12 +544,19 @@ class SqlAlchemyFeishuJobStore:
                     job_id=job_id,
                     job_origin=FeishuAnalysisJobOrigin.AILY.value,
                     job_request_sha256=request_sha256,
+                    source_job_id=checked_source_job_id,
                     job_status=FeishuAnalysisJobStatus.PENDING.value,
                     job_stage=FeishuAnalysisJobStage.RECEIVED.value,
                     task_type=task.value,
                     run_id=job_id,
-                    event_time=now,
+                    chat_id=source.chat_id,
+                    sender_id=source.sender_id,
+                    receive_id_type=source.receive_id_type,
+                    event_time=source.event_time,
                     scenario_context_id=context_id,
+                    record_batch_id=checked_record_batch_id,
+                    cell_reference=source.cell_reference,
+                    input_file_sha256=source.input_file_sha256,
                     job_attempt_count=0,
                     job_created_at=now,
                     job_updated_at=now,
@@ -514,11 +571,18 @@ class SqlAlchemyFeishuJobStore:
                     FeishuEventReceipt.job_request_sha256 == request_sha256
                 )
             )
-            if existing is None:
+            source = session.scalar(
+                select(FeishuEventReceipt).where(
+                    FeishuEventReceipt.job_id == checked_source_job_id
+                )
+            )
+            if existing is None or source is None:
                 raise
             return self._existing_aily_job(
                 existing,
+                source=source,
                 task=task,
+                record_batch_id=checked_record_batch_id,
                 scenario_context_id=context_id,
                 request_sha256=request_sha256,
             )
@@ -1371,6 +1435,35 @@ class SqlAlchemyFeishuJobStore:
         )
 
     @staticmethod
+    def _require_aily_source(
+        row: FeishuEventReceipt | None,
+        *,
+        record_batch_id: str,
+    ) -> None:
+        required = (
+            row.job_id if row is not None else None,
+            row.chat_id if row is not None else None,
+            row.sender_id if row is not None else None,
+            row.receive_id_type if row is not None else None,
+            row.event_time if row is not None else None,
+            row.record_batch_id if row is not None else None,
+            row.cell_reference if row is not None else None,
+            row.input_file_sha256 if row is not None else None,
+            row.validation_result_id if row is not None else None,
+        )
+        if (
+            row is None
+            or row.job_origin != FeishuAnalysisJobOrigin.FEISHU.value
+            or row.event_type != "im.message.receive_v1"
+            or row.task_type != FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value
+            or row.source_job_id is not None
+            or row.job_status != FeishuAnalysisJobStatus.SUCCEEDED.value
+            or row.record_batch_id != record_batch_id
+            or any(value is None for value in required)
+        ):
+            raise ValueError("Aily analysis requires an authorized completed upload")
+
+    @staticmethod
     def _require_sibling_source(row: FeishuEventReceipt | None) -> None:
         required = (
             row.record_batch_id if row is not None else None,
@@ -1439,16 +1532,32 @@ class SqlAlchemyFeishuJobStore:
     def _existing_aily_job(
         row: FeishuEventReceipt,
         *,
+        source: FeishuEventReceipt,
         task: FeishuAnalysisTask,
-        scenario_context_id: str,
+        record_batch_id: str,
+        scenario_context_id: str | None,
         request_sha256: str,
     ) -> _StagedJob:
         if (
             row.job_id is None
             or row.job_origin != FeishuAnalysisJobOrigin.AILY.value
+            or row.event_type != "aily.analysis_task.create_v2"
+            or row.payload_sha256 != request_sha256
             or row.job_request_sha256 != request_sha256
+            or row.source_job_id != source.job_id
             or row.task_type != task.value
             or row.scenario_context_id != scenario_context_id
+            or row.record_batch_id != record_batch_id
+            or row.chat_id != source.chat_id
+            or row.sender_id != source.sender_id
+            or row.receive_id_type != source.receive_id_type
+            or row.event_time != source.event_time
+            or row.cell_reference != source.cell_reference
+            or row.input_file_sha256 != source.input_file_sha256
+            or row.message_id is not None
+            or row.file_key is not None
+            or row.file_name is not None
+            or row.validation_result_id is not None
         ):
             raise FeishuJobOwnershipError(
                 "Aily request conflicts with its persisted sanitized reference"
@@ -2062,6 +2171,7 @@ class FeishuAnalysisJobWorker:
         project_model_executor: FeishuProjectModelExecutorPort | None = None,
         delivery: FeishuJobDelivery,
         sibling_planner: FeishuValidatedSiblingPlanner | None = None,
+        aily_data_identity_resolver: AilyDataIdentityResolver | None = None,
         clock: Callable[[], datetime],
         heartbeat_interval_seconds: int = 30,
         max_attempts: int = 3,
@@ -2084,6 +2194,7 @@ class FeishuAnalysisJobWorker:
         self._project_model_executor = project_model_executor
         self._delivery = delivery
         self._sibling_planner = sibling_planner
+        self._aily_data_identity_resolver = aily_data_identity_resolver
         self._clock = clock
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._max_attempts = max_attempts
@@ -2127,6 +2238,69 @@ class FeishuAnalysisJobWorker:
 
     def _execute_owned(self, *, job_id: str, claim_token: str) -> FeishuAnalysisJobStatus:
         job = self._store.get(job_id)
+        if job.job_origin is FeishuAnalysisJobOrigin.AILY:
+            source_job_id = job.source_job_id
+            record_batch_id = job.record_batch_id
+            resolver = self._aily_data_identity_resolver
+            if (
+                resolver is None
+                or source_job_id is None
+                or record_batch_id is None
+            ):
+                return self._reject(
+                    job,
+                    claim_token,
+                    "AILY_DATA_IDENTITY_REVOKED",
+                    None,
+                )
+            try:
+                resolver.resolve_source_job(
+                    source_run_id=source_job_id,
+                    data_batch_id=record_batch_id,
+                )
+            except (LookupError, RuntimeError, TypeError, ValueError):
+                return self._reject(
+                    job,
+                    claim_token,
+                    "AILY_DATA_IDENTITY_REVOKED",
+                    None,
+                )
+            if job.task_type in _SCENARIO_TASKS:
+                scenario_context_id = job.scenario_context_id
+                scenario_resolver = self._scenario_input_resolver
+                if scenario_context_id is None or scenario_resolver is None:
+                    return self._reject(
+                        job,
+                        claim_token,
+                        "AILY_SCENARIO_CONTEXT_REVOKED",
+                        None,
+                    )
+                try:
+                    context_source_run_id = (
+                        scenario_resolver.resolve_created_by_reference(
+                            scenario_context_id
+                        )
+                    )
+                    context_batch_id = scenario_resolver.resolve_data_batch_id(
+                        scenario_context_id
+                    )
+                except (LookupError, RuntimeError, TypeError, ValueError):
+                    return self._reject(
+                        job,
+                        claim_token,
+                        "AILY_SCENARIO_CONTEXT_REVOKED",
+                        None,
+                    )
+                if (
+                    context_source_run_id != source_job_id
+                    or context_batch_id != record_batch_id
+                ):
+                    return self._reject(
+                        job,
+                        claim_token,
+                        "AILY_SCENARIO_CONTEXT_REVOKED",
+                        None,
+                    )
         if job.analysis_result_id is not None and job.report_result_id is not None:
             analysis = self._resolve_result(job.analysis_result_id)
             report = self._resolve_result(job.report_result_id)
@@ -2169,7 +2343,9 @@ class FeishuAnalysisJobWorker:
                 claim_token=claim_token,
                 record_batch_id=record_batch_id,
                 cell_reference=batch.metadata.cell_id,
-                input_file_sha256=batch.metadata.source_sha256,
+                input_file_sha256=(
+                    job.input_file_sha256 or batch.metadata.source_sha256
+                ),
                 updated_at=self._now(),
             )
             job = self._store.get(job_id)
@@ -2492,7 +2668,7 @@ class FeishuAnalysisJobWorker:
             claim_token=claim_token,
             validation_result_id=(
                 outcome.validation_result.result_id
-                if job.source_job_id is None
+                if not _reuses_source_validation_result(job)
                 else None
             ),
             analysis_result_id=outcome.analysis_result.result_id,
@@ -2758,8 +2934,13 @@ class FeishuAnalysisJobWorker:
         validation_input: Mapping[str, object],
     ) -> ToolResult:
         result_id = job.validation_result_id
-        if result_id is None and job.source_job_id is not None:
-            source = self._store.get(job.source_job_id)
+        source_job_id = job.source_job_id
+        if (
+            result_id is None
+            and _reuses_source_validation_result(job)
+            and source_job_id is not None
+        ):
+            source = self._store.get(source_job_id)
             if (
                 source.job_origin is not FeishuAnalysisJobOrigin.FEISHU
                 or source.event_type != "im.message.receive_v1"
@@ -2849,6 +3030,13 @@ def validate_feishu_job_id(value: str) -> str:
     if str(parsed) != value:
         raise ValueError("job_id must be canonical")
     return value
+
+
+def _reuses_source_validation_result(job: FeishuAnalysisJobRecord) -> bool:
+    return (
+        job.job_origin is FeishuAnalysisJobOrigin.FEISHU
+        and job.source_job_id is not None
+    )
 
 
 def _claim_token(value: str) -> str:
@@ -3038,6 +3226,7 @@ def _database_utc(value: datetime) -> datetime:
 
 
 __all__ = [
+    "AilyDataIdentityResolver",
     "FeishuAnalysisJobDelivery",
     "FeishuAnalysisJobOrigin",
     "FeishuAnalysisJobRecord",

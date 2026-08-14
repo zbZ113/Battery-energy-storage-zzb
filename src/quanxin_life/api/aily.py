@@ -21,7 +21,6 @@ from pydantic import (
     model_validator,
 )
 
-from quanxin_life.audit import AuditLedger
 from quanxin_life.core import AgentRunState, ToolResult
 from quanxin_life.integrations.feishu.cards import AuditedResultAuthorizer
 from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
@@ -67,6 +66,7 @@ class AilyCreateAnalysisTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     task_type: FeishuAnalysisTask
+    source_run_id: str = Field(min_length=1, max_length=200)
     data_batch_id: str | None = Field(default=None, min_length=1, max_length=200)
     scenario_context_id: str | None = Field(
         default=None,
@@ -74,7 +74,7 @@ class AilyCreateAnalysisTaskRequest(BaseModel):
         max_length=200,
     )
 
-    @field_validator("data_batch_id", "scenario_context_id")
+    @field_validator("source_run_id", "data_batch_id", "scenario_context_id")
     @classmethod
     def task_reference_is_safe(cls, value: str | None) -> str | None:
         if value is None:
@@ -98,14 +98,15 @@ class _AilyScenarioContextRequestBase(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    source_run_id: str = Field(min_length=1, max_length=200)
     data_batch_id: str = Field(min_length=1, max_length=200)
     cell_format: Literal["cylindrical", "prismatic"]
     current_state_reference: ScenarioStateReference | None = None
 
-    @field_validator("data_batch_id")
+    @field_validator("source_run_id", "data_batch_id")
     @classmethod
-    def data_batch_id_is_safe(cls, value: str) -> str:
-        return _reference(value, field_name="data_batch_id")
+    def data_identity_reference_is_safe(cls, value: str) -> str:
+        return _reference(value, field_name="Aily data identity reference")
 
 
 class AilyCompareScenarioContextRequest(_AilyScenarioContextRequestBase):
@@ -171,6 +172,10 @@ class AilyReportExporter(Protocol):
     ) -> AuditedReportArtifact: ...
 
 
+class AilyResultResolver(Protocol):
+    def resolve_registered_result(self, result_id: str) -> ToolResult: ...
+
+
 @dataclass(frozen=True, slots=True)
 class AilyHttpAdapter:
     router: APIRouter
@@ -181,7 +186,7 @@ def create_aily_http_adapter(
     *,
     gateway: AilyAnalysisTaskGateway,
     scenario_context_gateway: AilyScenarioContextGateway,
-    audit_ledger: AuditLedger,
+    audit_ledger: AilyResultResolver,
     report_exporter: AilyReportExporter,
     result_authorizer: AuditedResultAuthorizer,
 ) -> AilyHttpAdapter:
@@ -222,7 +227,7 @@ def create_aily_http_adapter(
             return AilyScenarioContextState.model_validate(
                 state.model_dump(mode="json")
             )
-        except (TypeError, ValueError) as exc:
+        except (LookupError, TypeError, ValueError) as exc:
             raise HTTPException(
                 status_code=422,
                 detail="aily_scenario_context_rejected",
@@ -244,7 +249,7 @@ def create_aily_http_adapter(
         try:
             state = gateway.create_analysis_task(request)
             return AgentRunState.model_validate(state.model_dump(mode="json"))
-        except (TypeError, ValueError) as exc:
+        except (LookupError, TypeError, ValueError) as exc:
             raise HTTPException(
                 status_code=422, detail="aily_analysis_task_rejected"
             ) from exc
@@ -390,6 +395,7 @@ __all__ = [
     "AilyHttpAdapter",
     "AilyProjectLifetimeScenarioContextRequest",
     "AilyReportExporter",
+    "AilyResultResolver",
     "AilyScenarioContextGateway",
     "AilyScenarioContextState",
     "create_aily_http_adapter",

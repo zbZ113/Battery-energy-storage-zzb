@@ -27,6 +27,7 @@ from quanxin_life.tools.blast_scenarios import (
 )
 from quanxin_life.tools.early_cycle_features import VerifiedEarlyCycleBatch
 
+from .aily_tasks import AilyDataIdentityResolver
 from .scenario_contexts import (
     ScenarioAnalysisInput,
     SqlAlchemyFeishuScenarioContextStore,
@@ -69,18 +70,16 @@ class SqlAlchemyAilyScenarioContextGateway:
         *,
         context_store: SqlAlchemyFeishuScenarioContextStore,
         batch_store: VerifiedEarlyCycleBatchStore,
-        created_by_reference: str,
+        data_identity_resolver: AilyDataIdentityResolver,
         reference_use_authorizer: AilyScenarioReferenceUseAuthorizer | None = None,
         clock: Clock = _utc_now,
         uuid_factory: UuidFactory = uuid4,
     ) -> None:
-        if not created_by_reference.strip():
-            raise ValueError("created_by_reference must not be blank")
         if not callable(clock) or not callable(uuid_factory):
             raise TypeError("clock and uuid_factory must be callable")
         self._context_store = context_store
         self._batch_store = batch_store
-        self._created_by_reference = created_by_reference
+        self._data_identity_resolver = data_identity_resolver
         self._reference_use_authorizer = (
             reference_use_authorizer
             or RejectingAilyScenarioReferenceUseAuthorizer()
@@ -92,6 +91,10 @@ class SqlAlchemyAilyScenarioContextGateway:
         self,
         request: AilyCreateScenarioContextRequest,
     ) -> AilyScenarioContextState:
+        self._data_identity_resolver.resolve_source_job(
+            source_run_id=request.source_run_id,
+            data_batch_id=request.data_batch_id,
+        )
         batch = self._batch_store.resolve_verified_early_cycle_batch(
             request.data_batch_id
         )
@@ -141,7 +144,7 @@ class SqlAlchemyAilyScenarioContextGateway:
             data_batch_id=request.data_batch_id,
             verified_context=verified_context,
             analysis_input=analysis_input,
-            created_by_reference=self._created_by_reference,
+            created_by_reference=request.source_run_id,
             created_at=self._clock(),
         )
         return AilyScenarioContextState(

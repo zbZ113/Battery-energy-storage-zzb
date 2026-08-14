@@ -160,7 +160,11 @@ Aily 通过受保护 HTTP façade 接入，不直接调用模型，也不连接�
 docs/integrations/aily-connector-openapi.yaml
 ```
 
-稳定操作为：创建受控场景上下文、创建分析任务、查询任务状态、读取 run-bound ToolResult、下载 run-bound 审计报告。情景请求先提交 `OperationScenario`，服务端从已验证 batch 解析 chemistry、capacity、数据版本和来源并返回 `scenario_context_id`；随后创建任务时只能提交该引用，不能再附带业务结果数字。所有请求使用：
+稳定操作为：创建受控场景上下文、创建分析任务、查询任务状态、读取 run-bound ToolResult、下载 run-bound 审计报告。`predict_cycle_life` 与 `predict_soh_trajectory` 使用 `source_run_id + data_batch_id` 创建项目绑定任务；两个 BLAST-Lite 工具先用同一组数据身份引用创建受控 `OperationScenario`，再使用 `source_run_id + scenario_context_id` 创建情景任务。调用方只能提交引用和结构化工况，不能附带业务结果数字。
+
+`source_run_id` 是 Aily 数据访问的授权锚点，必须指向一条已完成、已验证的根飞书文件任务。服务端会重新验证该任务的飞书群聊与发送人项目身份、精确 `data_batch_id`、文件 SHA、电芯引用以及项目内 FROZEN RecordBatch；任一绑定失活、引用不一致或来源不是根飞书上传时都拒绝。`data_batch_id` 仍是 canonical 内容批次引用，不能单独作为项目授权凭据。Aily 任务只复制必要的安全身份引用并登记 `job_origin=AILY` 与 `source_job_id`，队列仍只传 `job_id`，项目 ToolResult 继续写入现有项目审计账本。
+
+当前 Bearer Connector 不是独立的项目用户主体，也不能脱离飞书源任务任意访问批次。若未来需要 Aily 在没有既有飞书上传的情况下独立创建项目任务，必须另行设计可信用户身份、项目授权与持久化契约，不能从提示词中的用户或项目字段推断。所有请求使用：
 
 ```http
 Authorization: Bearer ${FEISHU_CONNECTOR_API_KEY}
@@ -259,11 +263,15 @@ QUANXIN_EXTERNAL_HTTPS_BASE_URL
 
 自动化 Fake Feishu scenario E2E 已验证真实 BLAST 数值、ToolResult、曲线卡片、报告和
 scalar-only Bitable。Fake Aily scenario E2E 已通过生产 assembly 创建受控场景、持久化
-任务、运行共享 Worker、读取 run-bound ToolResult/报告并写入 scalar-only Bitable，且
-没有飞书聊天或文件副作用。目标租户已经真实执行飞书 CSV 到项目级 CyclePatch，以及独立
-BLAST-Lite 到曲线、卡片、报告和 Bitable 的两条交付链。当前运行记录尚无 `job_origin=AILY`
-证据，因此不能声称 Aily 已经通过自然语言完成同一纵向编排；Fake Aily E2E 也不能描述为
-真实租户的 Aily 验证。
+真实 `job_origin=AILY` 任务、运行共享 Worker、读取 run-bound ToolResult/报告并写入
+scalar-only Bitable，且没有飞书聊天或文件副作用。项目集成测试还验证了以已完成飞书上传
+为 `source_run_id` 锚点创建 `predict_cycle_life` 和 `predict_soh_trajectory` Aily 任务，
+重新检查活动项目身份与精确 FROZEN batch，并将项目 ToolResult 从同一审计账本读回。
+
+目标租户已经真实执行飞书 CSV 到项目级 CyclePatch，以及独立 BLAST-Lite 到曲线、卡片、
+报告和 Bitable 的两条交付链；但尚未取得真实租户 Aily 自然语言创建任务、连续追问并触发
+上述 `job_origin=AILY` 链路的运行证据。因此 Fake Aily E2E 和自动化项目测试都不能描述为
+真实租户 Aily 已完成纵向自然语言编排。
 
 ## 本地运行
 

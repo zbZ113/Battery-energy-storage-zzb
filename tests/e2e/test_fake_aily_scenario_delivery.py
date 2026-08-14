@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from hashlib import sha256
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -20,13 +21,18 @@ from quanxin_life.integrations.feishu.client import (
     FeishuHttpRequest,
     FeishuHttpResponse,
 )
-from quanxin_life.integrations.feishu.jobs import FeishuAnalysisJobStatus
+from quanxin_life.integrations.feishu.jobs import (
+    FeishuAnalysisJobOrigin,
+    FeishuAnalysisJobStatus,
+)
 from quanxin_life.integrations.feishu.sandbox import create_fake_feishu_sandbox_app
 from quanxin_life.integrations.feishu.workflow import FeishuAnalysisTask
 from quanxin_life.persistence import Base, create_session_factory
+from quanxin_life.persistence.models import FeishuEventReceipt
 from quanxin_life.scenarios import OperationScenario, ScenarioSegment
 
 NOW = datetime(2026, 8, 12, 13, 0, tzinfo=UTC)
+SOURCE_RUN_ID = "9fcc13e6-753e-4dc8-850c-f7a57cd6072a"
 CSV_PAYLOAD = (
     b"dataset_id,cell_id,cycle_index,sample_index,time_s,voltage_v,current_a,"
     b"temperature_c,charge_capacity_ah,discharge_capacity_ah,"
@@ -53,6 +59,22 @@ class _CeleryApp:
     ) -> _AsyncResult:
         self.sent.append({"name": name, "kwargs": kwargs, "queue": queue})
         return _AsyncResult()
+
+
+class _AuthorizedDataIdentity:
+    def __init__(self) -> None:
+        self.data_batch_id: str | None = None
+        self.calls: list[tuple[str, str]] = []
+
+    def resolve_source_job(
+        self,
+        *,
+        source_run_id: str,
+        data_batch_id: str,
+    ) -> None:
+        self.calls.append((source_run_id, data_batch_id))
+        if source_run_id != SOURCE_RUN_ID or data_batch_id != self.data_batch_id:
+            raise ValueError("Aily data identity is not authorized")
 
 
 class _SandboxAsgiTransport:
@@ -155,9 +177,11 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
     transport = _SandboxAsgiTransport(sandbox)
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'runtime.sqlite3'}")
     Base.metadata.create_all(engine)
+    session_factory = create_session_factory(engine)
     celery_app = _CeleryApp()
+    identities = _AuthorizedDataIdentity()
     components = create_feishu_aily_components(
-        session_factory=create_session_factory(engine),
+        session_factory=session_factory,
         celery_app=celery_app,
         config=FeishuAilyAssemblyConfig(
             app_id="fake-aily-app",
@@ -173,12 +197,45 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
             allow_candidate_scenario_results=True,
         ),
         feishu_transport=transport,
+        aily_data_identity_resolver=identities,
         clock=lambda: NOW,
     )
     batch_id = components.batch_store.register_canonical_csv(
         CSV_PAYLOAD,
         registration=_registration(),
     )
+    identities.data_batch_id = batch_id
+    with session_factory.begin() as session:
+        session.add(
+            FeishuEventReceipt(
+                id=str(uuid4()),
+                event_id="evt-fake-aily-source",
+                event_type="im.message.receive_v1",
+                payload_sha256="a" * 64,
+                status="PROCESSED",
+                attempt_count=1,
+                received_at=NOW,
+                processed_at=NOW,
+                job_id=SOURCE_RUN_ID,
+                job_origin=FeishuAnalysisJobOrigin.FEISHU.value,
+                job_status=FeishuAnalysisJobStatus.SUCCEEDED.value,
+                job_stage="SUCCEEDED",
+                task_type=FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value,
+                run_id=SOURCE_RUN_ID,
+                chat_id="oc-fake-aily",
+                sender_id="ou-fake-aily",
+                receive_id_type="chat_id",
+                event_time=NOW,
+                record_batch_id=batch_id,
+                cell_reference="cell-250ah",
+                input_file_sha256=sha256(CSV_PAYLOAD).hexdigest(),
+                validation_result_id=str(uuid4()),
+                job_attempt_count=1,
+                job_created_at=NOW,
+                job_updated_at=NOW,
+                job_completed_at=NOW,
+            )
+        )
     app = FastAPI()
     app.include_router(components.aily_http_adapter.router)
     client = TestClient(app)
@@ -189,6 +246,7 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
         headers=headers,
         json={
             "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "source_run_id": SOURCE_RUN_ID,
             "data_batch_id": batch_id,
             "cell_format": "prismatic",
             "baseline": _scenario(
@@ -213,6 +271,7 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
         headers=headers,
         json={
             "task_type": FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS.value,
+            "source_run_id": SOURCE_RUN_ID,
             "scenario_context_id": scenario_context_id,
         },
     )
@@ -227,6 +286,9 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
     assert completed.status_code == 200
     assert completed.json()["status"] == "COMPLETED"
     job = components.job_store.get(run_id)
+    assert job.job_origin is FeishuAnalysisJobOrigin.AILY
+    assert job.source_job_id == SOURCE_RUN_ID
+    assert job.record_batch_id == batch_id
     assert job.analysis_result_id is not None
     assert job.report_result_id is not None
     result_response = client.get(
@@ -272,6 +334,7 @@ def test_production_assembly_runs_fake_aily_scenario_without_chat_side_effects(
         }
         for request in transport.requests
     )
+    assert identities.calls == [(SOURCE_RUN_ID, batch_id)] * 6
 
 
 def _created_bitable_fields(

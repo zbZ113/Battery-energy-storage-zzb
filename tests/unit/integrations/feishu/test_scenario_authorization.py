@@ -35,6 +35,10 @@ from quanxin_life.tools.blast_scenarios import (
     CompareOperationScenariosToolInput,
     execute_compare_operation_scenarios_tool,
 )
+from quanxin_life.tools.data_quality import (
+    DATA_QUALITY_MODEL_VERSION,
+    DATA_QUALITY_TOOL_VERSION,
+)
 
 NOW = datetime(2026, 8, 11, 14, 0, tzinfo=UTC)
 
@@ -109,6 +113,63 @@ def _result() -> ToolResult:
         allow_candidate_execution=True,
         clock=lambda: NOW,
     )
+
+
+def _data_quality_result() -> ToolResult:
+    return ToolResult(
+        result_id=str(uuid4()),
+        tool_name="validate_battery_data",
+        tool_version=DATA_QUALITY_TOOL_VERSION,
+        model_version=DATA_QUALITY_MODEL_VERSION,
+        data_version="registered-batch-v1",
+        feature_version="canonical-csv-v1",
+        input_hash="d" * 64,
+        values={
+            "dataset_id": "batch-safe",
+            "blocked": True,
+            "quality_score": 0.0,
+            "issue_count": 1,
+            "issues": [
+                {
+                    "code": "MISSING_REQUIRED_CYCLE",
+                    "severity": "blocking",
+                    "message": "Required cycle is missing.",
+                    "cell_id": "cell-1",
+                    "cycle_index": None,
+                }
+            ],
+        },
+        uncertainty=None,
+        warnings=["MISSING_REQUIRED_CYCLE"],
+        provenance=[
+            ProvenanceRecord(
+                source_id="batch-safe",
+                source_kind=SourceKind.OBSERVED,
+                uri="record-batch:batch-safe",
+                sha256="e" * 64,
+                description="Registered canonical CSV batch.",
+                created_at=NOW,
+            )
+        ],
+        created_at=NOW,
+    )
+
+
+def test_audited_authorizer_accepts_only_consistent_data_quality_results() -> None:
+    result = _data_quality_result()
+    authorizer = AuditedScenarioResultAuthorizer(
+        result_resolver=AuditLedger((result,))
+    )
+
+    allowed = authorizer.authorize(result)
+    tampered = authorizer.authorize(
+        result.model_copy(update={"model_version": "unreviewed-validator"})
+    )
+
+    assert allowed.allowed is True
+    assert allowed.evidence_level is EvidenceLevel.DATA_DIRECT
+    assert tampered.allowed is False
+    assert tampered.rejection_reason == "DATA_QUALITY_RESULT_CONTRACT_MISMATCH"
 
 
 def test_scenario_authorizer_is_fail_closed_for_candidate_results_by_default() -> None:

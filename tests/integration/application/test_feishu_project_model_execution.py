@@ -1136,6 +1136,112 @@ def test_feishu_project_result_slot_rejects_non_hex_claim_and_non_feishu_origin(
         )
 
 
+def test_feishu_project_result_slot_accepts_aily_job_with_exact_feishu_anchor() -> None:
+    fixture = _fixture()
+    context = fixture.context_service.resolve_feishu(
+        chat_id="oc-approved",
+        sender_open_id="ou-approved",
+    )
+    source_job_id = str(uuid4())
+    aily_job_id = str(uuid4())
+    claim_token = "f" * 64
+    with session_scope(fixture.sessions) as session:
+        session.add_all(
+            (
+                FeishuEventReceipt(
+                    id=str(uuid4()),
+                    event_id="evt-aily-project-source",
+                    event_type="im.message.receive_v1",
+                    payload_sha256="a" * 64,
+                    status="PROCESSED",
+                    attempt_count=1,
+                    received_at=NOW,
+                    processed_at=NOW,
+                    job_id=source_job_id,
+                    job_origin="FEISHU",
+                    job_status="SUCCEEDED",
+                    job_stage="SUCCEEDED",
+                    task_type=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                    run_id=source_job_id,
+                    chat_id="oc-approved",
+                    sender_id="ou-approved",
+                    receive_id_type="chat_id",
+                    event_time=NOW,
+                    record_batch_id=fixture.record_batch_id,
+                    cell_reference="MATR_b3c34",
+                    input_file_sha256="a" * 64,
+                    validation_result_id=str(uuid4()),
+                    job_attempt_count=1,
+                    job_created_at=NOW,
+                    job_updated_at=NOW,
+                    job_completed_at=NOW,
+                ),
+                FeishuEventReceipt(
+                    id=str(uuid4()),
+                    event_id="aily:anchored-project-slot",
+                    event_type="aily.analysis_task.create_v2",
+                    payload_sha256="b" * 64,
+                    status="PROCESSED",
+                    attempt_count=1,
+                    received_at=NOW,
+                    processed_at=NOW,
+                    job_id=aily_job_id,
+                    job_origin="AILY",
+                    job_request_sha256="b" * 64,
+                    source_job_id=source_job_id,
+                    job_status="RUNNING",
+                    job_stage="RUNNING_TOOL",
+                    task_type=StandardToolName.PREDICT_CYCLE_LIFE.value,
+                    run_id=aily_job_id,
+                    chat_id="oc-approved",
+                    sender_id="ou-approved",
+                    receive_id_type="chat_id",
+                    event_time=NOW,
+                    job_claim_token=claim_token,
+                    job_attempt_count=1,
+                    job_lease_expires_at=NOW.replace(hour=13),
+                    record_batch_id=fixture.record_batch_id,
+                    cell_reference="MATR_b3c34",
+                    input_file_sha256="a" * 64,
+                    job_created_at=NOW,
+                    job_updated_at=NOW,
+                ),
+            )
+        )
+    prepared = ToolResult(
+        result_id=str(uuid4()),
+        tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES.value,
+        tool_version=PREPARE_ADVANCED_INPUT_TOOL_VERSION,
+        model_version="advanced-input-transform-v1",
+        data_version="matr-v1",
+        feature_version="multichannel-cycle-v1",
+        input_hash="1" * 64,
+        values={"artifact": {"record_batch_id": fixture.record_batch_id}},
+        provenance=list(_registration().provenance),
+        created_at=NOW,
+    )
+
+    committed = fixture.project_ledger.commit_feishu_result_slot(
+        context=context,
+        job_id=aily_job_id,
+        claim_token=claim_token,
+        slot="PREPARED",
+        expected_task=StandardToolName.PREDICT_CYCLE_LIFE.value,
+        run_id=aily_job_id,
+        chat_id="oc-approved",
+        sender_id="ou-approved",
+        result=prepared,
+    )
+
+    assert committed == prepared
+    with session_scope(fixture.sessions) as session:
+        receipt = session.scalar(
+            select(FeishuEventReceipt).where(FeishuEventReceipt.job_id == aily_job_id)
+        )
+        assert receipt is not None
+        assert receipt.prepared_input_result_id == prepared.result_id
+
+
 def test_feishu_project_result_slot_rejects_unsupported_analysis_task() -> None:
     fixture = _fixture()
     context = fixture.context_service.resolve_feishu(

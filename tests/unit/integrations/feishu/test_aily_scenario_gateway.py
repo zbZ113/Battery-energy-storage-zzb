@@ -26,6 +26,7 @@ from quanxin_life.scenarios import OperationScenario, ScenarioSegment
 
 NOW = datetime(2026, 8, 11, 13, 0, tzinfo=UTC)
 CONTEXT_ID = UUID("5ab7c239-85a1-4ff2-bc58-2c15c006f311")
+SOURCE_RUN_ID = "0f6e013a-bd71-4b46-92a8-762f8e9a0c61"
 CSV = (
     b"dataset_id,cell_id,cycle_index,sample_index,time_s,voltage_v,current_a,"
     b"temperature_c,charge_capacity_ah,discharge_capacity_ah,"
@@ -38,6 +39,21 @@ CSV = (
 class _ApprovedReferenceUse:
     def authorize_reference_use(self, **_: object) -> bool:
         return True
+
+
+class _AuthorizedDataIdentity:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def resolve_source_job(
+        self,
+        *,
+        source_run_id: str,
+        data_batch_id: str,
+    ) -> None:
+        self.calls.append((source_run_id, data_batch_id))
+        if source_run_id != SOURCE_RUN_ID:
+            raise ValueError("Aily source run is not authorized")
 
 
 def _scenario(scenario_id: str) -> OperationScenario:
@@ -67,6 +83,7 @@ def _scenario(scenario_id: str) -> OperationScenario:
 def _request(*, data_batch_id: str) -> AilyCompareScenarioContextRequest:
     return AilyCompareScenarioContextRequest(
         task_type=FeishuAnalysisTask.COMPARE_OPERATION_SCENARIOS,
+        source_run_id=SOURCE_RUN_ID,
         data_batch_id=data_batch_id,
         cell_format="prismatic",
         baseline=_scenario("baseline"),
@@ -116,10 +133,11 @@ def _context_store() -> SqlAlchemyFeishuScenarioContextStore:
 def test_gateway_resolves_exact_250ah_route_from_the_verified_batch() -> None:
     batches, batch_id = _batch_store(capacity_ah=250.0)
     contexts = _context_store()
+    identities = _AuthorizedDataIdentity()
     gateway = SqlAlchemyAilyScenarioContextGateway(
         context_store=contexts,
         batch_store=batches,
-        created_by_reference="aily-connector",
+        data_identity_resolver=identities,
         clock=lambda: NOW,
         uuid_factory=lambda: CONTEXT_ID,
     )
@@ -129,12 +147,14 @@ def test_gateway_resolves_exact_250ah_route_from_the_verified_batch() -> None:
     assert state.scenario_context_id == str(CONTEXT_ID)
     assert state.data_batch_id == batch_id
     persisted = contexts.get(state.scenario_context_id)
+    assert persisted.created_by_reference == SOURCE_RUN_ID
     assert persisted.route_id == "blast-lite-lfp-gr-250ah-prismatic-2019-v1"
     assert (
         contexts.resolve_scenario_context(state.scenario_context_id).cell.nominal_capacity_ah
         == 250.0
     )
     assert "route_id" not in state.model_dump(mode="json")
+    assert identities.calls == [(SOURCE_RUN_ID, batch_id)]
 
 
 def test_gateway_rejects_nonexact_prismatic_reference_use_by_default() -> None:
@@ -142,7 +162,7 @@ def test_gateway_rejects_nonexact_prismatic_reference_use_by_default() -> None:
     gateway = SqlAlchemyAilyScenarioContextGateway(
         context_store=_context_store(),
         batch_store=batches,
-        created_by_reference="aily-connector",
+        data_identity_resolver=_AuthorizedDataIdentity(),
         clock=lambda: NOW,
         uuid_factory=lambda: CONTEXT_ID,
     )
@@ -157,7 +177,7 @@ def test_gateway_allows_nonexact_prismatic_reference_only_with_reviewed_approval
     gateway = SqlAlchemyAilyScenarioContextGateway(
         context_store=contexts,
         batch_store=batches,
-        created_by_reference="aily-connector",
+        data_identity_resolver=_AuthorizedDataIdentity(),
         reference_use_authorizer=_ApprovedReferenceUse(),
         clock=lambda: NOW,
         uuid_factory=lambda: CONTEXT_ID,
@@ -175,7 +195,7 @@ def test_gateway_rejects_non_lfp_chemistry_without_creating_a_context() -> None:
     gateway = SqlAlchemyAilyScenarioContextGateway(
         context_store=_context_store(),
         batch_store=batches,
-        created_by_reference="aily-connector",
+        data_identity_resolver=_AuthorizedDataIdentity(),
         reference_use_authorizer=_ApprovedReferenceUse(),
         clock=lambda: NOW,
         uuid_factory=lambda: CONTEXT_ID,

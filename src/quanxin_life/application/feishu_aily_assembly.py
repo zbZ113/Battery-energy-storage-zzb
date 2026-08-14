@@ -51,6 +51,7 @@ from quanxin_life.integrations.feishu.aily_scenarios import (
 )
 from quanxin_life.integrations.feishu.aily_tasks import (
     AilyAnalysisJobDelivery,
+    AilyDataIdentityResolver,
     SqlAlchemyAilyAnalysisTaskGateway,
 )
 from quanxin_life.integrations.feishu.attachments import (
@@ -71,7 +72,9 @@ from quanxin_life.integrations.feishu.default_scenarios import (
 from quanxin_life.integrations.feishu.events import FeishuEventProcessor
 from quanxin_life.integrations.feishu.jobs import (
     FeishuAnalysisJobDelivery,
+    FeishuAnalysisJobOrigin,
     FeishuAnalysisJobRecord,
+    FeishuAnalysisJobStatus,
     FeishuAnalysisJobWorker,
     OriginAwareAnalysisJobDelivery,
     SqlAlchemyFeishuJobRouter,
@@ -276,6 +279,91 @@ class _RejectingModelRouteAuthorizer:
         raise FeishuWorkflowRejected("MODEL_ROUTE_NOT_ACTIVATED")
 
 
+class _RejectingAilyDataIdentityResolver:
+    def resolve_source_job(self, **_: object) -> None:
+        raise ValueError("project-bound Aily data identity is not configured")
+
+
+class _ProjectBoundAilyDataIdentityResolver:
+    """Revalidate one completed Feishu upload before any Aily task is staged."""
+
+    def __init__(
+        self,
+        *,
+        job_store: SqlAlchemyFeishuJobStore,
+        batch_store: FileSystemVerifiedEarlyCycleBatchStore,
+        context_service: ProjectInvocationContextService,
+        batch_resolver: FeishuProjectRecordBatchResolver,
+    ) -> None:
+        self._job_store = job_store
+        self._batch_store = batch_store
+        self._context_service = context_service
+        self._batch_resolver = batch_resolver
+
+    def resolve_source_job(
+        self,
+        *,
+        source_run_id: str,
+        data_batch_id: str,
+    ) -> None:
+        try:
+            source = self._job_store.get(source_run_id)
+            if (
+                source.job_origin is not FeishuAnalysisJobOrigin.FEISHU
+                or source.event_type != "im.message.receive_v1"
+                or source.task_type is not FeishuAnalysisTask.PREDICT_CYCLE_LIFE
+                or source.source_job_id is not None
+                or source.job_status is not FeishuAnalysisJobStatus.SUCCEEDED
+                or source.record_batch_id != data_batch_id
+                or source.validation_result_id is None
+                or not source.chat_id
+                or not source.sender_id
+                or not source.cell_reference
+                or not source.input_file_sha256
+            ):
+                raise ValueError("Aily source upload is not authorized")
+            context = self._context_service.resolve_feishu(
+                chat_id=source.chat_id,
+                sender_open_id=source.sender_id,
+            )
+            batch = self._batch_store.resolve_verified_early_cycle_batch(
+                data_batch_id
+            )
+            canonical_sha256 = _source_canonical_sha256(source)
+            if (
+                batch.metadata.cell_id != source.cell_reference
+                or batch.metadata.source_sha256 != canonical_sha256
+            ):
+                raise ValueError("Aily source upload data identity changed")
+            registration = CanonicalCsvBatchRegistration(
+                metadata=batch.metadata,
+                feature_config=batch.feature_config,
+                data_version=batch.data_version,
+                split_version=batch.split_version,
+                provenance=batch.provenance,
+            )
+            self._batch_resolver.resolve(context, registration)
+        except (KeyError, LookupError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError("Aily data identity is not authorized") from exc
+
+
+def _source_canonical_sha256(source: FeishuAnalysisJobRecord) -> str:
+    raw_sha256 = source.input_file_sha256
+    if raw_sha256 is None:
+        raise ValueError("Aily source upload SHA is unavailable")
+    if source.csv_mapping_status is None:
+        if source.csv_mapping_evidence is not None:
+            raise ValueError("Aily source mapping evidence is inconsistent")
+        return raw_sha256
+    if source.csv_mapping_status != "MAPPED" or source.csv_mapping_evidence is None:
+        raise ValueError("Aily source mapping evidence is not accepted")
+    mapped_raw_sha256 = source.csv_mapping_evidence.get("raw_sha256")
+    canonical_sha256 = source.csv_mapping_evidence.get("canonical_sha256")
+    if mapped_raw_sha256 != raw_sha256 or not isinstance(canonical_sha256, str):
+        raise ValueError("Aily source mapping evidence changed")
+    return canonical_sha256
+
+
 class _ScenarioInputBinder:
     """Pass only the already persisted typed scenario input to its tool."""
 
@@ -306,6 +394,7 @@ def create_feishu_aily_components(
     project_model_dependencies: FeishuProjectModelDependencies | None = None,
     csv_mapping_profiles: tuple[BatteryCsvMappingProfile, ...] = (),
     default_scenarios: ReviewedDefaultScenarioRegistry | None = None,
+    aily_data_identity_resolver: AilyDataIdentityResolver | None = None,
     clock: Clock | None = None,
 ) -> FeishuAilyComponents:
     """Assemble Feishu callbacks, Aily facade, worker, tools, and delivery ports."""
@@ -319,7 +408,13 @@ def create_feishu_aily_components(
     scenario_context_store = SqlAlchemyFeishuScenarioContextStore(session_factory)
     result_resolver: _RegisteredResultResolver = audit_ledger
     project_model_executor = None
+    data_identity_resolver: AilyDataIdentityResolver
     if project_model_dependencies is not None:
+        if aily_data_identity_resolver is not None:
+            raise ValueError(
+                "explicit Aily data identity resolver conflicts with project runtime"
+            )
+        project_batch_resolver = FeishuProjectRecordBatchResolver(session_factory)
         result_resolver = FeishuProjectResultResolver(
             session_factory=session_factory,
             global_resolver=audit_ledger,
@@ -328,10 +423,20 @@ def create_feishu_aily_components(
         )
         project_model_executor = FeishuProjectModelExecutor(
             context_service=project_model_dependencies.context_service,
-            batch_resolver=FeishuProjectRecordBatchResolver(session_factory),
+            batch_resolver=project_batch_resolver,
             project_tool_service=project_model_dependencies.project_tool_service,
             project_ledger=project_model_dependencies.project_ledger,
             clock=now,
+        )
+        data_identity_resolver = _ProjectBoundAilyDataIdentityResolver(
+            job_store=job_store,
+            batch_store=batch_store,
+            context_service=project_model_dependencies.context_service,
+            batch_resolver=project_batch_resolver,
+        )
+    else:
+        data_identity_resolver = (
+            aily_data_identity_resolver or _RejectingAilyDataIdentityResolver()
         )
 
     registry = ToolRegistry()
@@ -381,13 +486,14 @@ def create_feishu_aily_components(
     scenario_gateway = SqlAlchemyAilyScenarioContextGateway(
         context_store=scenario_context_store,
         batch_store=batch_store,
-        created_by_reference="aily-connector-v1",
+        data_identity_resolver=data_identity_resolver,
         reference_use_authorizer=scenario_reference_use_authorizer,
         clock=now,
     )
     aily_task_gateway = SqlAlchemyAilyAnalysisTaskGateway(
         job_store=job_store,
         scenario_context_store=scenario_context_store,
+        data_identity_resolver=data_identity_resolver,
         queue=queue,
         clock=now,
     )
@@ -491,13 +597,14 @@ def create_feishu_aily_components(
             aily_delivery=aily_delivery,
         ),
         sibling_planner=sibling_planner,
+        aily_data_identity_resolver=data_identity_resolver,
         clock=now,
     )
     aily_http_adapter = create_aily_http_adapter(
         AilyConnectorConfig(api_key=config.aily_connector_api_key),
         gateway=aily_task_gateway,
         scenario_context_gateway=scenario_gateway,
-        audit_ledger=audit_ledger,
+        audit_ledger=result_resolver,
         report_exporter=artifact_exporter,
         result_authorizer=authorizer,
     )

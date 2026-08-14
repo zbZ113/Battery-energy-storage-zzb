@@ -15,6 +15,7 @@ from quanxin_life.core import (
     SourceKind,
     ToolResult,
 )
+from quanxin_life.data.schemas import DataQualityReport
 from quanxin_life.reporting.audited_markdown import REPORTING_VERSION
 from quanxin_life.reporting.contracts import AUDITED_REPORT_TOOL_VERSION
 from quanxin_life.scenarios import BlastRouteManifest, load_packaged_blast_route_catalog
@@ -30,6 +31,10 @@ from quanxin_life.tools.advanced_soh_prediction import (
 from quanxin_life.tools.blast_scenarios import (
     COMPARE_OPERATION_SCENARIOS_TOOL_VERSION,
     PROJECT_STORAGE_LIFETIME_TOOL_VERSION,
+)
+from quanxin_life.tools.data_quality import (
+    DATA_QUALITY_MODEL_VERSION,
+    DATA_QUALITY_TOOL_VERSION,
 )
 
 from .cards import AuditedResultAuthorization, AuditedResultAuthorizer
@@ -55,6 +60,7 @@ _ADVANCED_RUL_SHA_FIELDS = (
 _ADVANCED_SOH_DOMAIN = "activated project-bound MATR finite SOH route"
 _ADVANCED_SOH_UNRESOLVED_ROUTE = "unresolved-advanced-soh-route"
 _ADVANCED_SOH_SHA_FIELDS = _ADVANCED_RUL_SHA_FIELDS
+_DATA_QUALITY_DOMAIN = "registered battery cycle-data validation rules"
 
 
 class _AuthorizationBase(TypedDict):
@@ -154,6 +160,8 @@ class AuditedScenarioResultAuthorizer:
     def authorize(self, result: ToolResult) -> AuditedResultAuthorization:
         if result.tool_name in _SCENARIO_TOOL_VERSIONS:
             return self._scenario_authorizer.authorize(result)
+        if result.tool_name == "validate_battery_data":
+            return _authorize_data_quality(result)
         if result.tool_name == "predict_cycle_life":
             return _authorize_advanced_rul(result)
         if result.tool_name == "predict_soh_trajectory":
@@ -273,7 +281,61 @@ def _authorize_advanced_rul(result: ToolResult) -> AuditedResultAuthorization:
         activation_status="ACTIVE",
         evidence_level=EvidenceLevel.MODEL_INFERENCE,
         supported_domain=_ADVANCED_RUL_DOMAIN,
+            rejection_reason=None,
+        )
+
+
+def _authorize_data_quality(result: ToolResult) -> AuditedResultAuthorization:
+    try:
+        checked = ToolResult.model_validate(result.model_dump(mode="json"))
+        if set(checked.values) != {
+            "dataset_id",
+            "blocked",
+            "quality_score",
+            "issue_count",
+            "issues",
+        }:
+            raise ValueError("data-quality values are incomplete")
+        report = DataQualityReport.model_validate(
+            {
+                "dataset_id": checked.values.get("dataset_id"),
+                "issues": checked.values.get("issues"),
+            }
+        )
+    except (AttributeError, TypeError, ValueError):
+        return _data_quality_rejected("DATA_QUALITY_RESULT_CONTRACT_MISMATCH")
+    expected_warnings = list(dict.fromkeys(issue.code for issue in report.issues))
+    if (
+        checked.tool_version != DATA_QUALITY_TOOL_VERSION
+        or checked.model_version != DATA_QUALITY_MODEL_VERSION
+        or checked.values.get("blocked") is not report.blocked
+        or checked.values.get("quality_score") != report.quality_score
+        or checked.values.get("issue_count") != len(report.issues)
+        or checked.uncertainty is not None
+        or checked.warnings != expected_warnings
+        or not any(
+            record.source_kind is SourceKind.OBSERVED
+            for record in checked.provenance
+        )
+    ):
+        return _data_quality_rejected("DATA_QUALITY_RESULT_CONTRACT_MISMATCH")
+    return AuditedResultAuthorization(
+        allowed=True,
+        route_id=DATA_QUALITY_MODEL_VERSION,
+        activation_status="ACTIVE",
+        evidence_level=EvidenceLevel.DATA_DIRECT,
+        supported_domain=_DATA_QUALITY_DOMAIN,
         rejection_reason=None,
+    )
+
+
+def _data_quality_rejected(reason: str) -> AuditedResultAuthorization:
+    return _rejected(
+        reason,
+        route_id=DATA_QUALITY_MODEL_VERSION,
+        activation_status="ACTIVE",
+        evidence_level=EvidenceLevel.DATA_DIRECT,
+        supported_domain=_DATA_QUALITY_DOMAIN,
     )
 
 

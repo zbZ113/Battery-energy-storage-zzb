@@ -227,6 +227,10 @@ class SqlAlchemyFeishuScenarioContextStore:
         row, _context, _analysis_input = self._resolve_row(scenario_context_id)
         return row.data_batch_id
 
+    def resolve_created_by_reference(self, scenario_context_id: str) -> str:
+        row, _context, _analysis_input = self._resolve_row(scenario_context_id)
+        return row.created_by_reference
+
     def _resolve_row(
         self,
         scenario_context_id: str,

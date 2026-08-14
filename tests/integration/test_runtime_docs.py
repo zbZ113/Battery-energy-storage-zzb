@@ -141,7 +141,7 @@ def test_public_docs_bind_the_latest_blast_evidence_and_field_limits() -> None:
     assert "不能生成 SOH 精度" in guide
 
 
-def test_aily_openapi_matches_the_production_scenario_only_facade() -> None:
+def test_aily_openapi_matches_the_project_bound_analysis_facade() -> None:
     openapi = _read("docs/integrations/aily-connector-openapi.yaml")
     scenario_context_path = openapi.split(
         "  /v1/aily/scenario-contexts:\n",
@@ -160,14 +160,20 @@ def test_aily_openapi_matches_the_production_scenario_only_facade() -> None:
     assert "        '200':" not in scenario_context_path
     assert "        '202':" in analysis_task_path
     assert "ScenarioAnalysisTaskRequest" in create_request_schema
-    assert "BatchAnalysisTaskRequest" not in create_request_schema
-    for unsupported in (
+    assert "BatchAnalysisTaskRequest" in create_request_schema
+    assert "source_run_id" in openapi
+    for supported in (
         "predict_cycle_life",
         "predict_soh_trajectory",
+        "compare_operation_scenarios",
+        "project_storage_lifetime",
+    ):
+        assert supported in openapi
+    for unsupported in (
         "ingest_observed_soh",
         "update_trajectory",
     ):
-        assert unsupported not in create_request_schema
+        assert unsupported not in openapi
 
 
 def test_readme_is_user_facing_and_only_documents_real_entry_points() -> None:

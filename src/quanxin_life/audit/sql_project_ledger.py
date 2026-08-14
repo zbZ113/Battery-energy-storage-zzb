@@ -93,6 +93,43 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _feishu_authorized_result_receipt(
+    session: Session,
+    receipt: FeishuEventReceipt,
+) -> bool:
+    if receipt.job_origin == "FEISHU":
+        return True
+    if (
+        receipt.job_origin != "AILY"
+        or receipt.event_type != "aily.analysis_task.create_v2"
+        or receipt.source_job_id is None
+        or receipt.message_id is not None
+        or receipt.file_key is not None
+        or receipt.task_type not in _FEISHU_PROJECT_ANALYSIS_TASKS
+    ):
+        return False
+    source = session.scalar(
+        select(FeishuEventReceipt).where(
+            FeishuEventReceipt.job_id == receipt.source_job_id
+        )
+    )
+    return bool(
+        source is not None
+        and source.job_origin == "FEISHU"
+        and source.event_type == "im.message.receive_v1"
+        and source.source_job_id is None
+        and source.task_type == "predict_cycle_life"
+        and source.job_status == "SUCCEEDED"
+        and source.validation_result_id is not None
+        and receipt.record_batch_id == source.record_batch_id
+        and receipt.cell_reference == source.cell_reference
+        and receipt.input_file_sha256 == source.input_file_sha256
+        and receipt.chat_id == source.chat_id
+        and receipt.sender_id == source.sender_id
+        and receipt.receive_id_type == source.receive_id_type
+    )
+
+
 class _ConcurrentMaterializationCommit(RuntimeError):
     """Exit a stale SQLite snapshot before re-reading an exact committed retry."""
 
@@ -279,7 +316,7 @@ class SqlProjectAuditLedger:
                     raise AuditLedgerError("Feishu result slot job was not found")
                 lease = receipt.job_lease_expires_at
                 if (
-                    receipt.job_origin != "FEISHU"
+                    not _feishu_authorized_result_receipt(session, receipt)
                     or receipt.job_status != "RUNNING"
                     or receipt.job_claim_token != claim_token
                     or lease is None
