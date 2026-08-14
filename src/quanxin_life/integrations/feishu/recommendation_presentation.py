@@ -17,8 +17,8 @@ _LABELS = {
 }
 _REASONS = {
     "ADOPTABLE": "全部受审规则均通过",
-    "RECHECK_REQUIRED": "至少一项受审规则未通过, 建议复检",
-    "UNRESOLVED": "证据缺失或不一致, 暂无法判断",
+    "RECHECK_REQUIRED": "至少一项受审规则未通过。建议复检",
+    "UNRESOLVED": "证据缺失或不一致。暂无法判断",
 }
 
 

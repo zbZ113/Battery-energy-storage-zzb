@@ -154,7 +154,7 @@ def test_projects_controlled_chinese_recommendation_without_thresholds() -> None
         "analysis_summary": "已生成工程综合建议",
         "applicability": "建议由受审规则集生成。阈值与证据路径见详细报告",
         "recommendation": "建议复检",
-        "recommendation_reason": "至少一项受审规则未通过, 建议复检",
+        "recommendation_reason": "至少一项受审规则未通过。建议复检",
         "recommendation_ruleset_version": "reviewed-release-gate-v1",
     }
     rendered = repr(fields)

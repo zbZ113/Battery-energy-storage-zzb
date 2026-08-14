@@ -608,8 +608,8 @@ def _build_engineering_recommendation_card(
                         is_short=True,
                     ),
                     _display_field(
-                        "规则集版本",
-                        presentation.ruleset_version,
+                        "结论依据",
+                        "已登记审计结果",
                         is_short=True,
                     ),
                     _display_field(
@@ -621,7 +621,7 @@ def _build_engineering_recommendation_card(
             },
             _paragraph(
                 "**使用说明**\n"
-                "建议由受审规则集读取已登记 ToolResult 生成。"
+                "建议由受审规则集读取已登记审计结果生成。"
                 "阈值、实际值和证据路径仅在详细报告中展示。"
             ),
         ],

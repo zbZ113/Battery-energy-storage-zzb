@@ -628,8 +628,10 @@ def test_engineering_recommendation_card_hides_thresholds_and_reason_codes() -> 
 
     assert "工程综合建议" in rendered
     assert "建议复检" in rendered
-    assert "至少一项受审规则未通过, 建议复检" in rendered
-    assert "reviewed-release-gate-v1" in rendered
+    assert "至少一项受审规则未通过。建议复检" in rendered
+    assert "已登记审计结果" in rendered
+    assert "reviewed-release-gate-v1" not in rendered
+    assert "ToolResult" not in rendered
     assert "900" not in rendered
     assert "850" not in rendered
     assert "RUL_BELOW_REVIEWED_GATE" not in rendered

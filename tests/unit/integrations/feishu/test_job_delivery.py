@@ -927,7 +927,7 @@ def test_recommendation_delivery_writes_chinese_fields_without_a_curve_or_codes(
 
     fields = bitable.fields[-1]
     assert fields["recommendation"] == "建议复检"
-    assert fields["recommendation_reason"] == "至少一项受审规则未通过, 建议复检"
+    assert fields["recommendation_reason"] == "至少一项受审规则未通过。建议复检"
     assert fields["recommendation_ruleset_version"] == "reviewed-release-gate-v1"
     assert "warnings" not in fields
     assert "curve_attachment" not in fields
