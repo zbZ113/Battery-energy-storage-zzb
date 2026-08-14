@@ -62,6 +62,9 @@ from quanxin_life.application.battery_csv_mapping import (
     load_battery_csv_mapping_profile,
 )
 from quanxin_life.application.datasets import DatasetService
+from quanxin_life.application.engineering_recommendation_rules import (
+    load_engineering_recommendation_ruleset_registry,
+)
 from quanxin_life.application.feishu_aily_assembly import (
     FeishuAilyAssemblyConfig,
     FeishuProjectModelDependencies,
@@ -224,6 +227,18 @@ def create_competition_runtime(
         session_factory,
         context_service=context_service,
     )
+    recommendation_rulesets = None
+    if (
+        settings.feishu_aily is not None
+        and settings.feishu_aily.engineering_recommendation_rulesets_file is not None
+        and settings.feishu_aily.engineering_recommendation_rulesets_sha256 is not None
+    ):
+        recommendation_rulesets = load_engineering_recommendation_ruleset_registry(
+            settings.feishu_aily.engineering_recommendation_rulesets_file,
+            expected_file_sha256=(
+                settings.feishu_aily.engineering_recommendation_rulesets_sha256
+            ),
+        )
     tool_service = create_project_prediction_tool_invocation_service(
         ProjectPredictionToolDependencies(
             project_audit_ledger=ledger,
@@ -238,6 +253,7 @@ def create_competition_runtime(
                 batch_resolver=record_batch_service,
                 runtime_resolver=runtime_resolver,
             ),
+            engineering_recommendation_ruleset_resolver=recommendation_rulesets,
         )
     )
 

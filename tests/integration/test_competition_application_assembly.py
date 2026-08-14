@@ -147,6 +147,30 @@ def test_project_prediction_assembly_exposes_only_project_scoped_numeric_tools()
     )
 
 
+def test_project_prediction_assembly_registers_recommendation_only_when_configured() -> None:
+    import quanxin_life.application.assembly as module
+
+    stub = cast(Any, object())
+    dependencies = module.ProjectPredictionToolDependencies(
+        project_audit_ledger=stub,
+        project_context_validator=stub,
+        agent_run_invocation_resolver=stub,
+        advanced_input_batch_resolver=stub,
+        advanced_rul_inference_service=stub,
+        advanced_soh_inference_service=stub,
+        engineering_recommendation_ruleset_resolver=stub,
+    )
+
+    registry = module.create_project_prediction_tool_registry(dependencies)
+
+    assert registry.list_schemas() == ()
+    project_names = {
+        item.tool_name
+        for item in registry.list_schemas(execution_scope=ToolExecutionScope.PROJECT)
+    }
+    assert StandardToolName.MAKE_ENGINEERING_RECOMMENDATION in project_names
+
+
 def test_advanced_calibration_assembly_wires_service_worker_api_and_agent(
     monkeypatch: MonkeyPatch,
 ) -> None:

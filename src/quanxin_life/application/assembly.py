@@ -64,6 +64,10 @@ from quanxin_life.tools.early_cycle_features import (
     VerifiedEarlyCycleBatchResolver,
     register_extract_early_cycle_features_tool,
 )
+from quanxin_life.tools.engineering_recommendation import (
+    VerifiedEngineeringRecommendationRulesetResolver,
+    register_engineering_recommendation_tool,
+)
 from quanxin_life.tools.next_experiment_recommendation import (
     VerifiedExperimentRecommendationContextResolver,
     register_recommend_next_experiment_tool,
@@ -176,6 +180,9 @@ class ProjectPredictionToolDependencies:
     advanced_input_batch_resolver: ProjectEarlyCycleBatchResolver
     advanced_rul_inference_service: AdvancedRULInferenceService
     advanced_soh_inference_service: AdvancedSOHInferenceService
+    engineering_recommendation_ruleset_resolver: (
+        VerifiedEngineeringRecommendationRulesetResolver | None
+    ) = None
 
     def __post_init__(self) -> None:
         required = (
@@ -430,6 +437,14 @@ def create_project_prediction_tool_registry(
         registry,
         project_audit_ledger=dependencies.project_audit_ledger,
     )
+    if dependencies.engineering_recommendation_ruleset_resolver is not None:
+        register_engineering_recommendation_tool(
+            registry,
+            project_audit_ledger=dependencies.project_audit_ledger,
+            ruleset_resolver=(
+                dependencies.engineering_recommendation_ruleset_resolver
+            ),
+        )
     return registry
 
 

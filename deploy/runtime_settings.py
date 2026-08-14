@@ -24,6 +24,8 @@ _FEISHU_AILY_CONFIGURATION_KEYS = (
     "QUANXIN_EXTERNAL_HTTPS_BASE_URL",
     "QUANXIN_FEISHU_CSV_REGISTRATIONS_FILE",
     "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE",
+    "QUANXIN_FEISHU_ENGINEERING_RULESETS_FILE",
+    "QUANXIN_FEISHU_ENGINEERING_RULESETS_SHA256",
     "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
     "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
 )
@@ -45,6 +47,8 @@ class FeishuAilyRuntimeSettings:
     default_scenario_profiles_file: Path
     allow_candidate_scenario_execution: bool
     allow_candidate_scenario_results: bool
+    engineering_recommendation_rulesets_file: Path | None = None
+    engineering_recommendation_rulesets_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +241,9 @@ def _feishu_aily_settings(
                 "Feishu/Aily integration is disabled but integration settings are configured"
             )
         return None
+    recommendation_rulesets_file, recommendation_rulesets_sha256 = (
+        _optional_recommendation_rulesets(environment)
+    )
     return FeishuAilyRuntimeSettings(
         app_id=_required(environment, "QUANXIN_FEISHU_APP_ID"),
         app_secret=_secret_text(
@@ -278,6 +285,8 @@ def _feishu_aily_settings(
             environment,
             "QUANXIN_FEISHU_DEFAULT_SCENARIO_PROFILES_FILE",
         ),
+        engineering_recommendation_rulesets_file=recommendation_rulesets_file,
+        engineering_recommendation_rulesets_sha256=recommendation_rulesets_sha256,
         allow_candidate_scenario_execution=_strict_boolean(
             environment,
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
@@ -287,6 +296,29 @@ def _feishu_aily_settings(
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
         ),
     )
+
+
+def _optional_recommendation_rulesets(
+    environment: Mapping[str, str],
+) -> tuple[Path | None, str | None]:
+    path_key = "QUANXIN_FEISHU_ENGINEERING_RULESETS_FILE"
+    sha_key = "QUANXIN_FEISHU_ENGINEERING_RULESETS_SHA256"
+    has_path = isinstance(environment.get(path_key), str) and bool(
+        environment[path_key].strip()
+    )
+    has_sha = isinstance(environment.get(sha_key), str) and bool(
+        environment[sha_key].strip()
+    )
+    if has_path != has_sha:
+        raise ValueError(
+            "engineering recommendation ruleset file and SHA-256 must be configured together"
+        )
+    if not has_path:
+        return None, None
+    digest = _required(environment, sha_key).lower()
+    if _SHA256.fullmatch(digest) is None:
+        raise ValueError("engineering recommendation ruleset SHA-256 is invalid")
+    return _regular_file(environment, path_key), digest
 
 
 def _trusted_origin(value: str) -> str:
