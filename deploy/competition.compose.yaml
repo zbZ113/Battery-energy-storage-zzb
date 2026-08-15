@@ -132,6 +132,7 @@ services:
       - "8000"
       - --proxy-headers
       - --forwarded-allow-ips=*
+      - --no-access-log
     environment: *backend-environment
     secrets: *backend-secrets
     volumes: *backend-volumes

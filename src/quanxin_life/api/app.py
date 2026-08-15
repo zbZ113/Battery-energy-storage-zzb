@@ -68,6 +68,7 @@ def create_fastapi_app(
     knowledge_adapter: Any | None = None,
     feishu_adapter: Any | None = None,
     aily_adapter: Any | None = None,
+    aily_mcp_adapter: Any | None = None,
     industrial_adapter: Any | None = None,
     experiment_adapter: Any | None = None,
     model_artifact_adapter: Any | None = None,
@@ -84,7 +85,16 @@ def create_fastapi_app(
         message = "FastAPI support requires installing the 'quanxin-life[api]' extra"
         raise FastApiDependencyUnavailable(message) from exc
 
-    app: Any = fastapi_module.FastAPI(title="泉芯智寿 Tool API", version="v1")
+    app_options: dict[str, object] = {
+        "title": "泉芯智寿 Tool API",
+        "version": "v1",
+    }
+    if aily_mcp_adapter is not None:
+        lifespan = getattr(aily_mcp_adapter, "lifespan", None)
+        if not callable(lifespan):
+            raise ValueError("aily_mcp_adapter must provide a parent lifespan")
+        app_options["lifespan"] = lifespan
+    app: Any = fastapi_module.FastAPI(**app_options)
     ready_user_dependencies: list[Any] = []
     operator_dependencies: list[Any] = []
     admin_dependencies: list[Any] = []
@@ -145,6 +155,16 @@ def create_fastapi_app(
         # Aily uses its own connector Bearer credential and never inherits the
         # browser session or the generic unauthenticated MCP transport.
         app.include_router(aily_adapter.router)
+    if aily_mcp_adapter is not None:
+        mount_path = getattr(aily_mcp_adapter, "mount_path", None)
+        asgi_app = getattr(aily_mcp_adapter, "asgi_app", None)
+        if (
+            not isinstance(mount_path, str)
+            or not mount_path.startswith("/v1/aily/mcp/")
+            or not callable(asgi_app)
+        ):
+            raise ValueError("aily_mcp_adapter mount contract is invalid")
+        app.mount(mount_path, asgi_app)
     if industrial_adapter is not None:
         if auth_adapter is None:
             raise ValueError("industrial_adapter requires auth_adapter")

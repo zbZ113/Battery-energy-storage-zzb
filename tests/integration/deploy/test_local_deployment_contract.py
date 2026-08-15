@@ -55,6 +55,38 @@ def test_local_gateway_has_no_tls_redirect_or_certificate_dependency() -> None:
         assert forbidden not in nginx
 
 
+def test_local_loopback_gateway_recovers_only_documented_aily_cloudflare_ips() -> None:
+    nginx = _read("deploy/nginx/local.conf")
+    compose = _read("deploy/local.compose.yaml")
+
+    assert nginx.index("location ^~ /v1/aily/mcp/") < nginx.index("location /v1/")
+    for address in (
+        "101.126.59.88",
+        "101.126.59.89",
+        "101.126.59.90",
+        "101.126.59.91",
+        "101.126.59.92",
+        "122.14.241.34",
+        "122.14.241.35",
+        "122.14.241.36",
+        "122.14.241.37",
+        "122.14.241.38",
+    ):
+        assert f'"{address}" 1;' in nginx
+    for directive in (
+        "map $http_cf_connecting_ip $aily_mcp_source_allowed",
+        "if ($aily_mcp_source_allowed = 0)",
+        "proxy_set_header X-Quanxin-Aily-Source-IP $http_cf_connecting_ip;",
+        "proxy_set_header X-Real-IP $http_cf_connecting_ip;",
+        "proxy_set_header X-Forwarded-For $http_cf_connecting_ip;",
+        "access_log off;",
+        "client_max_body_size 256k;",
+    ):
+        assert directive in nginx
+    assert '"127.0.0.1:8080:80"' in compose
+    assert "--no-access-log" in compose
+
+
 def test_local_compose_exposes_only_the_loopback_gateway() -> None:
     compose = _read("deploy/local.compose.yaml")
 
@@ -113,6 +145,8 @@ def test_local_compose_keeps_runtime_inputs_and_secrets_outside_the_repo() -> No
 
     for forbidden in ("postgresql://", "redis://:", "password=", "BEGIN PRIVATE KEY"):
         assert forbidden not in template
+
+    assert re.search(r"(?m)^AILY_MCP_ALLOWED_SOURCE_IPS=\s*$", template)
 
 
 def test_production_deployment_does_not_reference_local_profiles() -> None:

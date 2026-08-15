@@ -23,7 +23,7 @@ RUN python -m pip install --upgrade "pip>=26.1.2,<27" "setuptools>=83" \
         --index-url https://download.pytorch.org/whl/cpu \
         "torch>=2.5,<3" \
     && python -m pip install --resume-retries 30 \
-        ".[agents,auth,data,knowledge,llm,ml,api,infrastructure,persistence,reporting,scenarios]" \
+        ".[agents,auth,data,knowledge,llm,ml,api,infrastructure,persistence,reporting,scenarios,mcp]" \
     && python -m compileall -q src deploy migrations
 
 RUN mkdir -p /srv/quanxin/artifacts /srv/quanxin/data /srv/quanxin/policies \

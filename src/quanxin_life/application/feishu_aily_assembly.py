@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlsplit
 
 from pydantic import SecretStr
@@ -24,6 +24,10 @@ from quanxin_life.api.aily import (
 )
 from quanxin_life.api.feishu import FeishuHttpAdapter, create_feishu_http_adapter
 from quanxin_life.api.service import ToolInvocationService
+from quanxin_life.application.aily_mcp_authorization import (
+    AilyMcpIdentityBindings,
+    ProjectBoundAilyMcpCallerAuthorizer,
+)
 from quanxin_life.application.battery_csv_mapping import (
     BatteryCsvMappingProfile,
     ReviewedBatteryCsvNormalizer,
@@ -143,6 +147,9 @@ from quanxin_life.tools.data_quality import (
 )
 from quanxin_life.tools.early_cycle_features import VerifiedEarlyCycleBatch
 
+if TYPE_CHECKING:
+    from quanxin_life.api.aily_mcp import AilyMcpAdapter
+
 Clock = Callable[[], datetime]
 FeishuCsvRegistrationResolver = Callable[
     [FeishuAnalysisJobRecord, VerifiedFeishuAttachment, datetime],
@@ -219,6 +226,27 @@ class RegisteredFeishuCsvRegistrationResolver:
 
 
 @dataclass(frozen=True, slots=True)
+class AilyMcpAssemblyConfig:
+    """Resolved operator inputs for the optional protected Aily MCP endpoint."""
+
+    endpoint_token: SecretStr
+    allowed_source_ips: tuple[str, ...]
+    allowed_hosts: tuple[str, ...]
+    identity_bindings: AilyMcpIdentityBindings
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity_bindings, AilyMcpIdentityBindings):
+            raise TypeError("identity_bindings must be AilyMcpIdentityBindings")
+        from quanxin_life.api.aily_mcp import AilyMcpConfig
+
+        AilyMcpConfig(
+            endpoint_token=self.endpoint_token,
+            allowed_source_ips=self.allowed_source_ips,
+            allowed_hosts=self.allowed_hosts,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class FeishuAilyAssemblyConfig:
     """Secret-safe operator inputs for the opt-in production bundle."""
 
@@ -235,6 +263,7 @@ class FeishuAilyAssemblyConfig:
     allow_candidate_scenario_results: bool = False
     recheck_table_id: str | None = None
     recheck_permission_reference: str | None = None
+    aily_mcp: AilyMcpAssemblyConfig | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("app_id", "bitable_app_token", "bitable_table_id"):
@@ -270,6 +299,11 @@ class FeishuAilyAssemblyConfig:
                 not isinstance(value, str) or not value.strip()
             ):
                 raise ValueError(f"{field_name} must not be blank")
+        if self.aily_mcp is not None and not isinstance(
+            self.aily_mcp,
+            AilyMcpAssemblyConfig,
+        ):
+            raise TypeError("aily_mcp must be an AilyMcpAssemblyConfig")
         _https_base_url(self.external_https_base_url)
 
 
@@ -286,6 +320,7 @@ class FeishuAilyComponents:
     event_processor: FeishuEventProcessor
     feishu_http_adapter: FeishuHttpAdapter
     aily_http_adapter: AilyHttpAdapter
+    aily_mcp_adapter: AilyMcpAdapter | None
     aily_task_gateway: SqlAlchemyAilyAnalysisTaskGateway
     sibling_job_service: SqlAlchemyFeishuSiblingJobService
     worker: FeishuAnalysisJobWorker
@@ -468,6 +503,8 @@ def create_feishu_aily_components(
     checked_base_url = _https_base_url(config.external_https_base_url)
     if config.recheck_table_id is not None and project_model_dependencies is None:
         raise ValueError("recheck actions require project model dependencies")
+    if config.aily_mcp is not None and project_model_dependencies is None:
+        raise ValueError("Aily MCP requires project model dependencies")
     batch_store = FileSystemVerifiedEarlyCycleBatchStore(config.data_root)
     audit_ledger = SqlAuditLedger(session_factory, clock=now)
     receipt_store = SqlAlchemyFeishuReceiptStore(session_factory)
@@ -734,6 +771,32 @@ def create_feishu_aily_components(
         result_authorizer=authorizer,
         recheck_action_gateway=recheck_action_gateway,
     )
+    aily_mcp_adapter = None
+    if config.aily_mcp is not None:
+        assert project_model_dependencies is not None
+        from quanxin_life.api.aily_mcp import (
+            AilyMcpConfig,
+            create_aily_mcp_adapter,
+        )
+
+        aily_mcp_adapter = create_aily_mcp_adapter(
+            AilyMcpConfig(
+                endpoint_token=config.aily_mcp.endpoint_token,
+                allowed_source_ips=config.aily_mcp.allowed_source_ips,
+                allowed_hosts=config.aily_mcp.allowed_hosts,
+            ),
+            gateway=aily_task_gateway,
+            scenario_context_gateway=scenario_gateway,
+            audit_ledger=result_resolver,
+            report_exporter=artifact_exporter,
+            result_authorizer=authorizer,
+            caller_authorizer=ProjectBoundAilyMcpCallerAuthorizer(
+                job_store=job_store,
+                context_service=project_model_dependencies.context_service,
+                identity_bindings=config.aily_mcp.identity_bindings,
+            ),
+            recheck_action_gateway=recheck_action_gateway,
+        )
     return FeishuAilyComponents(
         audit_ledger=audit_ledger,
         tool_service=tool_service,
@@ -744,6 +807,7 @@ def create_feishu_aily_components(
         event_processor=event_processor,
         feishu_http_adapter=feishu_http_adapter,
         aily_http_adapter=aily_http_adapter,
+        aily_mcp_adapter=aily_mcp_adapter,
         aily_task_gateway=aily_task_gateway,
         sibling_job_service=sibling_job_service,
         worker=worker,
@@ -816,6 +880,7 @@ def _utc(value: datetime) -> datetime:
 
 
 __all__ = [
+    "AilyMcpAssemblyConfig",
     "FeishuAilyAssemblyConfig",
     "FeishuAilyComponents",
     "FeishuCsvRegistrationResolver",

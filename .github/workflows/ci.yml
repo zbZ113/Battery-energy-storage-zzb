@@ -25,7 +25,7 @@ jobs:
           cache: pip
 
       - name: Install project and test dependencies
-        run: python -m pip install --upgrade "pip>=26.1.2,<27" "setuptools>=83" && python -m pip install -e ".[agents,auth,data,dev,knowledge,llm,ml,api,infrastructure,persistence,reporting]"
+        run: python -m pip install --upgrade "pip>=26.1.2,<27" "setuptools>=83" && python -m pip install -e ".[agents,auth,data,dev,knowledge,llm,ml,api,infrastructure,persistence,reporting,mcp]"
 
       - name: Audit Python dependencies
         run: python -m pip_audit --progress-spinner off
@@ -71,7 +71,7 @@ jobs:
           cache: pip
 
       - name: Install PostgreSQL verification dependencies
-        run: python -m pip install --upgrade "pip>=26.1.2,<27" "setuptools>=83" && python -m pip install -e ".[agents,auth,data,dev,knowledge,llm,ml,api,infrastructure,persistence,reporting]"
+        run: python -m pip install --upgrade "pip>=26.1.2,<27" "setuptools>=83" && python -m pip install -e ".[agents,auth,data,dev,knowledge,llm,ml,api,infrastructure,persistence,reporting,mcp]"
 
       - name: Run Runtime V7 PostgreSQL verification
         run: python -m pytest -q tests/postgres

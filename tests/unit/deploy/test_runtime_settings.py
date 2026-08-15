@@ -274,6 +274,111 @@ def test_runtime_settings_reject_partial_or_unsafe_feishu_aily_configuration(
         CompetitionRuntimeSettings.from_environment(environment)
 
 
+def test_runtime_settings_load_opt_in_aily_mcp_from_separate_operator_files(
+    tmp_path: Path,
+) -> None:
+    environment = _complete_feishu_environment(tmp_path)
+    endpoint_token = tmp_path / "aily_mcp_endpoint_token"
+    endpoint_token.write_text(
+        "mcp_endpoint_token_0123456789abcdef\n",
+        encoding="utf-8",
+    )
+    identity_bindings = tmp_path / "aily-mcp-identities.json"
+    identity_bindings.write_text(
+        '{"schema_version":"quanxin-aily-mcp-identity-bindings-v1",'
+        '"bindings":[{"aily_user_id":"aily-user-1",'
+        '"local_user_id":"local-user-1"}]}\n',
+        encoding="utf-8",
+    )
+    environment.update(
+        {
+            "QUANXIN_AILY_MCP_ENABLED": "true",
+            "QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE": str(endpoint_token),
+            "QUANXIN_AILY_MCP_IDENTITY_BINDINGS_FILE": str(identity_bindings),
+            "QUANXIN_AILY_MCP_ALLOWED_SOURCE_IPS": (
+                "101.126.59.88,101.126.59.89,122.14.241.34"
+            ),
+        }
+    )
+
+    settings = CompetitionRuntimeSettings.from_environment(environment)
+
+    assert settings.feishu_aily is not None
+    assert settings.feishu_aily.aily_mcp is not None
+    mcp = settings.feishu_aily.aily_mcp
+    assert mcp.endpoint_token.get_secret_value().startswith("mcp_endpoint_token_")
+    assert mcp.identity_bindings_file == identity_bindings.resolve(strict=True)
+    assert mcp.allowed_source_ips == (
+        "101.126.59.88",
+        "101.126.59.89",
+        "122.14.241.34",
+    )
+    rendered = repr(settings) + str(settings)
+    assert "mcp_endpoint_token_0123456789abcdef" not in rendered
+
+
+def test_runtime_settings_reject_partial_or_disabled_aily_mcp_configuration(
+    tmp_path: Path,
+) -> None:
+    environment = _complete_feishu_environment(tmp_path)
+    environment["QUANXIN_AILY_MCP_ENABLED"] = "true"
+
+    with pytest.raises(ValueError, match="QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE"):
+        CompetitionRuntimeSettings.from_environment(environment)
+
+    environment = _complete_feishu_environment(tmp_path / "disabled")
+    endpoint_token = tmp_path / "disabled-token"
+    endpoint_token.write_text("mcp_endpoint_token_0123456789abcdef\n", encoding="utf-8")
+    environment["QUANXIN_AILY_MCP_ENABLED"] = "false"
+    environment["QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE"] = str(endpoint_token)
+
+    with pytest.raises(ValueError, match="MCP is disabled"):
+        CompetitionRuntimeSettings.from_environment(environment)
+
+    environment = _environment(tmp_path / "feishu-disabled")
+    environment["QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE"] = str(endpoint_token)
+    with pytest.raises(ValueError, match="Feishu/Aily integration is disabled"):
+        CompetitionRuntimeSettings.from_environment(environment)
+
+
+@pytest.mark.parametrize(
+    "allowed_source_ips",
+    (
+        "101.126.59.88/32",
+        "101.126.59.88,101.126.59.88",
+        "not-an-ip",
+    ),
+)
+def test_runtime_settings_reject_non_exact_aily_mcp_source_ips(
+    tmp_path: Path,
+    allowed_source_ips: str,
+) -> None:
+    environment = _complete_feishu_environment(tmp_path)
+    endpoint_token = tmp_path / "aily_mcp_endpoint_token"
+    endpoint_token.write_text(
+        "mcp_endpoint_token_0123456789abcdef\n",
+        encoding="utf-8",
+    )
+    identity_bindings = tmp_path / "aily-mcp-identities.json"
+    identity_bindings.write_text(
+        '{"schema_version":"quanxin-aily-mcp-identity-bindings-v1",'
+        '"bindings":[{"aily_user_id":"aily-user-1",'
+        '"local_user_id":"local-user-1"}]}\n',
+        encoding="utf-8",
+    )
+    environment.update(
+        {
+            "QUANXIN_AILY_MCP_ENABLED": "true",
+            "QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE": str(endpoint_token),
+            "QUANXIN_AILY_MCP_IDENTITY_BINDINGS_FILE": str(identity_bindings),
+            "QUANXIN_AILY_MCP_ALLOWED_SOURCE_IPS": allowed_source_ips,
+        }
+    )
+
+    with pytest.raises(ValueError, match="source IP"):
+        CompetitionRuntimeSettings.from_environment(environment)
+
+
 def test_runtime_settings_reject_partial_recommendation_ruleset_configuration(
     tmp_path: Path,
 ) -> None:

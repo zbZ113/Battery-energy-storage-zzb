@@ -17,6 +17,7 @@ from deploy.competition_runtime import (
     register_feishu_sibling_recovery,
 )
 from deploy.runtime_settings import (
+    AilyMcpRuntimeSettings,
     CompetitionRuntimeSettings,
     FeishuAilyRuntimeSettings,
 )
@@ -95,6 +96,8 @@ def _enabled_settings(tmp_path) -> CompetitionRuntimeSettings:
         tmp_path,
         trusted_origin="https://runtime.example.test",
     )
+
+
     payload = b"operator-registered-canonical-csv"
     payload_sha256 = sha256(payload).hexdigest()
     registration = CanonicalCsvBatchRegistration(
@@ -161,6 +164,31 @@ def _enabled_settings(tmp_path) -> CompetitionRuntimeSettings:
             default_scenario_profiles_file=default_scenarios,
             allow_candidate_scenario_execution=True,
             allow_candidate_scenario_results=True,
+        ),
+    )
+
+
+def _mcp_enabled_settings(tmp_path) -> CompetitionRuntimeSettings:
+    settings = _enabled_settings(tmp_path)
+    assert settings.feishu_aily is not None
+    identity_bindings = tmp_path / "config" / "aily-mcp-identities.json"
+    identity_bindings.write_text(
+        '{"schema_version":"quanxin-aily-mcp-identity-bindings-v1",'
+        '"bindings":[{"aily_user_id":"aily-user-1",'
+        '"local_user_id":"local-user-1"}]}\n',
+        encoding="utf-8",
+    )
+    return replace(
+        settings,
+        feishu_aily=replace(
+            settings.feishu_aily,
+            aily_mcp=AilyMcpRuntimeSettings(
+                endpoint_token=SecretStr(
+                    "mcp_endpoint_token_0123456789abcdef"
+                ),
+                identity_bindings_file=identity_bindings,
+                allowed_source_ips=("101.126.59.88",),
+            ),
         ),
     )
 
@@ -243,6 +271,16 @@ def test_competition_runtime_opt_in_mounts_feishu_aily_and_shared_worker(
             type("Attachment", (), {"sha256": "f" * 64})(),
             datetime(2026, 8, 12, tzinfo=UTC),
         )
+
+
+def test_competition_runtime_mounts_the_opt_in_aily_mcp_surface(tmp_path) -> None:
+    runtime = create_competition_runtime(_mcp_enabled_settings(tmp_path))
+
+    route_paths = {getattr(route, "path", None) for route in runtime.http_app.routes}
+
+    assert (
+        "/v1/aily/mcp/mcp_endpoint_token_0123456789abcdef" in route_paths
+    )
 
 
 def test_competition_runtime_defaults_to_production_cookie_and_requires_local_opt_in(

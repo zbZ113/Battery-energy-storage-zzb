@@ -9,6 +9,7 @@ _EXPORT_MODULES = {
     "AdvancedModelArtifactCatalogBatchRecord": "model_artifact_catalog",
     "AdvancedCalibrationAssemblyDependencies": "assembly",
     "AdvancedCalibrationComponents": "assembly",
+    "AilyMcpAssemblyConfig": "feishu_aily_assembly",
     "ArtifactFormat": "model_artifacts",
     "ArtifactKind": "model_artifacts",
     "BINDING_SCHEMA_VERSION": "record_batch_bindings",

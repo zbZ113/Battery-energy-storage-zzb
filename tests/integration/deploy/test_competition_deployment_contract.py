@@ -70,6 +70,7 @@ def test_runtime_services_use_secret_files_and_fail_closed_dependencies() -> Non
     assert "condition: service_completed_successfully" in compose
     assert "deploy.migrate" in compose
     assert "deploy.competition_api:app" in compose
+    assert "--no-access-log" in compose
     assert "deploy.competition_worker:app" in compose
     assert "agent-runs,advanced-calibration,report-exports" in compose
 
@@ -124,6 +125,29 @@ def test_feishu_aily_override_is_the_only_source_of_optional_secrets() -> None:
         assert re.search(rf"(?m)^  {service}:(?:\s+&[A-Za-z0-9_-]+)?\s*$", override)
 
 
+def test_aily_mcp_override_is_separate_and_fail_closed() -> None:
+    base = _read("deploy/competition.compose.yaml")
+    feishu_override = _read("deploy/competition.feishu-aily.override.yaml")
+    mcp_override = _read("deploy/competition.aily-mcp.override.yaml")
+
+    assert "QUANXIN_AILY_MCP_ENABLED" not in base
+    assert "QUANXIN_AILY_MCP_ENABLED" not in feishu_override
+    for setting in (
+        'QUANXIN_AILY_MCP_ENABLED: "true"',
+        "QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE: /run/secrets/aily_mcp_endpoint_token",
+        "QUANXIN_AILY_MCP_IDENTITY_BINDINGS_FILE: "
+        "/srv/quanxin/config/aily-mcp-identity-bindings.json",
+        "QUANXIN_AILY_MCP_ALLOWED_SOURCE_IPS: ${AILY_MCP_ALLOWED_SOURCE_IPS}",
+    ):
+        assert setting in mcp_override
+    assert "- aily_mcp_endpoint_token" in mcp_override
+    assert re.search(r"(?m)^  aily_mcp_endpoint_token:\s*$", mcp_override)
+    assert "file: ${QUANXIN_SECRETS_ROOT}/aily_mcp_endpoint_token" in mcp_override
+    assert re.search(r"(?m)^  api:(?:\s+&[A-Za-z0-9_-]+)?\s*$", mcp_override)
+    for service in ("migrate", "worker"):
+        assert re.search(rf"(?m)^  {service}:\s*$", mcp_override) is None
+
+
 def test_competition_compose_mounts_certificates_and_evidence_with_safe_modes() -> None:
     compose = _read("deploy/competition.compose.yaml")
 
@@ -172,6 +196,50 @@ def test_nginx_terminates_tls_serves_acme_and_proxies_same_origin_routes() -> No
     assert "proxy_buffering off;" in nginx
 
 
+def test_nginx_protects_the_aily_mcp_prefix_before_the_generic_api() -> None:
+    nginx = _read("deploy/nginx/competition.conf")
+
+    mcp_location = nginx.index("location ^~ /v1/aily/mcp/")
+    generic_api = nginx.index("location /v1/")
+    assert mcp_location < generic_api
+    for address in (
+        "101.126.59.88",
+        "101.126.59.89",
+        "101.126.59.90",
+        "101.126.59.91",
+        "101.126.59.92",
+        "122.14.241.34",
+        "122.14.241.35",
+        "122.14.241.36",
+        "122.14.241.37",
+        "122.14.241.38",
+    ):
+        assert f"allow {address};" in nginx
+    for directive in (
+        "deny all;",
+        "access_log off;",
+        "client_max_body_size 256k;",
+        "limit_req zone=aily_mcp_per_ip",
+        "limit_conn aily_mcp_connections",
+        "proxy_set_header X-Quanxin-Aily-Source-IP $remote_addr;",
+        "proxy_set_header X-Real-IP $remote_addr;",
+        "proxy_set_header X-Forwarded-For $remote_addr;",
+        "proxy_request_buffering off;",
+        "proxy_buffering off;",
+        "proxy_cache off;",
+    ):
+        assert directive in nginx
+
+
+def test_http_redirect_does_not_log_the_secret_aily_mcp_path() -> None:
+    nginx = _read("deploy/nginx/competition.conf")
+    http_server = nginx[: nginx.index("\n}\n\nserver {")]
+
+    assert "location ^~ /v1/aily/mcp/" in http_server
+    assert "access_log off;" in http_server
+    assert "return 308 https://$host$request_uri;" in http_server
+
+
 def test_deployment_environment_template_contains_identities_not_secrets() -> None:
     template = _read("deploy/competition.env.example")
 
@@ -194,6 +262,7 @@ def test_deployment_environment_template_contains_identities_not_secrets() -> No
         "EXTERNAL_HTTPS_BASE_URL",
         "ALLOW_CANDIDATE_SCENARIO_EXECUTION",
         "ALLOW_CANDIDATE_SCENARIO_RESULTS",
+        "AILY_MCP_ALLOWED_SOURCE_IPS",
     ):
         assert re.search(rf"(?m)^{name}=\s*$", template)
 
@@ -204,6 +273,14 @@ def test_deployment_environment_template_contains_identities_not_secrets() -> No
         "BEGIN PRIVATE KEY",
     ):
         assert forbidden not in template
+
+
+def test_backend_and_ci_install_the_pinned_mcp_extra() -> None:
+    dockerfile = _read("deploy/Dockerfile.backend")
+    ci = _read(".github/workflows/ci.yml")
+
+    assert "persistence,reporting,scenarios,mcp" in dockerfile
+    assert "persistence,reporting,mcp" in ci
 
 
 def test_production_entrypoints_use_the_strict_competition_runtime() -> None:

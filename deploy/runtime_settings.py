@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -13,6 +14,13 @@ from pydantic import SecretStr
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_SECRET_BYTES = 8_192
 _FEISHU_AILY_ENABLED = "QUANXIN_FEISHU_AILY_ENABLED"
+_AILY_MCP_ENABLED = "QUANXIN_AILY_MCP_ENABLED"
+_AILY_MCP_CONFIGURATION_KEYS = (
+    "QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE",
+    "QUANXIN_AILY_MCP_IDENTITY_BINDINGS_FILE",
+    "QUANXIN_AILY_MCP_ALLOWED_SOURCE_IPS",
+)
+_SAFE_ENDPOINT_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 _FEISHU_AILY_CONFIGURATION_KEYS = (
     "QUANXIN_FEISHU_APP_ID",
     "QUANXIN_FEISHU_APP_SECRET_FILE",
@@ -30,7 +38,17 @@ _FEISHU_AILY_CONFIGURATION_KEYS = (
     "QUANXIN_FEISHU_RECHECK_PERMISSION_REFERENCE",
     "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
     "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
+    *_AILY_MCP_CONFIGURATION_KEYS,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class AilyMcpRuntimeSettings:
+    """Complete opt-in identity and ingress policy for the Aily MCP surface."""
+
+    endpoint_token: SecretStr
+    identity_bindings_file: Path
+    allowed_source_ips: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +67,7 @@ class FeishuAilyRuntimeSettings:
     default_scenario_profiles_file: Path
     allow_candidate_scenario_execution: bool
     allow_candidate_scenario_results: bool
+    aily_mcp: AilyMcpRuntimeSettings | None = None
     engineering_recommendation_rulesets_file: Path | None = None
     engineering_recommendation_rulesets_sha256: str | None = None
     recheck_table_id: str | None = None
@@ -239,8 +258,13 @@ def _feishu_aily_settings(
         for key in _FEISHU_AILY_CONFIGURATION_KEYS
         if isinstance(environment.get(key), str) and environment[key].strip()
     )
+    mcp_enabled = _optional_boolean(
+        environment,
+        _AILY_MCP_ENABLED,
+        default=False,
+    )
     if not enabled:
-        if configured:
+        if configured or mcp_enabled:
             raise ValueError(
                 "Feishu/Aily integration is disabled but integration settings are configured"
             )
@@ -251,6 +275,7 @@ def _feishu_aily_settings(
     recheck_table_id, recheck_permission_reference = _optional_recheck_action(
         environment
     )
+    aily_mcp = _aily_mcp_settings(environment)
     return FeishuAilyRuntimeSettings(
         app_id=_required(environment, "QUANXIN_FEISHU_APP_ID"),
         app_secret=_secret_text(
@@ -296,6 +321,7 @@ def _feishu_aily_settings(
         engineering_recommendation_rulesets_sha256=recommendation_rulesets_sha256,
         recheck_table_id=recheck_table_id,
         recheck_permission_reference=recheck_permission_reference,
+        aily_mcp=aily_mcp,
         allow_candidate_scenario_execution=_strict_boolean(
             environment,
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_EXECUTION",
@@ -305,6 +331,59 @@ def _feishu_aily_settings(
             "QUANXIN_ALLOW_CANDIDATE_SCENARIO_RESULTS",
         ),
     )
+
+
+def _aily_mcp_settings(
+    environment: Mapping[str, str],
+) -> AilyMcpRuntimeSettings | None:
+    enabled = _optional_boolean(
+        environment,
+        _AILY_MCP_ENABLED,
+        default=False,
+    )
+    configured = tuple(
+        key
+        for key in _AILY_MCP_CONFIGURATION_KEYS
+        if isinstance(environment.get(key), str) and environment[key].strip()
+    )
+    if not enabled:
+        if configured:
+            raise ValueError(
+                "Aily MCP is disabled but MCP settings are configured"
+            )
+        return None
+    endpoint_token = _secret_text(
+        environment,
+        "QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE",
+        label="Aily MCP endpoint token",
+    )
+    if _SAFE_ENDPOINT_TOKEN.fullmatch(endpoint_token.get_secret_value()) is None:
+        raise ValueError("Aily MCP endpoint token must be a high-entropy path segment")
+    return AilyMcpRuntimeSettings(
+        endpoint_token=endpoint_token,
+        identity_bindings_file=_regular_file(
+            environment,
+            "QUANXIN_AILY_MCP_IDENTITY_BINDINGS_FILE",
+        ),
+        allowed_source_ips=_exact_source_ips(
+            _required(environment, "QUANXIN_AILY_MCP_ALLOWED_SOURCE_IPS")
+        ),
+    )
+
+
+def _exact_source_ips(value: str) -> tuple[str, ...]:
+    raw_values = tuple(item.strip() for item in value.split(","))
+    if not raw_values or any(not item or "/" in item for item in raw_values):
+        raise ValueError("Aily MCP source IP list must contain exact addresses")
+    normalized: list[str] = []
+    for item in raw_values:
+        try:
+            normalized.append(str(ip_address(item)))
+        except ValueError as exc:
+            raise ValueError("Aily MCP source IP is invalid") from exc
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("Aily MCP source IPs must be unique")
+    return tuple(normalized)
 
 
 def _optional_recommendation_rulesets(
@@ -384,4 +463,8 @@ def _https_base_url(value: str) -> str:
     return value.removesuffix("/")
 
 
-__all__ = ["CompetitionRuntimeSettings", "FeishuAilyRuntimeSettings"]
+__all__ = [
+    "AilyMcpRuntimeSettings",
+    "CompetitionRuntimeSettings",
+    "FeishuAilyRuntimeSettings",
+]

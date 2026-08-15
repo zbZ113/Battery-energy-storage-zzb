@@ -4,6 +4,8 @@
 
 本文件描述第一阶段接入及其 BLAST-Lite 情景扩展。交互层是飞书机器人、飞书卡片、多维表格、受审计报告和 Aily；独立 Web 前端不在本阶段范围。本阶段不训练模型，不运行 PBT/MAGNet，也不自动改变任何模型 activation 状态。
 
+新版 Aily 工作助手使用 MCP HTTPStreaming，不再依赖旧版 OpenAPI Connector UI。部署、身份映射、出口 IP 和工具配置见 [Aily MCP HTTPStreaming 接入](./aily-mcp-httpstreaming.md)，工作助手提示词见 [Aily MCP 系统提示词](./aily-mcp-system-prompt.md)。旧 `/v1/aily/*` Bearer API 继续保留兼容。
+
 当前 Advanced 路由仍受服务器端路由、制品清单、SHA-256、支持域和人工审批约束。`CONDITIONAL` 或 `NOT_ACTIVATED` 路由不能展示预测数值。PBT 与 MAGNet 完成训练、独立评估、制品核验和人工晋级前，不会出现在可执行路由中。
 
 BLAST-Lite 数值路由独立于上述深度学习 activation。当前两个参考路由均为 `REGISTERED_CANDIDATE`，证据等级为 `PHYSICS_REFERENCE`；只有显式启用候选情景执行与候选结果展示时，才允许在 manifest 支持范围内生成和展示 ToolResult。它们不是海辰产品模型，也不构成 15～25 年真实寿命验证。
@@ -13,7 +15,7 @@ BLAST-Lite 数值路由独立于上述深度学习 activation。当前两个参�
 ## 架构
 
 ```text
-飞书回调 / Aily Bearer 连接器
+飞书回调 / Aily Bearer 连接器 / Aily MCP HTTPStreaming
   -> 验签、解密、verification token、重放窗口、receipt 租约
   -> 只保留 chat/user/message/file/run 等机器引用
   -> 下载 CSV、大小/MIME/magic/UTF-8/SHA-256 检查

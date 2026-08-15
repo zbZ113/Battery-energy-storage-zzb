@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -13,12 +14,19 @@ from sqlalchemy import create_engine
 import quanxin_life.application as application_package
 from quanxin_life.api.aily import AilyCreateAnalysisTaskRequest
 from quanxin_life.application import (
+    AilyMcpAssemblyConfig as ExportedAilyMcpAssemblyConfig,
+)
+from quanxin_life.application import (
     FeishuAilyAssemblyConfig as ExportedFeishuAilyAssemblyConfig,
 )
 from quanxin_life.application import (
     create_feishu_aily_components as exported_create_feishu_aily_components,
 )
+from quanxin_life.application.aily_mcp_authorization import (
+    load_aily_mcp_identity_bindings,
+)
 from quanxin_life.application.feishu_aily_assembly import (
+    AilyMcpAssemblyConfig,
     FeishuAilyAssemblyConfig,
     FeishuProjectModelDependencies,
     RegisteredFeishuCsvRegistrationResolver,
@@ -102,6 +110,7 @@ def _config(
     *,
     recheck_table_id: str | None = None,
     recheck_permission_reference: str | None = None,
+    aily_mcp: AilyMcpAssemblyConfig | None = None,
 ) -> FeishuAilyAssemblyConfig:
     return FeishuAilyAssemblyConfig(
         app_id="cli_test_app",
@@ -117,6 +126,7 @@ def _config(
         allow_candidate_scenario_results=True,
         recheck_table_id=recheck_table_id,
         recheck_permission_reference=recheck_permission_reference,
+        aily_mcp=aily_mcp,
     )
 
 
@@ -192,12 +202,75 @@ def test_feishu_aily_assembly_shares_one_persistent_boundary(tmp_path) -> None:
         is CHINESE_ANALYSIS_BITABLE_PROFILE
     )
     assert components.aily_http_adapter is not None
+    assert components.aily_mcp_adapter is None
     assert "/v1/aily/recheck-actions" not in {
         getattr(route, "path", None)
         for route in components.aily_http_adapter.router.routes
     }
     assert components.feishu_http_adapter is not None
     assert FEISHU_ANALYSIS_TASK not in celery_app.tasks
+
+
+def test_feishu_aily_assembly_enables_mcp_only_with_project_identity_binding(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    sessions = create_session_factory(engine)
+    identity_file = tmp_path / "aily-mcp-identities.json"
+    identity_file.write_text(
+        '{"schema_version":"quanxin-aily-mcp-identity-bindings-v1",'
+        '"bindings":[{"aily_user_id":"aily-user-1",'
+        '"local_user_id":"local-user-1"}]}\n',
+        encoding="utf-8",
+    )
+    mcp_config = AilyMcpAssemblyConfig(
+        endpoint_token=SecretStr("mcp_endpoint_token_0123456789abcdef"),
+        allowed_source_ips=("101.126.59.88",),
+        allowed_hosts=("integration.example.test",),
+        identity_bindings=load_aily_mcp_identity_bindings(identity_file.resolve()),
+    )
+
+    with pytest.raises(ValueError, match="MCP requires project"):
+        create_feishu_aily_components(
+            session_factory=sessions,
+            celery_app=_CeleryApp(),
+            config=_config(tmp_path / "rejected-batches", aily_mcp=mcp_config),
+            feishu_transport=_NoNetworkTransport(),
+            default_scenarios=ReviewedDefaultScenarioRegistry(),
+            clock=lambda: NOW,
+        )
+
+    context_service = ProjectInvocationContextService(sessions, clock=lambda: NOW)
+    components = create_feishu_aily_components(
+        session_factory=sessions,
+        celery_app=_CeleryApp(),
+        config=_config(tmp_path / "batches", aily_mcp=mcp_config),
+        feishu_transport=_NoNetworkTransport(),
+        default_scenarios=ReviewedDefaultScenarioRegistry(),
+        project_model_dependencies=FeishuProjectModelDependencies(
+            context_service=context_service,
+            project_ledger=SqlProjectAuditLedger(
+                sessions,
+                context_validator=context_service,
+                clock=lambda: NOW,
+            ),
+            project_tool_service=SimpleNamespace(
+                invoke_in_project=lambda *_args, **_kwargs: None
+            ),
+        ),
+        clock=lambda: NOW,
+    )
+
+    assert components.aily_mcp_adapter is not None
+    tools = asyncio.run(components.aily_mcp_adapter.server.list_tools())
+    assert {tool.name for tool in tools} == {
+        "quanxin_create_analysis_task",
+        "quanxin_create_scenario_context",
+        "quanxin_get_analysis_task",
+        "quanxin_get_audited_report",
+        "quanxin_get_audited_result",
+    }
 
 
 def test_feishu_aily_assembly_mounts_recheck_only_with_project_authorization(
@@ -258,6 +331,7 @@ def test_feishu_aily_config_rejects_partial_recheck_identity(tmp_path: Path) -> 
 
 
 def test_application_package_lazily_exports_the_feishu_aily_assembly() -> None:
+    assert ExportedAilyMcpAssemblyConfig is AilyMcpAssemblyConfig
     assert ExportedFeishuAilyAssemblyConfig is FeishuAilyAssemblyConfig
     assert exported_create_feishu_aily_components is create_feishu_aily_components
     assert (

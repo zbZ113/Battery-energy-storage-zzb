@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 
 from celery.signals import worker_ready
 
@@ -52,6 +53,9 @@ from quanxin_life.application.agent_run_invocation import (
     PersistentAgentRunInvocationResolver,
 )
 from quanxin_life.application.agent_runs import AgentRunService
+from quanxin_life.application.aily_mcp_authorization import (
+    load_aily_mcp_identity_bindings,
+)
 from quanxin_life.application.assembly import (
     AdvancedCalibrationAssemblyDependencies,
     ProjectPredictionToolDependencies,
@@ -66,6 +70,7 @@ from quanxin_life.application.engineering_recommendation_rules import (
     load_engineering_recommendation_ruleset_registry,
 )
 from quanxin_life.application.feishu_aily_assembly import (
+    AilyMcpAssemblyConfig,
     FeishuAilyAssemblyConfig,
     FeishuProjectModelDependencies,
     RegisteredFeishuCsvRegistrationResolver,
@@ -356,6 +361,22 @@ def create_competition_runtime(
                 recheck_permission_reference=(
                     integration.recheck_permission_reference
                 ),
+                aily_mcp=(
+                    AilyMcpAssemblyConfig(
+                        endpoint_token=integration.aily_mcp.endpoint_token,
+                        allowed_source_ips=integration.aily_mcp.allowed_source_ips,
+                        allowed_hosts=(
+                            urlsplit(
+                                integration.external_https_base_url
+                            ).netloc.lower(),
+                        ),
+                        identity_bindings=load_aily_mcp_identity_bindings(
+                            integration.aily_mcp.identity_bindings_file
+                        ),
+                    )
+                    if integration.aily_mcp is not None
+                    else None
+                ),
             ),
             registration_resolver=RegisteredFeishuCsvRegistrationResolver(
                 load_feishu_csv_registrations(integration.csv_registrations_file)
@@ -429,6 +450,9 @@ def create_competition_runtime(
         ),
         aily_adapter=(
             feishu_aily.aily_http_adapter if feishu_aily is not None else None
+        ),
+        aily_mcp_adapter=(
+            feishu_aily.aily_mcp_adapter if feishu_aily is not None else None
         ),
         project_invocation_context_service=context_service,
     )
