@@ -43,6 +43,8 @@ CANONICAL_CYCLE_CSV_FIELDS = (
     "valid",
 )
 MAX_CANONICAL_CSV_BYTES = 25 * 1024 * 1024
+SELF_DESCRIBED_FEISHU_CSV_REGISTRATION_MODE = "SELF_DESCRIBED_FEISHU_CSV_V1"
+SELF_DESCRIBED_MODEL_SUPPORT_STATUS = "UNREVIEWED_SELF_DESCRIBED"
 _OPTIONAL_FIELDS = {
     "temperature_c",
     "charge_capacity_ah",
@@ -76,6 +78,25 @@ class CanonicalCsvBatchRegistration(ContractModel):
         if not any(item.source_kind is SourceKind.OBSERVED for item in self.provenance):
             raise ValueError("registration provenance must include an OBSERVED source")
         return self
+
+
+def project_model_registration_rejection_code(
+    registration: CanonicalCsvBatchRegistration,
+) -> str | None:
+    """Return the explicit model gate for an unreviewed self-described upload."""
+
+    checked = CanonicalCsvBatchRegistration.model_validate(
+        registration.model_dump(mode="json")
+    )
+    parameters = checked.metadata.ingestion_parameters
+    if (
+        parameters.get("registration_mode")
+        == SELF_DESCRIBED_FEISHU_CSV_REGISTRATION_MODE
+        or parameters.get("model_support_status")
+        == SELF_DESCRIBED_MODEL_SUPPORT_STATUS
+    ):
+        return "PROJECT_MODEL_DOMAIN_NOT_SUPPORTED"
+    return None
 
 
 class VerifiedEarlyCycleBatchStore(Protocol):

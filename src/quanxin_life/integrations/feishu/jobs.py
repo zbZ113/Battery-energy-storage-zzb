@@ -27,6 +27,7 @@ from quanxin_life.application.battery_csv_mapping import (
 from quanxin_life.application.ingestion import (
     CanonicalCsvBatchRegistration,
     VerifiedEarlyCycleBatchStore,
+    project_model_registration_rejection_code,
 )
 from quanxin_life.core import ToolResult, sha256_canonical
 from quanxin_life.persistence.database import SessionFactory
@@ -277,7 +278,7 @@ class AilyDataIdentityResolver(Protocol):
         *,
         source_run_id: str,
         data_batch_id: str,
-    ) -> None: ...
+    ) -> VerifiedEarlyCycleBatch | None: ...
 
 
 class FeishuProjectModelExecutorPort(Protocol):
@@ -1251,6 +1252,52 @@ class SqlAlchemyFeishuJobStore:
         finally:
             session.close()
 
+    def list_succeeded_root_uploads(
+        self,
+        *,
+        cell_reference: str,
+        limit: int = 100,
+    ) -> tuple[FeishuAnalysisJobRecord, ...]:
+        checked_cell_reference = _delivery_reference(
+            cell_reference,
+            field_name="cell_reference",
+        )
+        if limit < 1 or limit > 1000:
+            raise ValueError("root upload query limit is invalid")
+        session = self._session_factory()
+        try:
+            rows = tuple(
+                session.scalars(
+                    select(FeishuEventReceipt)
+                    .where(
+                        FeishuEventReceipt.source_job_id.is_(None),
+                        FeishuEventReceipt.job_origin
+                        == FeishuAnalysisJobOrigin.FEISHU.value,
+                        FeishuEventReceipt.event_type == "im.message.receive_v1",
+                        FeishuEventReceipt.task_type
+                        == FeishuAnalysisTask.PREDICT_CYCLE_LIFE.value,
+                        FeishuEventReceipt.job_status
+                        == FeishuAnalysisJobStatus.SUCCEEDED.value,
+                        FeishuEventReceipt.cell_reference
+                        == checked_cell_reference,
+                        FeishuEventReceipt.record_batch_id.is_not(None),
+                        FeishuEventReceipt.analysis_result_id.is_not(None),
+                        FeishuEventReceipt.chat_id.is_not(None),
+                        FeishuEventReceipt.sender_id.is_not(None),
+                        FeishuEventReceipt.run_id == FeishuEventReceipt.job_id,
+                    )
+                    .order_by(
+                        FeishuEventReceipt.job_completed_at.desc(),
+                        FeishuEventReceipt.job_updated_at.desc(),
+                        FeishuEventReceipt.job_id.desc(),
+                    )
+                    .limit(limit)
+                ).all()
+            )
+            return tuple(self._record(row) for row in rows)
+        finally:
+            session.close()
+
     def get_recommendation_sibling(
         self,
         *,
@@ -1310,11 +1357,10 @@ class SqlAlchemyFeishuJobStore:
         if csv_mapping_evidence is not None or csv_mapping_evidence_sha256 is not None:
             if csv_mapping_evidence is None or csv_mapping_evidence_sha256 is None:
                 raise ValueError("CSV mapping batch evidence is incomplete")
-            detached = BatteryCsvMappingSuccessEvidence.model_validate(
-                csv_mapping_evidence
-            ).model_dump(mode="json")
-            if sha256_canonical(detached) != csv_mapping_evidence_sha256:
-                raise ValueError("CSV mapping evidence SHA-256 does not match")
+            detached = _validated_mapping_success_evidence(
+                csv_mapping_evidence,
+                expected_sha256=csv_mapping_evidence_sha256,
+            )
             values.update(
                 {
                     "csv_mapping_status": "MAPPED",
@@ -1343,16 +1389,17 @@ class SqlAlchemyFeishuJobStore:
             raise ValueError("CSV mapping status is invalid")
         try:
             if status == "MAPPED":
-                detached = BatteryCsvMappingSuccessEvidence.model_validate(
-                    evidence
-                ).model_dump(mode="json")
+                detached = _validated_mapping_success_evidence(
+                    evidence,
+                    expected_sha256=evidence_sha256,
+                )
             else:
                 detached = BatteryCsvMappingRejectionEvidence.model_validate(
                     evidence
                 ).model_dump(mode="json")
         except (TypeError, ValueError, ValidationError) as exc:
             raise ValueError("CSV mapping evidence contract is invalid") from exc
-        if sha256_canonical(detached) != evidence_sha256:
+        if status == "REJECTED" and sha256_canonical(detached) != evidence_sha256:
             raise ValueError("CSV mapping evidence SHA-256 does not match")
         self._mutate_owned(
             job_id=job_id,
@@ -1668,16 +1715,23 @@ class SqlAlchemyFeishuJobStore:
         if mapping_evidence is not None:
             if row.csv_mapping_status not in {"MAPPED", "REJECTED"}:
                 raise ValueError("Feishu CSV mapping status is invalid")
-            evidence_model = (
-                BatteryCsvMappingSuccessEvidence
-                if row.csv_mapping_status == "MAPPED"
-                else BatteryCsvMappingRejectionEvidence
-            )
-            mapping_evidence = evidence_model.model_validate(
-                mapping_evidence
-            ).model_dump(mode="json")
-            if sha256_canonical(mapping_evidence) != row.csv_mapping_evidence_sha256:
-                raise ValueError("Feishu CSV mapping evidence SHA-256 does not match")
+            assert row.csv_mapping_evidence_sha256 is not None
+            if row.csv_mapping_status == "MAPPED":
+                mapping_evidence = _validated_mapping_success_evidence(
+                    mapping_evidence,
+                    expected_sha256=row.csv_mapping_evidence_sha256,
+                )
+            else:
+                mapping_evidence = BatteryCsvMappingRejectionEvidence.model_validate(
+                    mapping_evidence
+                ).model_dump(mode="json")
+                if (
+                    sha256_canonical(mapping_evidence)
+                    != row.csv_mapping_evidence_sha256
+                ):
+                    raise ValueError(
+                        "Feishu CSV mapping evidence SHA-256 does not match"
+                    )
         bitable_curve_evidence = (
             row.bitable_curve_file_token,
             row.bitable_curve_source_result_id,
@@ -2305,7 +2359,10 @@ class FeishuAnalysisJobDelivery:
                     result_id=analysis_result.result_id,
                     image_key=image_key,
                 )
-            elif job.task_type is FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY:
+            elif job.task_type in {
+                FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
+                FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
+            } and self._analysis_plotter is not None:
                 image_key = job.analysis_image_key
                 stored_provenance = (
                     job.analysis_image_key,
@@ -2317,8 +2374,6 @@ class FeishuAnalysisJobDelivery:
                 ):
                     raise ValueError("analysis image provenance is incomplete")
                 if image_key is None:
-                    if self._analysis_plotter is None:
-                        raise ValueError("SOH delivery requires a plot renderer")
                     plot = self._analysis_plotter.render(analysis_result)
                     if plot.source_result_id != analysis_result.result_id:
                         raise ValueError(
@@ -2357,8 +2412,6 @@ class FeishuAnalysisJobDelivery:
                         ),
                     )
                 else:
-                    if self._analysis_plotter is None:
-                        raise ValueError("SOH delivery requires a plot renderer")
                     replayed_plot = self._analysis_plotter.render(analysis_result)
                     expected_renderer_version = (
                         replayed_plot.renderer_version
@@ -2384,6 +2437,8 @@ class FeishuAnalysisJobDelivery:
                     result_id=analysis_result.result_id,
                     image_key=image_key,
                 )
+            elif job.task_type is FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY:
+                raise ValueError("SOH delivery requires a plot renderer")
             else:
                 result_card = self._card_builder.build_result_card(
                     run_id=job.run_id,
@@ -2943,6 +2998,7 @@ class FeishuAnalysisJobWorker:
                         profile_sha256=mapped.profile_sha256,
                         profile_version=mapped.profile_version,
                         raw_sha256=mapped.raw_sha256,
+                        battery_csv_metadata=mapped.metadata,
                     ).model_dump(mode="json")
                     mapping_evidence_sha256 = sha256_canonical(mapping_evidence)
                     attachment = VerifiedFeishuAttachment(
@@ -2962,6 +3018,15 @@ class FeishuAnalysisJobWorker:
                                 item.model_dump(mode="json")
                                 for item in mapped.column_evidence
                             ],
+                            **(
+                                {
+                                    "battery_csv_metadata": (
+                                        mapped.metadata.model_dump(mode="json")
+                                    )
+                                }
+                                if mapped.metadata is not None
+                                else {}
+                            ),
                         },
                     )
             except (FeishuAttachmentError, ValueError):
@@ -3210,6 +3275,38 @@ class FeishuAnalysisJobWorker:
             job = self._store.get(job.job_id)
             return self._reject(job, claim_token, exc.reason_code, primary_result_id)
         job = self._store.get(job.job_id)
+        registration_rejection = project_model_registration_rejection_code(
+            registration
+        )
+        if registration_rejection is not None:
+            provision_registration = getattr(
+                executor,
+                "provision_registration",
+                None,
+            )
+            if callable(provision_registration):
+                try:
+                    provision_registration(job, registration)
+                except FeishuProjectModelRejected as exc:
+                    return self._reject(
+                        job,
+                        claim_token,
+                        exc.reason_code,
+                        validation.result_id,
+                    )
+                except (TypeError, ValueError):
+                    return self._reject(
+                        job,
+                        claim_token,
+                        "PROJECT_MODEL_EXECUTION_REJECTED",
+                        validation.result_id,
+                    )
+            return self._reject(
+                job,
+                claim_token,
+                registration_rejection,
+                validation.result_id,
+            )
         self._plan_siblings(job)
         self._store.update_stage(
             job_id=job.job_id,
@@ -3526,6 +3623,25 @@ def validate_feishu_job_id(value: str) -> str:
     if str(parsed) != value:
         raise ValueError("job_id must be canonical")
     return value
+
+
+def _validated_mapping_success_evidence(
+    evidence: Mapping[str, object],
+    *,
+    expected_sha256: str,
+) -> dict[str, object]:
+    canonical = BatteryCsvMappingSuccessEvidence.model_validate(
+        evidence
+    ).model_dump(mode="json")
+    candidates = [canonical]
+    if canonical.get("battery_csv_metadata") is None:
+        legacy = dict(canonical)
+        legacy.pop("battery_csv_metadata", None)
+        candidates.append(legacy)
+    for candidate in candidates:
+        if sha256_canonical(candidate) == expected_sha256:
+            return candidate
+    raise ValueError("CSV mapping evidence SHA-256 does not match")
 
 
 def _reuses_source_validation_result(job: FeishuAnalysisJobRecord) -> bool:

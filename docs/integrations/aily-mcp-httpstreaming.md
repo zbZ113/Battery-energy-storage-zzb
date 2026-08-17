@@ -7,11 +7,11 @@
 - MCP 默认关闭。只有同时加载飞书 override 和 MCP override 时才启用。
 - MCP 使用独立高熵 URL 路径令牌，不复用旧 Aily Connector Bearer 密钥。
 - MCP 令牌和启用配置只挂载到 API；migrate 与 worker 不接收秘密路径。
-- 生产网关只允许 Aily 文档列出的十个精确出口 IP。
+- 生产默认同时在 Nginx 与 API 使用精确出口 IP 白名单；受信网关模式默认关闭。
 - Aily 自动发送的 `x-aily-user` 必须先映射到本地 `User.id`。
 - `x-aily-email` 只做请求格式检查，不落库、不记日志，也不能单独授权。
 - 每次创建、查询、读结果、读报告或建复检动作时，系统都会追溯到原始飞书上传，并重新验证活动项目、飞书绑定和本地 actor。
-- 未登记用户在 MCP initialize 之前即被拒绝。
+- 未登记且不带邮箱的 Aily 服务验证身份只允许 `initialize`、`notifications/initialized`、`ping` 和 `tools/list`；任何 `tools/call` 仍要求真实用户映射。
 - LLM 只能编排和解释。SOH、RUL、EOL、寿命、区间、阈值结论及业务指标必须来自有效 `ToolResult`。
 
 ## MCP 工具
@@ -66,11 +66,21 @@ Remove-Variable bytes, token
 
 ### 3. 出口 IP
 
-环境变量 `AILY_MCP_ALLOWED_SOURCE_IPS` 使用逗号分隔的精确地址，不接受 CIDR：
+环境变量 `AILY_MCP_ALLOWED_SOURCE_IPS` 使用逗号分隔的精确地址，不接受 CIDR。Aily 官方文档当前列出的地址为：
 
 ```text
 101.126.59.88,101.126.59.89,101.126.59.90,101.126.59.91,101.126.59.92,122.14.241.34,122.14.241.35,122.14.241.36,122.14.241.37,122.14.241.38
 ```
+
+2026-08-15 的真实任务握手还观察到 `240e:b1:e401:3::a6`、`240e:83:200::33c` 和 `106.38.226.12`，说明任务执行出口会轮换且官方清单并不完整。严格生产部署可把已核验的地址逐个加入精确白名单，但不得据此猜测或放开宽泛 CIDR。
+
+仅当 API 只在内部网络可达、本地网关绑定 `127.0.0.1:8080`、Cloudflare Tunnel 是唯一外部入口且端点令牌保持保密时，可在本地联调环境显式启用：
+
+```text
+AILY_MCP_TRUST_GATEWAY_SOURCE_IP=true
+```
+
+该模式仍要求网关提供格式合法的来源 IP，并继续执行秘密 URL、Host、请求大小、Aily 用户头、发现方法限制和业务授权校验；它只跳过不可靠的出口 IP 成员判断。生产默认保持 `false`。
 
 ## 启动
 
@@ -94,7 +104,7 @@ docker compose `
   up -d --build
 ```
 
-生产 Nginx 使用直连来源 IP。仅在本地网关继续绑定 `127.0.0.1:8080`、且 Cloudflare Tunnel 不能被外部绕过时，本地 Nginx 才读取 Cloudflare 注入的 `CF-Connecting-IP`。不要把本地配置当作公网源站配置。
+生产 Nginx 使用直连来源 IP 并保留精确白名单。本地 Nginx 不自行判断 Aily 白名单，只把 Cloudflare 注入的 `CF-Connecting-IP` 传给 API；是否跳过成员判断由 `AILY_MCP_TRUST_GATEWAY_SOURCE_IP` 显式控制。不要把本地配置当作公网源站配置。
 
 ## Aily 中填写
 

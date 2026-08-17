@@ -19,6 +19,7 @@ _AILY_MCP_CONFIGURATION_KEYS = (
     "QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE",
     "QUANXIN_AILY_MCP_IDENTITY_BINDINGS_FILE",
     "QUANXIN_AILY_MCP_ALLOWED_SOURCE_IPS",
+    "QUANXIN_AILY_MCP_TRUST_GATEWAY_SOURCE_IP",
 )
 _SAFE_ENDPOINT_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 _FEISHU_AILY_CONFIGURATION_KEYS = (
@@ -49,6 +50,7 @@ class AilyMcpRuntimeSettings:
     endpoint_token: SecretStr
     identity_bindings_file: Path
     allowed_source_ips: tuple[str, ...]
+    trust_gateway_source_ip: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,6 +369,11 @@ def _aily_mcp_settings(
         ),
         allowed_source_ips=_exact_source_ips(
             _required(environment, "QUANXIN_AILY_MCP_ALLOWED_SOURCE_IPS")
+        ),
+        trust_gateway_source_ip=_optional_boolean(
+            environment,
+            "QUANXIN_AILY_MCP_TRUST_GATEWAY_SOURCE_IP",
+            default=False,
         ),
     )
 

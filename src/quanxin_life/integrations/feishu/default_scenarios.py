@@ -18,6 +18,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from quanxin_life.core import ProvenanceRecord, SourceKind, sha256_canonical
 from quanxin_life.core.schemas import ContractModel, Sha256
 from quanxin_life.scenarios import (
+    BlastRouteManifest,
     BlastRouteRejected,
     OperationScenario,
     ScenarioCellDescriptor,
@@ -257,6 +258,28 @@ class ReviewedDefaultScenarioRegistry:
         if len(matches) != 1:
             raise ValueError("default scenario profile match is not unique")
         return matches[0]
+
+    def authorize_reference_use(
+        self,
+        *,
+        task: FeishuAnalysisTask,
+        data_batch_id: str,
+        batch: VerifiedEarlyCycleBatch,
+        route: BlastRouteManifest,
+    ) -> bool:
+        """Authorize Aily reference use only from the exact reviewed profile."""
+
+        checked = VerifiedEarlyCycleBatch.model_validate(batch.model_dump(mode="json"))
+        profile = self.resolve(checked)
+        if (
+            data_batch_id != checked.record_batch_id
+            or profile is None
+            or profile.task_type != task.value
+            or profile.route_id != route.route_id
+            or profile.reference_cell_format != route.cell_format
+        ):
+            raise ValueError("reviewed default scenario reference use is not authorized")
+        return profile.trusted_reference_use
 
     def create_context_template(
         self,

@@ -3,22 +3,26 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import re
 from collections import deque
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from hashlib import sha256
 from ipaddress import ip_address
+from numbers import Real
 from typing import Any, Literal, Protocol
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import CallToolResult
+from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from quanxin_life.api.aily import (
+    AilyAnalysisSourceReference,
     AilyAnalysisTaskGateway,
     AilyCreateAnalysisTaskRequest,
     AilyCreateRecheckActionRequest,
@@ -29,6 +33,9 @@ from quanxin_life.api.aily import (
     AilyResultResolver,
     AilyScenarioContextGateway,
     AilyScenarioContextState,
+)
+from quanxin_life.application.aily_mcp_authorization import (
+    ResolvedAilyAnalysisSource,
 )
 from quanxin_life.core import AgentRunState, ToolResult
 from quanxin_life.integrations.feishu.analysis_bitable import (
@@ -62,6 +69,10 @@ _SAFE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,199}\Z")
 _SAFE_ENDPOINT_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 _SAFE_FILENAME = re.compile(r"[A-Za-z0-9_.-]{1,255}\Z")
 _SAFE_EMAIL = re.compile(r"[^@\s\x00-\x1f]{1,128}@[^@\s\x00-\x1f]{1,190}\Z")
+_EMAIL_LESS_DISCOVERY_METHODS = frozenset(
+    {"initialize", "notifications/initialized", "ping", "tools/list"}
+)
+_LOGGER = logging.getLogger(__name__)
 _SUPPORTED_ANALYSIS_TASKS = Literal[
     FeishuAnalysisTask.PREDICT_CYCLE_LIFE,
     FeishuAnalysisTask.PREDICT_SOH_TRAJECTORY,
@@ -79,6 +90,7 @@ class AilyMcpConfig(BaseModel):
     endpoint_token: SecretStr
     allowed_source_ips: tuple[str, ...] = Field(min_length=1, max_length=256)
     allowed_hosts: tuple[str, ...] = Field(min_length=1, max_length=32)
+    trust_gateway_source_ip: bool = False
     max_request_bytes: int = Field(default=256 * 1024, ge=1024, le=1024 * 1024)
     max_response_chars: int = Field(default=20_000, ge=1_000, le=20_000)
 
@@ -137,6 +149,13 @@ class AilyMcpCallerAuthorizer(Protocol):
         run_id: str,
     ) -> None: ...
 
+    def resolve_analysis_source(
+        self,
+        *,
+        aily_user_id: str,
+        task_label: str,
+    ) -> ResolvedAilyAnalysisSource: ...
+
 
 @dataclass(frozen=True, slots=True)
 class AilyMcpAdapter:
@@ -175,6 +194,36 @@ def create_aily_mcp_adapter(
             allowed_origins=[],
         ),
     )
+
+    @server.tool(
+        name="quanxin_resolve_analysis_source",
+        description=(
+            "按 `电芯ID | cutoff-N` 任务标签解析当前调用者拥有的成功飞书上传。"
+            "返回后续工具所需的 source_run_id 与 data_batch_id; "
+            "cutoff 仅从绑定的受审循环寿命 ToolResult 复核, 不从文件名猜测。"
+        ),
+        structured_output=True,
+    )
+    async def resolve_analysis_source(
+        task_label: str,
+        ctx: Context[Any, Any, Any],
+    ) -> CallToolResult:
+        user_id = _verified_aily_user(ctx)
+        try:
+            resolved = caller_authorizer.resolve_analysis_source(
+                aily_user_id=user_id,
+                task_label=task_label,
+            )
+            response = AilyAnalysisSourceReference(
+                task_label=resolved.task_label,
+                source_run_id=resolved.source_run_id,
+                data_batch_id=resolved.data_batch_id,
+                cell_id=resolved.cell_id,
+                cutoff_cycle=resolved.cutoff_cycle,
+            ).model_dump(mode="json")
+            return _bounded_mcp_result(response, config.max_response_chars)
+        except (AttributeError, LookupError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError("任务标签未获授权或没有匹配的受审分析") from exc
 
     @server.tool(
         name="quanxin_create_scenario_context",
@@ -373,6 +422,7 @@ def create_aily_mcp_adapter(
     secured_app: ASGIApp = _AilyMcpSecurityMiddleware(
         inner_app,
         allowed_source_ips=frozenset(config.allowed_source_ips),
+        trust_gateway_source_ip=config.trust_gateway_source_ip,
         max_request_bytes=config.max_request_bytes,
         caller_authorizer=caller_authorizer,
     )
@@ -396,11 +446,13 @@ class _AilyMcpSecurityMiddleware:
         app: ASGIApp,
         *,
         allowed_source_ips: frozenset[str],
+        trust_gateway_source_ip: bool,
         max_request_bytes: int,
         caller_authorizer: AilyMcpCallerAuthorizer,
     ) -> None:
         self._app = app
         self._allowed_source_ips = allowed_source_ips
+        self._trust_gateway_source_ip = trust_gateway_source_ip
         self._max_request_bytes = max_request_bytes
         self._caller_authorizer = caller_authorizer
 
@@ -416,23 +468,45 @@ class _AilyMcpSecurityMiddleware:
         source_ip = _single_header(scope, _SOURCE_IP_HEADER)
         user_id = _single_header(scope, _AILY_USER_HEADER)
         email = _single_header(scope, _AILY_EMAIL_HEADER)
+        source_ip_allowed = _source_ip_is_allowed(
+            source_ip,
+            allowed_source_ips=self._allowed_source_ips,
+            trust_gateway_source_ip=self._trust_gateway_source_ip,
+        )
         if (
-            source_ip not in self._allowed_source_ips
+            not source_ip_allowed
             or _SAFE_REFERENCE.fullmatch(user_id or "") is None
-            or _SAFE_EMAIL.fullmatch(email or "") is None
+            or (email is not None and _SAFE_EMAIL.fullmatch(email) is None)
         ):
-            await _send_json_error(send, 403, "mcp_request_rejected")
-            return
-        assert user_id is not None
-        try:
-            self._caller_authorizer.authorize_identity(aily_user_id=user_id)
-        except (LookupError, RuntimeError, TypeError, ValueError):
+            _log_security_rejection(
+                scope=scope,
+                reason_code="REQUEST_METADATA_REJECTED",
+                source_ip_allowed=source_ip_allowed,
+                user_id=user_id,
+            )
             await _send_json_error(send, 403, "mcp_request_rejected")
             return
         messages, size_ok = await _buffer_request(receive, self._max_request_bytes)
         if not size_ok:
             await _send_json_error(send, 413, "mcp_request_too_large")
             return
+        assert user_id is not None
+        try:
+            self._caller_authorizer.authorize_identity(aily_user_id=user_id)
+        except (LookupError, RuntimeError, TypeError, ValueError):
+            # Aily probes discovery with an unbound identity and no email.
+            if (
+                email is not None
+                or _mcp_request_method(messages) not in _EMAIL_LESS_DISCOVERY_METHODS
+            ):
+                _log_security_rejection(
+                    scope=scope,
+                    reason_code="IDENTITY_NOT_BOUND",
+                    source_ip_allowed=source_ip_allowed,
+                    user_id=user_id,
+                )
+                await _send_json_error(send, 403, "mcp_request_rejected")
+                return
         state = scope.setdefault("state", {})
         state["aily_mcp_user_id"] = user_id
         replay = deque(messages)
@@ -455,6 +529,57 @@ def _single_header(scope: Scope, name: bytes) -> str | None:
     return values[0]
 
 
+def _log_security_rejection(
+    *,
+    scope: Scope,
+    reason_code: str,
+    source_ip_allowed: bool,
+    user_id: str | None,
+) -> None:
+    user_header_count = _header_count(scope, _AILY_USER_HEADER)
+    email_header_count = _header_count(scope, _AILY_EMAIL_HEADER)
+    user_id_sha256 = (
+        sha256(user_id.encode("utf-8")).hexdigest()
+        if user_id is not None
+        else None
+    )
+    _LOGGER.warning(
+        "Aily MCP request rejected reason=%s source_ip_allowed=%s "
+        "user_headers=%s email_headers=%s user_sha256=%s",
+        reason_code,
+        source_ip_allowed,
+        user_header_count,
+        email_header_count,
+        user_id_sha256,
+        extra={
+            "reason_code": reason_code,
+            "source_ip_allowed": source_ip_allowed,
+            "user_header_count": user_header_count,
+            "email_header_count": email_header_count,
+            "user_id_sha256": user_id_sha256,
+        },
+    )
+
+
+def _header_count(scope: Scope, name: bytes) -> int:
+    return sum(1 for key, _value in scope.get("headers", []) if key.lower() == name)
+
+
+def _source_ip_is_allowed(
+    source_ip: str | None,
+    *,
+    allowed_source_ips: frozenset[str],
+    trust_gateway_source_ip: bool,
+) -> bool:
+    if source_ip is None:
+        return False
+    try:
+        normalized = str(ip_address(source_ip))
+    except ValueError:
+        return False
+    return trust_gateway_source_ip or normalized in allowed_source_ips
+
+
 async def _buffer_request(
     receive: Receive,
     max_request_bytes: int,
@@ -472,6 +597,22 @@ async def _buffer_request(
                 return messages, True
         elif message["type"] == "http.disconnect":
             return messages, True
+
+
+def _mcp_request_method(messages: list[Message]) -> str | None:
+    payload = b"".join(
+        bytes(message.get("body", b""))
+        for message in messages
+        if message["type"] == "http.request"
+    )
+    try:
+        decoded = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    method = decoded.get("method")
+    return method if isinstance(method, str) else None
 
 
 async def _send_json_error(send: Send, status: int, code: str) -> None:
@@ -606,7 +747,95 @@ def _audited_result_projection(
             response["大型结果说明"] = (
                 "曲线数组未直接返回, 请读取受审报告或飞书曲线附件。"
             )
+    if result.tool_name in {
+        "compare_operation_scenarios",
+        "project_storage_lifetime",
+    }:
+        response["参考工况寿命"] = _scenario_lifetime_projection(result)
     return response
+
+
+def _scenario_lifetime_projection(result: ToolResult) -> dict[str, object]:
+    artifact = result.values.get("artifact")
+    if not isinstance(artifact, Mapping) or artifact.get("status") != "COMPLETED":
+        raise ValueError("参考工况寿命结果不可用")
+    if result.tool_name == "compare_operation_scenarios":
+        baseline = artifact.get("baseline")
+        comparisons = artifact.get("comparisons")
+        if not isinstance(baseline, Mapping) or not isinstance(comparisons, list):
+            raise ValueError("参考工况寿命结果不可用")
+        projections: tuple[object, ...] = (baseline, *comparisons)
+    elif result.tool_name == "project_storage_lifetime":
+        projections = (artifact.get("projection"),)
+    else:
+        raise ValueError("参考工况寿命结果不可用")
+
+    rows: list[dict[str, object]] = []
+    for projection in projections:
+        if not isinstance(projection, Mapping):
+            raise ValueError("参考工况寿命结果不可用")
+        scenario_id = _reference(projection.get("scenario_id"))
+        support = projection.get("support")
+        eol = projection.get("eol")
+        if not isinstance(support, Mapping) or not isinstance(eol, Mapping):
+            raise ValueError("参考工况寿命结果不可用")
+        support_status = support.get("status")
+        eol_status = eol.get("status")
+        if support_status not in {"SUPPORTED", "NEAR_BOUNDARY"} or eol_status not in {
+            "REACHED",
+            "NOT_REACHED",
+        }:
+            raise ValueError("参考工况寿命结果不可用")
+        threshold = _finite_scenario_number(
+            projection.get("eol_threshold"),
+            field_name="EOL threshold",
+        )
+        if threshold <= 0.0 or threshold >= 1.0:
+            raise ValueError("参考工况寿命结果不可用")
+        row: dict[str, object] = {
+            "工况ID": scenario_id,
+            "支持状态": support_status,
+            "EOL阈值": threshold,
+        }
+        if eol_status == "REACHED":
+            lifetime_years = _finite_scenario_number(
+                eol.get("natural_year"),
+                field_name="EOL natural year",
+            )
+            if lifetime_years < 0.0:
+                raise ValueError("参考工况寿命结果不可用")
+            row.update(
+                {
+                    "寿命结论": "EOL_REACHED",
+                    "从BOL起算参考寿命年": lifetime_years,
+                }
+            )
+        else:
+            lower_bound = _finite_scenario_number(
+                projection.get("final_natural_year"),
+                field_name="scenario horizon",
+            )
+            if lower_bound < 0.0:
+                raise ValueError("参考工况寿命结果不可用")
+            row.update(
+                {
+                    "寿命结论": "LOWER_BOUND_ONLY",
+                    "从BOL起算参考寿命下限年": lower_bound,
+                }
+            )
+        rows.append(row)
+    if not rows:
+        raise ValueError("参考工况寿命结果不可用")
+    return {"起算状态": "BOL", "工况": rows}
+
+
+def _finite_scenario_number(value: object, *, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{field_name} is not numeric")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{field_name} is not finite")
+    return number
 
 
 def _require_audited_report_result(result: ToolResult) -> None:
@@ -624,8 +853,15 @@ def _bounded_mcp_result(
     response: dict[str, object],
     max_chars: int,
 ) -> CallToolResult:
+    text_fallback = json.dumps(
+        response,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
     result = CallToolResult(
-        content=[],
+        content=[TextContent(type="text", text=text_fallback)],
         structuredContent=response,
         isError=False,
     )

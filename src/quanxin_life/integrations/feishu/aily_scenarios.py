@@ -91,13 +91,21 @@ class SqlAlchemyAilyScenarioContextGateway:
         self,
         request: AilyCreateScenarioContextRequest,
     ) -> AilyScenarioContextState:
-        self._data_identity_resolver.resolve_source_job(
+        resolved_batch = self._data_identity_resolver.resolve_source_job(
             source_run_id=request.source_run_id,
             data_batch_id=request.data_batch_id,
         )
-        batch = self._batch_store.resolve_verified_early_cycle_batch(
-            request.data_batch_id
+        batch = (
+            self._batch_store.resolve_verified_early_cycle_batch(
+                request.data_batch_id
+            )
+            if resolved_batch is None
+            else VerifiedEarlyCycleBatch.model_validate(
+                resolved_batch.model_dump(mode="json")
+            )
         )
+        if batch.record_batch_id != request.data_batch_id:
+            raise ValueError("Aily scenario batch identity changed")
         cell = ScenarioCellDescriptor(
             chemistry=batch.metadata.chemistry,
             nominal_capacity_ah=batch.metadata.nominal_capacity_ah,

@@ -235,6 +235,133 @@ class RecordBatchBindingService:
             ).model_dump(mode="json")
         )
 
+    def provision_frozen_binding(
+        self,
+        context: VerifiedProjectInvocationContext,
+        *,
+        content_batch_id: str,
+        registration: CanonicalCsvBatchRegistration,
+        now: datetime,
+    ) -> RecordBatchBindingRecord:
+        """Create one immutable project binding for verified Feishu content."""
+
+        verified_context = self._context_validator.revalidate(context)
+        timestamp = self._utc(now)
+        validated_registration = CanonicalCsvBatchRegistration.model_validate(
+            registration.model_dump(mode="json")
+        )
+        try:
+            content_batch = self._batch_store.resolve_verified_early_cycle_batch(
+                content_batch_id
+            )
+        except (KeyError, ValueError) as exc:
+            raise RecordBatchBindingStateError(
+                "verified record batch content cannot be provisioned"
+            ) from exc
+        registration_sha256 = sha256_canonical(
+            validated_registration.model_dump(mode="json")
+        )
+        dataset_name = (
+            f"Feishu upload {validated_registration.metadata.cell_id} "
+            f"{validated_registration.metadata.source_sha256[:12]}"
+        )[:200]
+
+        with session_scope(self._session_factory) as session:
+            project = session.scalar(
+                select(Project)
+                .where(
+                    Project.id == verified_context.project_id,
+                    Project.status == ProjectStatus.ACTIVE.value,
+                )
+                .with_for_update()
+            )
+            if project is None:
+                raise RecordBatchBindingNotFoundError(
+                    "record batch project scope was not found"
+                )
+            existing = tuple(
+                session.scalars(
+                    select(RecordBatchBinding)
+                    .join(Dataset, Dataset.id == RecordBatchBinding.dataset_id)
+                    .where(
+                        RecordBatchBinding.project_id == verified_context.project_id,
+                        RecordBatchBinding.content_batch_id == content_batch_id,
+                        RecordBatchBinding.registration_sha256
+                        == registration_sha256,
+                        Dataset.project_id == verified_context.project_id,
+                        Dataset.status == DatasetStatus.FROZEN.value,
+                        Dataset.frozen_at.is_not(None),
+                        Dataset.data_version == validated_registration.data_version,
+                        Dataset.schema_version
+                        == validated_registration.metadata.schema_version,
+                        RecordBatchBinding.source_manifest_sha256
+                        == content_batch.source_manifest_hash,
+                        RecordBatchBinding.content_dataset_id
+                        == validated_registration.metadata.dataset_id,
+                        RecordBatchBinding.dataset_schema_version
+                        == validated_registration.metadata.schema_version,
+                        RecordBatchBinding.cell_id
+                        == validated_registration.metadata.cell_id,
+                        RecordBatchBinding.cutoff_cycle
+                        == validated_registration.feature_config.cutoff_cycle,
+                        RecordBatchBinding.data_version
+                        == validated_registration.data_version,
+                        RecordBatchBinding.split_version
+                        == validated_registration.split_version,
+                        RecordBatchBinding.feature_version
+                        == validated_registration.feature_config.feature_version,
+                    )
+                    .order_by(RecordBatchBinding.id)
+                ).all()
+            )
+            if len(existing) > 1:
+                raise RecordBatchBindingStateError(
+                    "verified content has ambiguous frozen project bindings"
+                )
+            if existing:
+                self._verify_content_snapshot(
+                    self._snapshot_from_model(existing[0]),
+                    content_batch,
+                )
+                return self._record(existing[0])
+
+            dataset = Dataset(
+                id=str(uuid4()),
+                project_id=verified_context.project_id,
+                name=dataset_name,
+                data_version=validated_registration.data_version,
+                schema_version=validated_registration.metadata.schema_version,
+                status=DatasetStatus.DRAFT.value,
+                manifest_uri=None,
+                manifest_sha256=None,
+                created_at=timestamp,
+                frozen_at=None,
+            )
+            session.add(dataset)
+            session.flush()
+            snapshot = self._binding_snapshot(
+                dataset=_DatasetSnapshot(
+                    project_id=dataset.project_id,
+                    dataset_id=dataset.id,
+                    data_version=dataset.data_version,
+                    schema_version=dataset.schema_version,
+                ),
+                content_batch_id=content_batch_id,
+                content_batch=content_batch,
+                registration=validated_registration,
+            )
+            binding = RecordBatchBinding(
+                id=str(uuid4()),
+                **asdict(snapshot),
+                created_by_user_id=verified_context.actor_user_id,
+                created_at=timestamp,
+            )
+            session.add(binding)
+            dataset.status = DatasetStatus.FROZEN.value
+            dataset.frozen_at = timestamp
+            session.flush()
+            return self._record(binding)
+
     def list_dataset_batches(
         self,
         principal: AuthPrincipal,

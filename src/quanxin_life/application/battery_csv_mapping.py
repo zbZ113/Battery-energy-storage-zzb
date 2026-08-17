@@ -20,7 +20,18 @@ from quanxin_life.application.ingestion import CANONICAL_CYCLE_CSV_FIELDS
 from quanxin_life.core.schemas import ContractModel
 
 NonBlank = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+MetadataIdentifier = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+]
+MetadataDescription = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=1_000),
+]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+BATTERY_CSV_METADATA_ENVELOPE_V1 = "# quanxin_life:battery_csv_metadata:v1"
+_BATTERY_CSV_METADATA_ENVELOPE_PREFIX = b"# quanxin_life:battery_csv_metadata:"
+_SELF_DESCRIBED_SUPPORTED_CUTOFFS = (20, 50, 100, 150)
 BatteryCsvMappingIssueCode = Literal[
     "AMBIGUOUS_CONVERSION",
     "AMBIGUOUS_DEFAULT",
@@ -204,6 +215,22 @@ class BatteryCsvColumnEvidence(ContractModel):
     default_value: str | None
 
 
+class BatteryCsvFileMetadata(ContractModel):
+    """Strict cell-level metadata carried by a self-describing CSV envelope."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["battery-csv-metadata-v1"]
+    cell_id: MetadataIdentifier
+    chemistry: MetadataIdentifier
+    nominal_capacity_ah: float = Field(gt=0, allow_inf_nan=False)
+    reference_capacity_ah: float = Field(gt=0, allow_inf_nan=False)
+    cell_format: Literal["cylindrical", "prismatic"]
+    eol_threshold: float | None = Field(default=None, gt=0, lt=1, allow_inf_nan=False)
+    protocol_id: MetadataIdentifier | None = None
+    protocol_description: MetadataDescription | None = None
+
+
 class BatteryCsvMappingResult(ContractModel):
     """Canonical bytes and hashes produced by one deterministic mapping."""
 
@@ -217,6 +244,7 @@ class BatteryCsvMappingResult(ContractModel):
     profile_sha256: Sha256
     row_count: int = Field(gt=0)
     column_evidence: tuple[BatteryCsvColumnEvidence, ...]
+    metadata: BatteryCsvFileMetadata | None = None
 
 
 class BatteryCsvMappingConflictEvidence(ContractModel):
@@ -250,6 +278,7 @@ class BatteryCsvMappingSuccessEvidence(ContractModel):
     profile_version: NonBlank
     profile_sha256: Sha256
     column_evidence: tuple[BatteryCsvColumnEvidence, ...]
+    battery_csv_metadata: BatteryCsvFileMetadata | None = None
 
 
 class BatteryCsvMappingRejectionEvidence(ContractModel):
@@ -262,6 +291,7 @@ class BatteryCsvMappingRejectionEvidence(ContractModel):
         "AMBIGUOUS_LAYOUT",
         "INVALID_HEADER",
         "INVALID_MAPPING_INPUT",
+        "INVALID_METADATA",
         "UNREVIEWED_LAYOUT",
         "VALUE_VALIDATION_FAILED",
     ]
@@ -306,6 +336,7 @@ class BatteryCsvMappingError(ValueError):
         "AMBIGUOUS_LAYOUT": "source CSV layout matches multiple reviewed profiles",
         "INVALID_HEADER": "source CSV header is invalid",
         "INVALID_MAPPING_INPUT": "source CSV mapping input is invalid",
+        "INVALID_METADATA": "source CSV metadata is invalid or inconsistent",
         "UNREVIEWED_LAYOUT": "source CSV layout is not reviewed",
         "VALUE_VALIDATION_FAILED": "source CSV value validation failed",
     }
@@ -316,6 +347,7 @@ class BatteryCsvMappingError(ValueError):
             "AMBIGUOUS_LAYOUT",
             "INVALID_HEADER",
             "INVALID_MAPPING_INPUT",
+            "INVALID_METADATA",
             "UNREVIEWED_LAYOUT",
             "VALUE_VALIDATION_FAILED",
         ],
@@ -341,25 +373,30 @@ class ReviewedBatteryCsvNormalizer:
 
     def normalize(self, payload: bytes) -> BatteryCsvMappingResult:
         try:
-            header = _source_header(payload)
+            metadata, csv_payload = _extract_battery_csv_metadata(payload)
+        except (TypeError, ValueError) as exc:
+            raise BatteryCsvMappingError("INVALID_METADATA") from exc
+        try:
+            header = _source_header(csv_payload)
         except (TypeError, ValueError) as exc:
             raise BatteryCsvMappingError("INVALID_HEADER") from exc
         if tuple(header) == CANONICAL_CYCLE_CSV_FIELDS:
-            mapped = self._map(payload, profile=_canonical_profile(), header=header)
-            return BatteryCsvMappingResult(
-                canonical_payload=payload,
-                raw_sha256=mapped.raw_sha256,
-                canonical_sha256=mapped.raw_sha256,
-                profile_id=mapped.profile_id,
-                profile_version=mapped.profile_version,
-                profile_sha256=mapped.profile_sha256,
-                row_count=mapped.row_count,
-                column_evidence=mapped.column_evidence,
+            mapped = self._map(csv_payload, profile=_canonical_profile(), header=header)
+            return _finalize_mapping_result(
+                mapped,
+                raw_payload=payload,
+                canonical_payload=csv_payload,
+                metadata=metadata,
             )
         if len(header) == len(CANONICAL_CYCLE_CSV_FIELDS) and set(header) == set(
             CANONICAL_CYCLE_CSV_FIELDS
         ):
-            return self._map(payload, profile=_canonical_profile(), header=header)
+            mapped = self._map(csv_payload, profile=_canonical_profile(), header=header)
+            return _finalize_mapping_result(
+                mapped,
+                raw_payload=payload,
+                metadata=metadata,
+            )
         matches = tuple(
             profile
             for profile in self._profiles
@@ -377,7 +414,12 @@ class ReviewedBatteryCsvNormalizer:
                 "AMBIGUOUS_LAYOUT",
                 details=_ambiguous_layout_details(header, matches),
             )
-        return self._map(payload, profile=matches[0], header=header)
+        mapped = self._map(csv_payload, profile=matches[0], header=header)
+        return _finalize_mapping_result(
+            mapped,
+            raw_payload=payload,
+            metadata=metadata,
+        )
 
     @staticmethod
     def _map(
@@ -562,6 +604,111 @@ def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise ValueError(f"mapping profile JSON contains duplicate key: {key}")
         result[key] = value
     return result
+
+
+def _strict_metadata_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"CSV metadata contains duplicate key: {key}")
+        result[key] = value
+    return result
+
+
+def _extract_battery_csv_metadata(
+    payload: bytes,
+) -> tuple[BatteryCsvFileMetadata | None, bytes]:
+    if not isinstance(payload, bytes) or not payload:
+        return None, payload
+    source = payload[3:] if payload.startswith(b"\xef\xbb\xbf") else payload
+    first_line_end = source.find(b"\n")
+    first_line = (
+        source if first_line_end < 0 else source[:first_line_end]
+    ).removesuffix(b"\r")
+    if first_line != BATTERY_CSV_METADATA_ENVELOPE_V1.encode("ascii"):
+        if first_line.startswith(_BATTERY_CSV_METADATA_ENVELOPE_PREFIX):
+            raise ValueError("CSV metadata envelope version is not supported")
+        return None, payload
+    if first_line_end < 0:
+        raise ValueError("CSV metadata envelope is incomplete")
+    remaining = source[first_line_end + 1 :]
+    metadata_line_end = remaining.find(b"\n")
+    if metadata_line_end < 0:
+        raise ValueError("CSV metadata envelope has no CSV body")
+    metadata_bytes = remaining[:metadata_line_end].removesuffix(b"\r")
+    csv_payload = remaining[metadata_line_end + 1 :]
+    if not metadata_bytes or metadata_bytes != metadata_bytes.strip() or not csv_payload:
+        raise ValueError("CSV metadata envelope is invalid")
+    try:
+        metadata_text = metadata_bytes.decode("utf-8")
+        metadata_payload = json.loads(
+            metadata_text,
+            object_pairs_hook=_strict_metadata_object,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"CSV metadata contains invalid constant: {value}")
+            ),
+        )
+        metadata = BatteryCsvFileMetadata.model_validate(metadata_payload)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("CSV metadata must be strict UTF-8 JSON") from exc
+    return metadata, csv_payload
+
+
+def _finalize_mapping_result(
+    mapped: BatteryCsvMappingResult,
+    *,
+    raw_payload: bytes,
+    metadata: BatteryCsvFileMetadata | None,
+    canonical_payload: bytes | None = None,
+) -> BatteryCsvMappingResult:
+    if metadata is not None:
+        rows = csv.DictReader(io.StringIO(mapped.canonical_payload.decode("utf-8")))
+        cell_ids = {row["cell_id"] for row in rows}
+        if cell_ids != {metadata.cell_id}:
+            raise BatteryCsvMappingError("INVALID_METADATA")
+    final_payload = canonical_payload or mapped.canonical_payload
+    final_row_count = mapped.row_count
+    if metadata is not None:
+        final_payload, final_row_count = _truncate_self_described_batch(final_payload)
+    return BatteryCsvMappingResult(
+        canonical_payload=final_payload,
+        raw_sha256=hashlib.sha256(raw_payload).hexdigest(),
+        canonical_sha256=hashlib.sha256(final_payload).hexdigest(),
+        profile_id=mapped.profile_id,
+        profile_version=mapped.profile_version,
+        profile_sha256=mapped.profile_sha256,
+        row_count=final_row_count,
+        column_evidence=mapped.column_evidence,
+        metadata=metadata,
+    )
+
+
+def _truncate_self_described_batch(payload: bytes) -> tuple[bytes, int]:
+    text = payload.decode("utf-8")
+    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    header = next(reader)
+    cycle_index = header.index("cycle_index")
+    valid_index = header.index("valid")
+    rows = list(reader)
+    valid_cycles = {
+        int(row[cycle_index])
+        for row in rows
+        if row[valid_index].strip().lower() in {"true", "1"}
+    }
+    eligible = tuple(
+        cutoff
+        for cutoff in _SELF_DESCRIBED_SUPPORTED_CUTOFFS
+        if valid_cycles and cutoff <= max(valid_cycles)
+    )
+    if not eligible:
+        return payload, len(rows)
+    cutoff_cycle = eligible[-1]
+    selected = [row for row in rows if int(row[cycle_index]) <= cutoff_cycle]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(header)
+    writer.writerows(selected)
+    return output.getvalue().encode("utf-8"), len(selected)
 
 
 def _source_header(payload: bytes) -> tuple[str, ...]:
@@ -886,8 +1033,10 @@ def map_battery_csv(
 
 
 __all__ = [
+    "BATTERY_CSV_METADATA_ENVELOPE_V1",
     "BatteryCsvColumnEvidence",
     "BatteryCsvColumnMapping",
+    "BatteryCsvFileMetadata",
     "BatteryCsvMappingConflictEvidence",
     "BatteryCsvMappingError",
     "BatteryCsvMappingProfile",

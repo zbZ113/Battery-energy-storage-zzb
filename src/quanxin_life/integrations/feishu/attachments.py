@@ -9,6 +9,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import PurePath
 
+from quanxin_life.application.battery_csv_mapping import (
+    BATTERY_CSV_METADATA_ENVELOPE_V1,
+)
 from quanxin_life.application.ingestion import (
     CANONICAL_CYCLE_CSV_FIELDS,
     MAX_CANONICAL_CSV_BYTES,
@@ -114,7 +117,7 @@ class FeishuAttachmentPolicy:
         except UnicodeDecodeError as exc:
             raise FeishuAttachmentError("attachment must be UTF-8 canonical CSV") from exc
         _verify_csv_envelope_shape(
-            text,
+            _shape_validation_csv_text(text),
             max_rows=self._max_rows,
             max_cell_chars=self._max_cell_chars,
         )
@@ -233,6 +236,15 @@ def _verify_csv_envelope_shape(
         raise FeishuAttachmentError("attachment CSV structure is invalid") from exc
     if row_count == 0:
         raise FeishuAttachmentError("attachment CSV has no data rows")
+
+
+def _shape_validation_csv_text(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != BATTERY_CSV_METADATA_ENVELOPE_V1:
+        return text
+    if len(lines) < 3:
+        raise FeishuAttachmentError("self-described CSV envelope is incomplete")
+    return "".join(lines[2:])
 
 
 def _looks_like_spreadsheet_formula(value: str) -> bool:

@@ -158,6 +158,7 @@ _TASK_PRESENTATION = {
 }
 _REASON_PRESENTATION = {
     "MODEL_ROUTE_NOT_ACTIVATED": "模型路线尚未激活",
+    "PROJECT_MODEL_DOMAIN_NOT_SUPPORTED": "当前证据不足, 无法形成可靠寿命结论",
     "PROJECT_RECORD_BATCH_NOT_FROZEN": "项目数据批次尚未冻结",
     "DATA_REGISTRATION_REJECTED": "数据登记未通过",
     "ANALYSIS_TASK_NOT_SUPPORTED": "当前分析类型暂不支持",
@@ -319,6 +320,7 @@ class AuditedCardBuilder:
             return _build_cycle_life_result_card(
                 result=result,
                 authorization=authorization,
+                image_key=image_key,
             )
         if (
             result.tool_name == "predict_soh_trajectory"
@@ -401,6 +403,7 @@ def _build_cycle_life_result_card(
     *,
     result: ToolResult,
     authorization: AuditedResultAuthorization,
+    image_key: str | None,
 ) -> dict[str, Any]:
     mapping = result.model_dump(mode="json")
     cell_id = _resolve_scalar(mapping, "values.artifact.cell_id")
@@ -445,7 +448,18 @@ def _build_cycle_life_result_card(
         authorization.evidence_level.value,
         "受审计证据",
     )
-    elements: list[dict[str, Any]] = [
+    elements: list[dict[str, Any]] = []
+    if image_key is not None:
+        elements.append(
+            {
+                "tag": "img",
+                "img_key": _identifier(image_key, field_name="image_key"),
+                "alt": {"tag": "plain_text", "content": "循环寿命预测摘要"},
+                "mode": "fit_horizontal",
+                "preview": True,
+            }
+        )
+    elements.extend([
         {"tag": "div", "fields": fields},
         _paragraph(
             "**结果说明**\n"
@@ -457,7 +471,7 @@ def _build_cycle_life_result_card(
             "当前结果用于公开 MATR 数据的研究与比赛演示, "
             "不等同于目标工业电芯的现场寿命验证。"
         ),
-    ]
+    ])
     elements.extend(_warning_elements(result.warnings))
     return {
         "config": {"wide_screen_mode": True},

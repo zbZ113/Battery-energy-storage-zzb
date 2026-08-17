@@ -365,6 +365,9 @@ def create_competition_runtime(
                     AilyMcpAssemblyConfig(
                         endpoint_token=integration.aily_mcp.endpoint_token,
                         allowed_source_ips=integration.aily_mcp.allowed_source_ips,
+                        trust_gateway_source_ip=(
+                            integration.aily_mcp.trust_gateway_source_ip
+                        ),
                         allowed_hosts=(
                             urlsplit(
                                 integration.external_https_base_url

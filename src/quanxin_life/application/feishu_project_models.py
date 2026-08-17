@@ -10,7 +10,10 @@ from uuid import UUID
 from sqlalchemy import or_, select
 
 from quanxin_life.api.service import ToolInvocation
-from quanxin_life.application.ingestion import CanonicalCsvBatchRegistration
+from quanxin_life.application.ingestion import (
+    CanonicalCsvBatchRegistration,
+    project_model_registration_rejection_code,
+)
 from quanxin_life.application.invocation_context import (
     ProjectInvocationContextService,
     ProjectInvocationSource,
@@ -85,6 +88,17 @@ class FeishuProjectResultSlotCommitter(Protocol):
     ) -> ToolResult: ...
 
 
+class FeishuProjectBatchProvisioner(Protocol):
+    def provision_frozen_binding(
+        self,
+        context: VerifiedProjectInvocationContext,
+        *,
+        content_batch_id: str,
+        registration: CanonicalCsvBatchRegistration,
+        now: datetime,
+    ) -> object: ...
+
+
 class FeishuProjectRecordBatchResolver:
     """Map reviewed upload identity to one exact FROZEN project batch."""
 
@@ -99,6 +113,7 @@ class FeishuProjectRecordBatchResolver:
         checked = CanonicalCsvBatchRegistration.model_validate(
             registration.model_dump(mode="json")
         )
+        registration_sha256 = sha256_canonical(checked.model_dump(mode="json"))
         with session_scope(self._session_factory) as session:
             rows = tuple(
                 session.scalars(
@@ -113,6 +128,8 @@ class FeishuProjectRecordBatchResolver:
                         Dataset.schema_version == checked.metadata.schema_version,
                         RecordBatchBinding.source_manifest_sha256
                         == checked.metadata.source_sha256,
+                        RecordBatchBinding.registration_sha256
+                        == registration_sha256,
                         RecordBatchBinding.content_dataset_id
                         == checked.metadata.dataset_id,
                         RecordBatchBinding.dataset_schema_version
@@ -247,12 +264,14 @@ class FeishuProjectModelExecutor:
         *,
         context_service: ProjectInvocationContextService,
         batch_resolver: FeishuProjectRecordBatchResolver,
+        batch_provisioner: FeishuProjectBatchProvisioner | None = None,
         project_tool_service: ProjectToolInvocationPort,
         project_ledger: ProjectResultLedger,
         clock: Clock,
     ) -> None:
         self._context_service = context_service
         self._batch_resolver = batch_resolver
+        self._batch_provisioner = batch_provisioner
         self._project_tool_service = project_tool_service
         self._project_ledger = project_ledger
         self._clock = clock
@@ -264,6 +283,13 @@ class FeishuProjectModelExecutor:
         *,
         claim_token: str | None = None,
     ) -> FeishuProjectModelExecution:
+        rejection_code = project_model_registration_rejection_code(registration)
+        if rejection_code is not None:
+            self.provision_registration(job, registration)
+            raise FeishuProjectModelRejected(
+                rejection_code,
+                "uploaded data is outside the reviewed project model domain",
+            )
         if callable(
             getattr(self._project_tool_service, "execute_in_project_unregistered", None)
         ):
@@ -273,6 +299,51 @@ class FeishuProjectModelExecutor:
                 claim_token=claim_token,
             )
         return self._execute_legacy(job, registration)
+
+    def provision_registration(
+        self,
+        job: FeishuAnalysisJobRecord,
+        registration: CanonicalCsvBatchRegistration,
+    ) -> str | None:
+        """Freeze verified upload identity without invoking a numerical model."""
+
+        if self._batch_provisioner is None:
+            return None
+        content_batch_id = getattr(job, "record_batch_id", None)
+        if not isinstance(content_batch_id, str) or not content_batch_id.strip():
+            raise FeishuProjectModelRejected(
+                "PROJECT_RECORD_BATCH_NOT_FROZEN",
+                "verified upload content batch is unavailable",
+            )
+        if not job.chat_id or not job.sender_id:
+            raise FeishuProjectModelRejected(
+                "FEISHU_PROJECT_BINDING_REQUIRED",
+                "Feishu project identity is unavailable",
+            )
+        try:
+            context = self._context_service.resolve_feishu(
+                chat_id=job.chat_id,
+                sender_open_id=job.sender_id,
+            )
+            provisioned = self._batch_provisioner.provision_frozen_binding(
+                context,
+                content_batch_id=content_batch_id,
+                registration=registration,
+                now=self._clock(),
+            )
+            record_batch_id = getattr(provisioned, "record_batch_id", None)
+            if not isinstance(record_batch_id, str) or not record_batch_id.strip():
+                raise ValueError(
+                    "project batch provisioner returned an invalid binding"
+                )
+            return record_batch_id
+        except FeishuProjectModelRejected:
+            raise
+        except (LookupError, RuntimeError, TypeError, ValueError) as exc:
+            raise FeishuProjectModelRejected(
+                "PROJECT_MODEL_EXECUTION_REJECTED",
+                "verified upload project binding could not be provisioned",
+            ) from exc
 
     def _execute_legacy(
         self,
@@ -304,7 +375,11 @@ class FeishuProjectModelExecutor:
                 chat_id=job.chat_id,
                 sender_open_id=job.sender_id,
             )
-            record_batch_id = self._batch_resolver.resolve(context, registration)
+            record_batch_id = self._resolve_record_batch_id(
+                context=context,
+                job=job,
+                registration=registration,
+            )
             prepared = self._project_tool_service.invoke_in_project(
                 ToolInvocation(
                     tool_name=StandardToolName.EXTRACT_EARLY_CYCLE_FEATURES,
@@ -417,7 +492,11 @@ class FeishuProjectModelExecutor:
                 chat_id=job.chat_id or "",
                 sender_open_id=job.sender_id or "",
             )
-            record_batch_id = self._batch_resolver.resolve(context, registration)
+            record_batch_id = self._resolve_record_batch_id(
+                context=context,
+                job=job,
+                registration=registration,
+            )
             execute_port = cast(
                 UnregisteredProjectToolExecutionPort,
                 self._project_tool_service,
@@ -525,6 +604,33 @@ class FeishuProjectModelExecutor:
             report_result=report,
             slots_committed=True,
         )
+
+    def _resolve_record_batch_id(
+        self,
+        *,
+        context: VerifiedProjectInvocationContext,
+        job: FeishuAnalysisJobRecord,
+        registration: CanonicalCsvBatchRegistration,
+    ) -> str:
+        provisioned_id: str | None = None
+        content_batch_id = getattr(job, "record_batch_id", None)
+        if self._batch_provisioner is not None and isinstance(
+            content_batch_id, str
+        ) and content_batch_id.strip():
+            provisioned = self._batch_provisioner.provision_frozen_binding(
+                context,
+                content_batch_id=content_batch_id,
+                registration=registration,
+                now=self._clock(),
+            )
+            candidate = getattr(provisioned, "record_batch_id", None)
+            if not isinstance(candidate, str) or not candidate.strip():
+                raise ValueError("project batch provisioner returned an invalid binding")
+            provisioned_id = candidate
+        resolved_id = self._batch_resolver.resolve(context, registration)
+        if provisioned_id is not None and resolved_id != provisioned_id:
+            raise ValueError("provisioned project batch identity changed")
+        return resolved_id
 
     def _audited_report_input(
         self,

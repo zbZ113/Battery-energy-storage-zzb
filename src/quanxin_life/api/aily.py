@@ -71,6 +71,29 @@ class AilyConnectorConfig(BaseModel):
         return value
 
 
+class AilyAnalysisSourceReference(BaseModel):
+    """Authorized references resolved from one human-readable task label."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_label: str = Field(min_length=1, max_length=420)
+    source_run_id: str = Field(min_length=1, max_length=200)
+    data_batch_id: str = Field(min_length=1, max_length=200)
+    cell_id: str = Field(min_length=1, max_length=200)
+    cutoff_cycle: int = Field(ge=1, le=1_000_000)
+
+    @field_validator("source_run_id", "data_batch_id", "cell_id")
+    @classmethod
+    def references_are_safe(cls, value: str) -> str:
+        return _reference(value, field_name="analysis source reference")
+
+    @model_validator(mode="after")
+    def task_label_matches_resolved_identity(self) -> AilyAnalysisSourceReference:
+        if self.task_label != f"{self.cell_id} | cutoff-{self.cutoff_cycle}":
+            raise ValueError("analysis task label does not match resolved identity")
+        return self
+
+
 class AilyCreateAnalysisTaskRequest(BaseModel):
     """Reference-only request; battery values remain in registered data batches."""
 
@@ -518,6 +541,7 @@ def _reference(value: object, *, field_name: str) -> str:
 
 
 __all__ = [
+    "AilyAnalysisSourceReference",
     "AilyAnalysisTaskGateway",
     "AilyCompareScenarioContextRequest",
     "AilyConnectorConfig",

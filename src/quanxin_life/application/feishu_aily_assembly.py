@@ -8,9 +8,12 @@ the same operator-owned settings.
 
 from __future__ import annotations
 
+import csv
+import io
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlsplit
@@ -29,7 +32,9 @@ from quanxin_life.application.aily_mcp_authorization import (
     ProjectBoundAilyMcpCallerAuthorizer,
 )
 from quanxin_life.application.battery_csv_mapping import (
+    BatteryCsvFileMetadata,
     BatteryCsvMappingProfile,
+    BatteryCsvMappingSuccessEvidence,
     ReviewedBatteryCsvNormalizer,
 )
 from quanxin_life.application.engineering_recommendation_rules import (
@@ -48,12 +53,23 @@ from quanxin_life.application.feishu_recheck_authorization import (
     ProjectBoundRecheckActionAuthorizationVerifier,
 )
 from quanxin_life.application.ingestion import (
+    CANONICAL_CYCLE_CSV_FIELDS,
     CanonicalCsvBatchRegistration,
     FileSystemVerifiedEarlyCycleBatchStore,
 )
 from quanxin_life.application.invocation_context import ProjectInvocationContextService
+from quanxin_life.application.record_batch_bindings import (
+    RecordBatchBindingNotFoundError,
+    RecordBatchBindingService,
+)
 from quanxin_life.audit import ProjectResultLedger, SqlAuditLedger
-from quanxin_life.core import SourceKind, ToolResult
+from quanxin_life.core import (
+    CellMetadata,
+    ProvenanceRecord,
+    SourceKind,
+    ToolResult,
+)
+from quanxin_life.features import EarlyCycleFeatureConfig
 from quanxin_life.infrastructure.feishu_queue import (
     CeleryApplication,
     CeleryFeishuJobQueue,
@@ -173,7 +189,14 @@ class _RegisteredResultResolver(Protocol):
 
 
 class RegisteredFeishuCsvRegistrationResolver:
-    """Resolve only operator-approved canonical CSV bytes by exact SHA-256."""
+    """Prefer reviewed registrations and derive isolated self-described ones."""
+
+    _SUPPORTED_CUTOFFS = (20, 50, 100, 150)
+    # Metadata v1 has no source timestamp; Unix epoch is the stable unknown sentinel.
+    _UNKNOWN_SOURCE_CREATED_AT = datetime(1970, 1, 1, tzinfo=UTC)
+    _SELF_DESCRIBED_DATA_VERSION = "self-described-canonical-v1"
+    _SELF_DESCRIBED_SPLIT_VERSION = "self-described-cell-isolated-v1"
+    _SELF_DESCRIBED_FEATURE_VERSION = "cyclepatch-multichannel-v1"
 
     def __init__(
         self,
@@ -207,22 +230,173 @@ class RegisteredFeishuCsvRegistrationResolver:
         _received_at: datetime,
     ) -> CanonicalCsvBatchRegistration:
         registration = self._registrations.get(attachment.sha256)
-        if registration is None:
-            raise ValueError("canonical CSV payload SHA-256 is not registered")
-        resolved = CanonicalCsvBatchRegistration.model_validate(
-            registration.model_dump(mode="json")
+        if registration is not None:
+            return CanonicalCsvBatchRegistration.model_validate(
+                registration.model_dump(mode="json")
+            )
+        return self._resolve_self_described(attachment)
+
+    def _resolve_self_described(
+        self,
+        attachment: VerifiedFeishuAttachment,
+    ) -> CanonicalCsvBatchRegistration:
+        mapping_evidence = attachment.mapping_evidence
+        if not isinstance(mapping_evidence, dict):
+            raise ValueError(
+                "unregistered canonical CSV requires self-described mapping evidence"
+            )
+        try:
+            metadata = BatteryCsvFileMetadata.model_validate(
+                mapping_evidence["battery_csv_metadata"]
+            )
+            mapping = BatteryCsvMappingSuccessEvidence.model_validate(
+                {
+                    "raw_sha256": mapping_evidence["source_upload_sha256"],
+                    "canonical_sha256": mapping_evidence[
+                        "canonical_payload_sha256"
+                    ],
+                    "profile_id": mapping_evidence["mapping_profile_id"],
+                    "profile_version": mapping_evidence[
+                        "mapping_profile_version"
+                    ],
+                    "profile_sha256": mapping_evidence["mapping_profile_sha256"],
+                    "column_evidence": mapping_evidence[
+                        "column_mapping_evidence"
+                    ],
+                }
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "unregistered canonical CSV self-description is invalid"
+            ) from exc
+        if sha256(attachment.payload).hexdigest() != attachment.sha256:
+            raise ValueError("canonical CSV attachment SHA-256 does not match payload")
+        if mapping.canonical_sha256 != attachment.sha256:
+            raise ValueError("canonical CSV mapping SHA-256 does not match payload")
+        if (
+            attachment.source_sha256 is None
+            or mapping.raw_sha256 != attachment.source_sha256
+        ):
+            raise ValueError("source CSV mapping SHA-256 does not match attachment")
+        if tuple(item.target_field for item in mapping.column_evidence) != (
+            CANONICAL_CYCLE_CSV_FIELDS
+        ):
+            raise ValueError("canonical CSV mapping evidence is incomplete")
+
+        dataset_id, cell_id, max_valid_cycle = self._canonical_identity(
+            attachment.payload
         )
-        mapping_evidence = getattr(attachment, "mapping_evidence", None)
-        if mapping_evidence is None:
-            return resolved
-        metadata_payload = resolved.metadata.model_dump(mode="json")
-        metadata_payload["ingestion_parameters"] = {
-            **resolved.metadata.ingestion_parameters,
-            **mapping_evidence,
+        if cell_id != metadata.cell_id:
+            raise ValueError(
+                "canonical CSV cell_id does not match self-described metadata"
+            )
+        eligible_cutoffs = tuple(
+            cutoff
+            for cutoff in self._SUPPORTED_CUTOFFS
+            if cutoff <= max_valid_cycle
+        )
+        if not eligible_cutoffs:
+            raise ValueError(
+                "self-described CSV requires at least 20 valid observed cycles"
+            )
+        cutoff_cycle = eligible_cutoffs[-1]
+        source_uri = f"feishu://self-described-csv/sha256/{attachment.sha256}"
+        ingestion_parameters = {
+            "source_marker": "SELF_DESCRIBED_FEISHU_CSV",
+            "model_support_status": "UNREVIEWED_SELF_DESCRIBED",
+            "cell_format": metadata.cell_format,
+            "cutoff_cycle": cutoff_cycle,
+            "cutoff_selection": {
+                "policy": "highest_supported_not_above_max_valid_cycle",
+                "max_valid_cycle_index": max_valid_cycle,
+                "supported_cutoff_cycles": list(self._SUPPORTED_CUTOFFS),
+            },
         }
-        payload = resolved.model_dump(mode="json")
-        payload["metadata"] = metadata_payload
-        return CanonicalCsvBatchRegistration.model_validate(payload)
+        return CanonicalCsvBatchRegistration(
+            metadata=CellMetadata(
+                dataset_id=dataset_id,
+                cell_id=metadata.cell_id,
+                chemistry=metadata.chemistry,
+                nominal_capacity_ah=metadata.nominal_capacity_ah,
+                reference_capacity_ah=metadata.reference_capacity_ah,
+                eol_threshold=metadata.eol_threshold or 0.8,
+                protocol_id=metadata.protocol_id,
+                protocol_description=metadata.protocol_description,
+                source_uri=source_uri,
+                source_sha256=attachment.sha256,
+                schema_version="cycle-record-v1",
+                adapter_version="feishu-self-described-csv-v1",
+                ingestion_parameters=ingestion_parameters,
+            ),
+            feature_config=EarlyCycleFeatureConfig(
+                cutoff_cycle=cutoff_cycle,
+                feature_version=self._SELF_DESCRIBED_FEATURE_VERSION,
+            ),
+            data_version=self._SELF_DESCRIBED_DATA_VERSION,
+            split_version=self._SELF_DESCRIBED_SPLIT_VERSION,
+            provenance=(
+                ProvenanceRecord(
+                    source_id=f"self-described-feishu-csv-{attachment.sha256}",
+                    source_kind=SourceKind.OBSERVED,
+                    uri=source_uri,
+                    sha256=attachment.sha256,
+                    description=(
+                        "Observed canonical CSV supplied with validated "
+                        "self-described battery metadata."
+                    ),
+                    created_at=self._UNKNOWN_SOURCE_CREATED_AT,
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _canonical_identity(payload: bytes) -> tuple[str, str, int]:
+        try:
+            text = payload.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError("canonical CSV payload must be UTF-8") from exc
+        reader = csv.DictReader(io.StringIO(text, newline=""), strict=True)
+        if reader.fieldnames is None or tuple(reader.fieldnames) != (
+            CANONICAL_CYCLE_CSV_FIELDS
+        ):
+            raise ValueError(
+                "canonical CSV header does not match the CycleRecord contract"
+            )
+        dataset_ids: set[str] = set()
+        cell_ids: set[str] = set()
+        valid_cycles: set[int] = set()
+        try:
+            for row_number, row in enumerate(reader, start=2):
+                if None in row or any(row[field] is None for field in reader.fieldnames):
+                    raise ValueError(
+                        f"canonical CSV row {row_number} has an invalid column count"
+                    )
+                dataset_ids.add(row["dataset_id"])
+                cell_ids.add(row["cell_id"])
+                valid_value = row["valid"].strip().lower()
+                if valid_value not in {"true", "false", "1", "0"}:
+                    raise ValueError(
+                        f"canonical CSV valid field is invalid at row {row_number}"
+                    )
+                try:
+                    cycle_index = int(row["cycle_index"])
+                except ValueError as exc:
+                    raise ValueError(
+                        f"canonical CSV cycle_index is invalid at row {row_number}"
+                    ) from exc
+                if cycle_index < 0:
+                    raise ValueError("canonical CSV cycle_index must be non-negative")
+                if valid_value in {"true", "1"}:
+                    valid_cycles.add(cycle_index)
+        except csv.Error as exc:
+            raise ValueError("canonical CSV syntax is invalid") from exc
+        if len(dataset_ids) != 1:
+            raise ValueError("self-described CSV requires exactly one dataset_id")
+        if len(cell_ids) != 1:
+            raise ValueError("self-described CSV requires exactly one cell_id")
+        if not valid_cycles:
+            raise ValueError("self-described CSV has no valid observed cycles")
+        return next(iter(dataset_ids)), next(iter(cell_ids)), max(valid_cycles)
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +407,7 @@ class AilyMcpAssemblyConfig:
     allowed_source_ips: tuple[str, ...]
     allowed_hosts: tuple[str, ...]
     identity_bindings: AilyMcpIdentityBindings
+    trust_gateway_source_ip: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity_bindings, AilyMcpIdentityBindings):
@@ -243,6 +418,7 @@ class AilyMcpAssemblyConfig:
             endpoint_token=self.endpoint_token,
             allowed_source_ips=self.allowed_source_ips,
             allowed_hosts=self.allowed_hosts,
+            trust_gateway_source_ip=self.trust_gateway_source_ip,
         )
 
 
@@ -350,7 +526,7 @@ class _RejectingModelRouteAuthorizer:
 
 
 class _RejectingAilyDataIdentityResolver:
-    def resolve_source_job(self, **_: object) -> None:
+    def resolve_source_job(self, **_: object) -> VerifiedEarlyCycleBatch:
         raise ValueError("project-bound Aily data identity is not configured")
 
 
@@ -362,11 +538,13 @@ class _ProjectBoundAilyDataIdentityResolver:
         *,
         job_store: SqlAlchemyFeishuJobStore,
         batch_store: FileSystemVerifiedEarlyCycleBatchStore,
+        record_batch_service: RecordBatchBindingService,
         context_service: ProjectInvocationContextService,
         batch_resolver: FeishuProjectRecordBatchResolver,
     ) -> None:
         self._job_store = job_store
         self._batch_store = batch_store
+        self._record_batch_service = record_batch_service
         self._context_service = context_service
         self._batch_resolver = batch_resolver
 
@@ -375,7 +553,7 @@ class _ProjectBoundAilyDataIdentityResolver:
         *,
         source_run_id: str,
         data_batch_id: str,
-    ) -> None:
+    ) -> VerifiedEarlyCycleBatch:
         try:
             source = self._job_store.get(source_run_id)
             if (
@@ -396,23 +574,39 @@ class _ProjectBoundAilyDataIdentityResolver:
                 chat_id=source.chat_id,
                 sender_open_id=source.sender_id,
             )
-            batch = self._batch_store.resolve_verified_early_cycle_batch(
-                data_batch_id
-            )
+            try:
+                batch = self._record_batch_service.resolve_verified_early_cycle_batch(
+                    context,
+                    data_batch_id,
+                )
+                project_batch_id = data_batch_id
+            except RecordBatchBindingNotFoundError:
+                batch = self._batch_store.resolve_verified_early_cycle_batch(
+                    data_batch_id
+                )
+                registration = _canonical_batch_registration(batch)
+                project_batch_id = self._batch_resolver.resolve(
+                    context,
+                    registration,
+                )
+                project_batch = (
+                    self._record_batch_service.resolve_verified_early_cycle_batch(
+                        context,
+                        project_batch_id,
+                    )
+                )
+                if _canonical_batch_registration(project_batch) != registration:
+                    raise ValueError("Aily project batch content changed") from None
             canonical_sha256 = _source_canonical_sha256(source)
             if (
                 batch.metadata.cell_id != source.cell_reference
                 or batch.metadata.source_sha256 != canonical_sha256
             ):
                 raise ValueError("Aily source upload data identity changed")
-            registration = CanonicalCsvBatchRegistration(
-                metadata=batch.metadata,
-                feature_config=batch.feature_config,
-                data_version=batch.data_version,
-                split_version=batch.split_version,
-                provenance=batch.provenance,
-            )
-            self._batch_resolver.resolve(context, registration)
+            registration = _canonical_batch_registration(batch)
+            if self._batch_resolver.resolve(context, registration) != project_batch_id:
+                raise ValueError("Aily project batch identity changed")
+            return batch
         except (KeyError, LookupError, RuntimeError, TypeError, ValueError) as exc:
             raise ValueError("Aily data identity is not authorized") from exc
 
@@ -459,6 +653,18 @@ def _source_canonical_sha256(source: FeishuAnalysisJobRecord) -> str:
     if mapped_raw_sha256 != raw_sha256 or not isinstance(canonical_sha256, str):
         raise ValueError("Aily source mapping evidence changed")
     return canonical_sha256
+
+
+def _canonical_batch_registration(
+    batch: VerifiedEarlyCycleBatch,
+) -> CanonicalCsvBatchRegistration:
+    return CanonicalCsvBatchRegistration(
+        metadata=batch.metadata,
+        feature_config=batch.feature_config,
+        data_version=batch.data_version,
+        split_version=batch.split_version,
+        provenance=batch.provenance,
+    )
 
 
 class _ScenarioInputBinder:
@@ -520,6 +726,11 @@ def create_feishu_aily_components(
                 "explicit Aily data identity resolver conflicts with project runtime"
             )
         project_batch_resolver = FeishuProjectRecordBatchResolver(session_factory)
+        project_record_batch_service = RecordBatchBindingService(
+            session_factory,
+            batch_store,
+            context_validator=project_model_dependencies.context_service,
+        )
         result_resolver = FeishuProjectResultResolver(
             session_factory=session_factory,
             global_resolver=audit_ledger,
@@ -529,6 +740,7 @@ def create_feishu_aily_components(
         project_model_executor = FeishuProjectModelExecutor(
             context_service=project_model_dependencies.context_service,
             batch_resolver=project_batch_resolver,
+            batch_provisioner=project_record_batch_service,
             project_tool_service=project_model_dependencies.project_tool_service,
             project_ledger=project_model_dependencies.project_ledger,
             clock=now,
@@ -547,6 +759,7 @@ def create_feishu_aily_components(
         data_identity_resolver = _ProjectBoundAilyDataIdentityResolver(
             job_store=job_store,
             batch_store=batch_store,
+            record_batch_service=project_record_batch_service,
             context_service=project_model_dependencies.context_service,
             batch_resolver=project_batch_resolver,
         )
@@ -604,11 +817,14 @@ def create_feishu_aily_components(
         clock=now,
         recommendation_rulesets=recommendation_rulesets,
     )
+    reviewed_reference_use_authorizer = scenario_reference_use_authorizer
+    if reviewed_reference_use_authorizer is None:
+        reviewed_reference_use_authorizer = default_scenarios
     scenario_gateway = SqlAlchemyAilyScenarioContextGateway(
         context_store=scenario_context_store,
         batch_store=batch_store,
         data_identity_resolver=data_identity_resolver,
-        reference_use_authorizer=scenario_reference_use_authorizer,
+        reference_use_authorizer=reviewed_reference_use_authorizer,
         clock=now,
     )
     aily_task_gateway = SqlAlchemyAilyAnalysisTaskGateway(
@@ -741,9 +957,9 @@ def create_feishu_aily_components(
         csv_normalizer=csv_normalizer,
         batch_store=batch_store,
         registration_resolver=resolved_registration,
-        analysis_input_factory=lambda _job, batch: _validation_input(
+        analysis_input_factory=lambda job, batch: _validation_input(
             batch,
-            validated_at=_utc(now()),
+            validated_at=_utc(job.event_time),
         ),
         scenario_input_resolver=scenario_context_store,
         workflow=workflow,
@@ -784,6 +1000,9 @@ def create_feishu_aily_components(
                 endpoint_token=config.aily_mcp.endpoint_token,
                 allowed_source_ips=config.aily_mcp.allowed_source_ips,
                 allowed_hosts=config.aily_mcp.allowed_hosts,
+                trust_gateway_source_ip=(
+                    config.aily_mcp.trust_gateway_source_ip
+                ),
             ),
             gateway=aily_task_gateway,
             scenario_context_gateway=scenario_gateway,
@@ -794,6 +1013,7 @@ def create_feishu_aily_components(
                 job_store=job_store,
                 context_service=project_model_dependencies.context_service,
                 identity_bindings=config.aily_mcp.identity_bindings,
+                result_resolver=result_resolver,
             ),
             recheck_action_gateway=recheck_action_gateway,
         )

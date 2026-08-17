@@ -5,6 +5,7 @@ services:
       QUANXIN_AILY_MCP_ENDPOINT_TOKEN_FILE: /run/secrets/aily_mcp_endpoint_token
       QUANXIN_AILY_MCP_IDENTITY_BINDINGS_FILE: /srv/quanxin/config/aily-mcp-identity-bindings.json
       QUANXIN_AILY_MCP_ALLOWED_SOURCE_IPS: ${AILY_MCP_ALLOWED_SOURCE_IPS}
+      QUANXIN_AILY_MCP_TRUST_GATEWAY_SOURCE_IP: ${AILY_MCP_TRUST_GATEWAY_SOURCE_IP:-false}
     secrets:
       - aily_mcp_endpoint_token
 
