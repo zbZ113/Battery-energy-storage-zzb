@@ -4,7 +4,7 @@ import "./globals.css";
 import { ApiConfigurationGuard } from "@/components/api-configuration-guard";
 
 export const metadata = {
-  title: "泉芯智寿｜可信电芯智能诊断",
+  title: "Hiro | 可信电芯智能诊断",
   description: "面向储能电芯寿命诊断的受约束多智能体平台",
 };
 

@@ -17,7 +17,7 @@ def _parser() -> argparse.ArgumentParser:
         choices=tuple(transport.value for transport in McpTransport),
         default=McpTransport.STDIO.value,
     )
-    parser.add_argument("--server-name", default="Quanxin Life Tools")
+    parser.add_argument("--server-name", default="Hiro Tools")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--streamable-http-path", default="/mcp")

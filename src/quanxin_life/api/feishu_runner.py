@@ -69,7 +69,7 @@ def create_feishu_callback_app(
         now_factory=now_factory,
     )
     app = FastAPI(
-        title="Quanxin Life Feishu Callback Runner",
+        title="Hiro Feishu Callback Runner",
         version="phase1-v1",
         docs_url=None,
         redoc_url=None,

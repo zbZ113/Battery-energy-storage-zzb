@@ -1,4 +1,4 @@
-"""Shared contracts for the Quanxin Life platform."""
+"""Shared contracts for the Hiro platform."""
 
 from quanxin_life.core.enums import Decision, EvidenceLevel, SourceKind
 from quanxin_life.core.hashing import sha256_canonical

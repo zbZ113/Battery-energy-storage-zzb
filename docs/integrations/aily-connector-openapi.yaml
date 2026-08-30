@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Quanxin Life Aily Connector
+  title: Hiro Aily Connector
   version: project-bound-analysis-v2
   description: >-
     Reference-only facade over project-bound durable analysis jobs, audited

@@ -951,7 +951,7 @@ def _environment(device: torch.device) -> dict[str, Any]:
 
 def _model_card(*, context: CheckpointContext, metrics: dict[str, Any]) -> str:
     return (
-        "# 泉芯智寿模型卡\n\n"
+        "# Hiro 模型卡\n\n"
         f"- 数据集: {context.dataset_id}\n"
         f"- 目标: {context.target.value}\n"
         f"- 模型: {context.model_name}\n"

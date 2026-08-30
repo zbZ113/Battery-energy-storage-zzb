@@ -4,7 +4,7 @@
 
 本协议将用户从 MATR 官方项目下载的 MATLAB v7.3/HDF5 批次转换为逐电芯、内容寻址的 Parquet 与 JSON 制品，用于 20/50/100/150 循环早期寿命实验。原始 `.mat` 保持只读且不进入 Git；公开实验室电芯不得表述为企业工业电芯。
 
-原始文件由 [matr_2018_04_12_batch_v1.json](../configs/data_manifests/matr_2018_04_12_batch_v1.json) 固定：
+原始文件由 [matr_2018_04_12_batch_v1.json](../../configs/data_manifests/matr_2018_04_12_batch_v1.json) 固定：
 
 - 文件：`data/2018-04-12_batchdata_updated_struct_errorcorrect.mat`
 - 大小：3,236,690,412 bytes

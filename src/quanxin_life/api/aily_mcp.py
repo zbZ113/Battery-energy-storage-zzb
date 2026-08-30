@@ -179,7 +179,7 @@ def create_aily_mcp_adapter(
     """Create one Aily-only MCP server without exposing the generic registry."""
 
     server: FastMCP[Any] = FastMCP(
-        "泉芯智寿电芯寿命研发助手",
+        "Hiro 电芯寿命研发助手",
         instructions=(
             "只编排受审计工具并解释工具结果。不得生成、补写或修改 SOH、RUL、"
             "寿命、置信区间或经营指标。CyclePatch 个体预测与 BLAST 参考工况推演"

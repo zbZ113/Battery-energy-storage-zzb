@@ -86,7 +86,7 @@ def create_fastapi_app(
         raise FastApiDependencyUnavailable(message) from exc
 
     app_options: dict[str, object] = {
-        "title": "泉芯智寿 Tool API",
+        "title": "Hiro Tool API",
         "version": "v1",
     }
     if aily_mcp_adapter is not None:

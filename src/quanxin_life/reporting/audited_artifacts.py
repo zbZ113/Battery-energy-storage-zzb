@@ -260,7 +260,7 @@ def _render_docx(markdown: str, *, result: ToolResult) -> bytes:
     heading.paragraph_format.space_after = Pt(8)
 
     header = section.header.paragraphs[0]
-    header.text = "泉芯智寿 | Audited Report"
+    header.text = "Hiro | Audited Report"
     header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     for run in header.runs:
         run.font.name = "Calibri"
@@ -292,7 +292,7 @@ def _render_docx(markdown: str, *, result: ToolResult) -> bytes:
     properties = document.core_properties
     properties.title = _markdown_blocks(markdown)[0][1]
     properties.subject = "Ledger-bound audited battery report"
-    properties.author = "泉芯智寿"
+    properties.author = "Hiro"
     properties.identifier = result.result_id
     properties.created = result.created_at.replace(tzinfo=None)
     properties.modified = result.created_at.replace(tzinfo=None)
@@ -361,7 +361,7 @@ def _render_pdf(
         topMargin=inch,
         bottomMargin=inch,
         title=_markdown_blocks(markdown)[0][1],
-        author="泉芯智寿",
+        author="Hiro",
         subject="Ledger-bound audited battery report",
     )
     styles = {

@@ -17,7 +17,7 @@ from typing import Any
 
 CUTOFFS = (20, 50, 100, 150)
 REGISTRY_ID = "c31f62e68faa66e56b16d21ebdd3067d5dea0c8408bb3ad6baa73e05a42824be"
-PROJECT_NAME = "泉芯智寿本地验证"
+PROJECT_NAME = "Hiro 本地验证"
 DATASET_NAME = "MATR_b3c34 本地验证样例"
 DATASET_SCHEMA_VERSION = "cycle-record-v1"
 

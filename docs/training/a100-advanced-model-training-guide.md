@@ -1,4 +1,4 @@
-# 泉芯智寿高级模型 A100 训练操作手册
+# Hiro 高级模型 A100 训练操作手册
 
 本手册用于现有服务器 `/data/abd/z/AI-B` 和 Conda 环境 `quanxin-a100`。三批 MATR 原始数据、处理后的 Parquet、监督制品和经典模型结果继续原位复用，不重新上传约 9 GB 数据，不重建环境，也不重跑旧 Dummy、Variance、CPMLP 或经典 Hybrid 实验。
 

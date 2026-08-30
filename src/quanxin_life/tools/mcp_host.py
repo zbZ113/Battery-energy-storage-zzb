@@ -41,7 +41,7 @@ class McpTransport(StrEnum):
 class McpHostConfig(ContractModel):
     """Dependency-free configuration for one optional MCP host."""
 
-    server_name: str = Field(default="Quanxin Life Tools", min_length=1)
+    server_name: str = Field(default="Hiro Tools", min_length=1)
     transport: McpTransport = McpTransport.STDIO
     host: str = Field(default="127.0.0.1", min_length=1)
     port: int = Field(default=8001, ge=1, le=65535)

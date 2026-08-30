@@ -153,7 +153,7 @@ a\sqrt{t}
 权威实现：
 
 - [`models/hybrid_degradation.py`](../../src/quanxin_life/models/hybrid_degradation.py)
-- [Hybrid 退化协议](../hybrid-degradation-protocol-v1.md)
+- [Hybrid 退化协议](../reference/hybrid-degradation-protocol-v1.md)
 
 ## 6. SOH：HybridPatch-v2
 
@@ -248,8 +248,8 @@ project、task、cutoff、route role、candidate、artifact、数据版本、spl
 权威实现：
 
 - [`application/advanced_split_conformal.py`](../../src/quanxin_life/application/advanced_split_conformal.py)
-- [Conformal 校准工具协议](../conformal-calibration-tool-protocol-v1.md)
-- [区间签发协议](../conformal-interval-issuance-protocol-v1.md)
+- [Conformal 校准工具协议](../reference/conformal-calibration-tool-protocol-v1.md)
+- [区间签发协议](../reference/conformal-interval-issuance-protocol-v1.md)
 
 Normalized Conformal 已作为实验候选评估，但在当前五种子分歧尺度下未稳定改善
 覆盖—宽度权衡，因此不能自动替换 Advanced 主线的 Split 基线。

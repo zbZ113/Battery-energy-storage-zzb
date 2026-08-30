@@ -64,7 +64,7 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly code: string,
   ) {
-    super("泉芯智寿服务暂时无法完成请求");
+    super("Hiro 服务暂时无法完成请求");
     this.name = "ApiError";
   }
 }

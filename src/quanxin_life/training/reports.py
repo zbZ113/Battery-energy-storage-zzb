@@ -68,7 +68,7 @@ def _render_markdown(aggregate: dict[str, Any], rows: list[dict[str, Any]]) -> s
         else "本次运行不完整或属于 Smoke, 不得作为正式性能结论。"
     )
     lines = [
-        "# 泉芯智寿 MATR 训练与评价汇总",
+        "# Hiro MATR 训练与评价汇总",
         "",
         f"- 运行模式: `{aggregate.get('mode')}`",
         f"- 运行记录数: {aggregate.get('run_count')}",

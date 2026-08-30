@@ -11,9 +11,9 @@ export default function LoginPage() {
   return (
     <main className="login-page">
       <section className="login-story">
-        <div className="story-brand"><BatteryCharging aria-hidden="true" /><span>泉芯智寿</span></div>
+        <div className="story-brand"><BatteryCharging aria-hidden="true" /><span>Hiro</span></div>
         <div>
-          <p className="eyebrow">QUANXIN LIFE INTELLIGENCE</p>
+          <p className="eyebrow">HIRO BATTERY INTELLIGENCE</p>
           <h1>让每一次寿命判断，<br />都有证据可循。</h1>
           <p className="story-lead">面向储能电芯的可信多智能体诊断平台。Agent负责协同，工程数值始终由受审计工具签发。</p>
         </div>

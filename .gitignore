@@ -60,9 +60,8 @@ Thumbs.db
 /output/playwright/option-b-workspace-390-menu.png
 /output/playwright/option-b-workspace-390.png
 
-# Local research mirror. Upstream repositories, papers, and archives are
-# intentionally kept outside this repository's Git history. The reproducible
-# catalog, downloader, and study notes remain tracked.
+# Local research mirrors and downloaded papers are reference material, not
+# product source. Keep them outside this repository's Git history.
 /research/upstream/
 /research/papers/
 /research/archives/

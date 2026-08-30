@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Immutable release tag, for example 2026.07.28-1
+        description: Immutable release tag, for example 2026.08.02-1
         required: true
         type: string
       public_origin:

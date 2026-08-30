@@ -1,6 +1,6 @@
 # Aily MCP HTTPStreaming 接入
 
-本文档描述新版“豆包工作伙伴 / Aily 工作助手”如何通过 MCP HTTPStreaming 调用泉芯智寿现有的受审计飞书业务链。旧版 `/v1/aily/*` Bearer API 保留，但新版工作助手应配置本文的 MCP URL。
+本文档描述新版“豆包工作伙伴 / Aily 工作助手”如何通过 MCP HTTPStreaming 调用 Hiro 现有的受审计飞书业务链。旧版 `/v1/aily/*` Bearer API 保留，但新版工作助手应配置本文的 MCP URL。
 
 ## 安全边界
 

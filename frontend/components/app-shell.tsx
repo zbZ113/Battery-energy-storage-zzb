@@ -42,7 +42,7 @@ export function AppShell({
       <header className="app-header">
         <Link className="brand" href="/projects">
           <span className="brand-mark"><BatteryCharging aria-hidden="true" /></span>
-          <span><strong>泉芯智寿</strong><small>可信电芯智能诊断</small></span>
+          <span><strong>Hiro</strong><small>可信电芯智能诊断</small></span>
         </Link>
         <button
           aria-controls="main-navigation"
