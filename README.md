@@ -12,9 +12,6 @@ Hiro 将早期循环数据、深度学习模型、物理参考情景和飞书协
 
 > LLM 只负责理解、编排和解释。SOH、RUL、区间、阈值比较和工况寿命等业务数值只能来自版本化数值工具生成的有效 `ToolResult`。
 
-<p align="center">
-  <img src="docs/assets/hiro/aily-mcp-service.png" alt="Hiro Aily MCP 服务界面" width="760">
-</p>
 
 ## 核心能力
 
@@ -113,12 +110,7 @@ docker compose --env-file "$RuntimeRoot\compose\local.env" `
 
 Hiro 已在目标飞书租户完成 CSV 回调、RUL、有限时域 SOH、25 摄氏度/35 摄氏度参考工况、受审卡片、曲线、报告和 Bitable 交付。Aily 通过受保护的 MCP HTTPStreaming 端点按“电芯 ID | cutoff-N”解析用户获授权的任务，不要求用户填写内部 UUID。
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/assets/hiro/aily-mcp-service.png" alt="Aily MCP 服务安装"></td>
-    <td width="50%"><img src="docs/assets/hiro/aily-system-prompt.png" alt="Aily 受约束系统提示词"></td>
-  </tr>
-</table>
+
 
 接入说明：
 
