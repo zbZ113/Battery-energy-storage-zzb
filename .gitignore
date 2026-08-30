@@ -10,6 +10,7 @@ __pycache__/
 .test-tmp-*/
 .ruff_cache/
 .venv/
+/tests/
 build/
 dist/
 node_modules/
@@ -23,8 +24,8 @@ data/cache/
 /data/2018-04-12_batchdata_updated_struct_errorcorrect.mat
 /data/2017-05-12_batchdata_updated_struct_errorcorrect.mat
 /data/2017-06-30_batchdata_updated_struct_errorcorrect.mat
-# Downloaded HUST pickle archives are raw, untrusted input.  They must never
-# be deserialized or committed; adapters may only audit their manifest/hash.
+# Historical HUST pickle archives are raw, untrusted input. They must never
+# be deserialized or committed, even though HUST support is no longer shipped.
 data/HUST/
 # Downloaded public study payloads are not source code.  Their official URI,
 # license and SHA-256 belong in manifests; DVC/object storage can manage them

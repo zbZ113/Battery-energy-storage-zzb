@@ -3,7 +3,7 @@
 ## 范围
 
 第一阶段把飞书和 Aily 接到现有 `ToolRegistry`、Agent、审计账本、RecordBatch、
-模型路由与报告链。它不训练模型，不修改 PBT/MAGNet 任务，不激活任何
+模型路由与报告链。它不训练模型，不激活任何
 `CONDITIONAL` 或 `NOT_ACTIVATED` 路由，也不恢复独立 Web 前端开发。
 
 上传格式只启用当前数据层已经完整支持的 canonical CSV。Parquet、XLSX 和 ZIP
@@ -32,7 +32,7 @@ Feishu callback / Aily connector
 | `validate_battery_data` | `VALIDATE_BATTERY_DATA` | 可用 |
 | `predict_cycle_life` | `PREDICT_CYCLE_LIFE` | 仅服务器端已激活路由可用 |
 | `predict_soh_trajectory` | `PREDICT_SOH_TRAJECTORY` | 仅服务器端已激活路由可用 |
-| `compare_operation_scenarios` | 无等价正式工具 | 明确不可用；等待 MAGNet 评估和晋级 |
+| `compare_operation_scenarios` | 无等价正式工具 | 由受控 BLAST-Lite 情景工具提供 |
 | `ingest_observed_soh` | `INGEST_NEWLY_OBSERVED_SOH` | 映射现有契约 |
 | `update_trajectory` | `UPDATE_CELL_PARAMETERS` | 映射现有契约 |
 | `generate_audited_report` | `GENERATE_AUDITED_REPORT` | 可用；仅消费有效结果 ID |
@@ -86,4 +86,4 @@ Fake Sandbox 验证 transport、事件、附件、验证门、ToolResult、卡�
 `CONDITIONAL/NOT_ACTIVATED` 不能展示数值。
 
 真实飞书联调需要用户提供凭证；真实 CyclePatch/Hybrid 路由调用需要目标环境完成
-人工激活和校准证据；PBT/MAGNet 只在训练、评估、制品核验和人工晋级后新增内部路由。
+人工激活和校准证据。

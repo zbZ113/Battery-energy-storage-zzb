@@ -47,7 +47,7 @@ HTTPS 登录
 - 多可用区、高可用和自动扩缩容；
 - 企业 KMS、SIEM、灾难恢复和正式 SLA；
 - 连接真实 BMS/EMS 并直接控制设备；
-- 未经授权的 HUST 或企业数据验证；
+- 未经授权的外部或企业数据验证；
 - 使用 PyBaMM 生成长期退化标签；
 - 将受约束工作流宣称为自主多智能体协商。
 
@@ -153,10 +153,10 @@ Agent 是受角色和白名单约束的工作流，不依靠多个聊天机器�
 
 ## 6. 运行拓扑
 
-### Foundation
+### 运行入口
 
-`deploy/compose.yaml` 和 `deploy/foundation_api.py` 提供基础健康检查与工具入口，
-不代表完整项目产品。
+`deploy/local.compose.yaml` 和 `deploy/competition.compose.yaml` 分别装配本机与服务器
+完整运行时；飞书/Aily 与 MCP 通过显式 override 启用。
 
 ### Competition
 
@@ -194,7 +194,7 @@ PostgreSQL 与 Redis 只位于内部 `backend` 网络，只有 gateway 映射 80
 | Competition Compose | Implemented | 尚需在目标 ECS 解析、拉取并启动 |
 | ACR 镜像 | Implemented | workflow 已存在；成功发布和 digest 待确认 |
 | 公网 HTTPS 产品 | Planned | ECS 基础设施已准备，应用栈未验收 |
-| HUST 零样本与删失感知 | Planned | 需要合规数据和新实验 |
+| 外部域零样本与删失感知 | Planned | 需要合规数据和新实验 |
 | 企业 BMS/EMS 与 HA | Planned | 不属于当前比赛目标 |
 
 最新事实以[项目状态](../status.md)为准。
@@ -221,7 +221,7 @@ P1  ECS Compose、migration 与健康检查
 P2  模型候选注册、人工激活与 calibration READY
 P3  公网浏览器纵向 E2E、重启与回退演练
 P4  README、API、算法、ADR、复现和演示材料
-P5  HUST、删失感知、消融与尾部误差研究
+P5  外部域、删失感知、消融与尾部误差研究
 P6  企业数据、BMS/EMS、监控、HA 与合规
 ```
 

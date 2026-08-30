@@ -4,15 +4,13 @@
 
 **Architecture:** Extend the existing reviewed CSV normalizer with a strict metadata envelope, derive a deterministic registration for unseen hashes, and provision a frozen project binding from the already verified content batch. Keep the current model route and support checks authoritative. Aily continues to send full typed scenarios, with orchestration instructions allowing any subset of fields to change together.
 
-**Tech Stack:** Python 3.11, Pydantic, SQLAlchemy, FastAPI/MCP, Celery, pytest.
+**Tech Stack:** Python 3.11, Pydantic, SQLAlchemy, FastAPI/MCP, Celery.
 
 ## Task 1: Stable canonical identity and self-describing metadata
 
 **Files:**
 - Modify: `src/quanxin_life/application/battery_csv_mapping.py`
 - Modify: `src/quanxin_life/application/feishu_aily_assembly.py`
-- Test: `tests/integration/test_feishu_aily_application_assembly.py`
-- Test: `tests/unit/application/test_battery_csv_mapping.py`
 
 - Add failing tests for canonical pass-through identity and unseen self-describing metadata.
 - Add a strict metadata contract and normalize only exact reviewed headers/units.
@@ -25,8 +23,6 @@
 - Modify: `src/quanxin_life/application/record_batch_bindings.py`
 - Modify: `src/quanxin_life/application/feishu_project_models.py`
 - Modify: `src/quanxin_life/application/feishu_aily_assembly.py`
-- Test: `tests/integration/application/test_feishu_project_model_execution.py`
-- Test: `tests/unit/application/test_record_batch_bindings.py`
 
 - Add a failing test showing an unseen verified content batch currently lacks a frozen project binding.
 - Add an idempotent context-authorized provision method that locks the project, reuses an exact binding, or creates and freezes one dataset and binding atomically.
@@ -38,8 +34,6 @@
 **Files:**
 - Modify: `src/quanxin_life/application/feishu_project_models.py`
 - Modify: `src/quanxin_life/integrations/feishu/jobs.py`
-- Test: `tests/integration/application/test_feishu_project_model_execution.py`
-- Test: `tests/unit/integrations/feishu/test_jobs.py`
 
 - Add a failing test for a complete non-MATR or unsupported-cutoff upload.
 - Return a stable support-gate rejection before numerical model execution and avoid staging numerical sibling analyses for rejected roots.
@@ -49,7 +43,6 @@
 
 **Files:**
 - Modify only if required: `src/quanxin_life/api/aily.py`
-- Test: `tests/integration/api/test_aily_mcp.py`
 - External configuration: existing Aily assistant instructions.
 
 - Confirm the current typed request accepts simultaneous changes and up to eight comparisons.

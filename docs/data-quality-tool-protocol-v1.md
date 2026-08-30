@@ -21,6 +21,6 @@
 - `warnings` 只来自质检规则的真实问题代码；
 - `provenance` 完整保留输入来源。
 
-Agent、API、MCP、Next.js 与 Streamlit 必须通过同一注册表调用该工具。任何后续
+Agent、API、MCP 与 Next.js 必须通过同一注册表调用该工具。任何后续
 特征、模型或决策步骤都应使用此工具返回的 `result_id` 作为上游证据，而不是把 UI
 中的示例状态当作质检结论。

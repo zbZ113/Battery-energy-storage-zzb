@@ -1034,7 +1034,7 @@ def _model_card_markdown(
             "",
             "## 已知限制",
             "",
-            "- 仅有 MATR 冻结划分证据，无 HUST、Naumann 或工业域覆盖保证。",
+            "- 仅有 MATR 冻结划分证据，无 Naumann 或工业域覆盖保证。",
             "- calibration 队列只有 12 个电芯。",
             "- A100 input bundle 与本地重建 bundle 字节哈希不同。",
             "- 聚合晋级推荐不等于具体模型制品已经激活。",

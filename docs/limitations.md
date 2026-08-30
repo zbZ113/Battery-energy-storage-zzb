@@ -52,7 +52,6 @@ SOH 轨迹使用真实监督并结束于 cycle 500：
 - 正式优化采用 small-data full-batch 训练；
 - Direct 与 BatLiNet 的逐电芯配对区间跨过零；
 - 长寿命、少数批次和最差电芯仍存在较大误差；
-- 当前没有 HUST 零样本结果；
 - 训练耗时与峰值显存不是推理延迟或服务吞吐。
 
 ### CPMLP
@@ -75,11 +74,11 @@ CPMLP 是 legacy 曲线集合基线。其掩码聚合不显式表达跨循环顺
 
 ## 外部泛化限制
 
-HUST 安全接入组件不等于 HUST 外部验证已经完成：
+当前仅有 MATR 的正式深度模型证据；Naumann/280Ah 结果属于独立物理参考情景：
 
 - 没有正式零样本指标；
 - 没有目标域 calibration 或覆盖保证；
-- CORAL、DANN 等组件存在不等于已经证明有效；
+- 当前仓库未保留目标域适配实现，跨域能力必须重新建立独立证据；
 - Naumann 数据和企业数据也没有当前 Advanced 路由的正式结果。
 
 任何跨域使用都应先：
@@ -98,8 +97,7 @@ HUST 安全接入组件不等于 HUST 外部验证已经完成：
 当前 Advanced API / Agent / 报告 / UI 和 calibration materialization 已通过受控
 纵向 E2E，但这不等于生产部署：
 
-- 基础 `deploy/compose.yaml` 仍只启动 foundation API；
-- 竞赛用 `deploy/competition.compose.yaml` 已实现 PostgreSQL、Redis、migrations、
+- `deploy/local.compose.yaml` 与 `deploy/competition.compose.yaml` 已实现 PostgreSQL、Redis、migrations、
   API、Worker、Next.js 和 Nginx HTTPS 拓扑，并通过部署契约测试；
 - 目标 ECS、Docker、UFW、ACR 和正式 IP TLS 前置设施已经建立，但五个应用镜像、
   Compose、数据库迁移、模型路由和 calibration evidence 尚未完成公网纵向验收；

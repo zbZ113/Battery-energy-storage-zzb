@@ -7,7 +7,7 @@
 
 ## 不可变边界
 
-1. API、MCP、Agent、Next.js 和 Streamlit 的公开输入只能是非空
+1. API、MCP、Agent 和 Next.js 的公开输入只能是非空
    `measurement_batch_id`。空白 ID、SOH、容量、参考容量、预测轨迹、模型结果、
    数据/特征/划分版本和 provenance 都必须被拒绝。
 2. 原始测量值只能由服务端注入的 `VerifiedMeasurementResolver` 返回。该解析器

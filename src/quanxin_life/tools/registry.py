@@ -36,7 +36,6 @@ class StandardToolName(StrEnum):
     PROJECT_STORAGE_LIFETIME = "project_storage_lifetime"
     PREDICT_SOH_TRAJECTORY = "predict_soh_trajectory"
     CALIBRATE_PREDICTION_INTERVAL = "calibrate_prediction_interval"
-    ADAPT_TO_TARGET_DOMAIN = "adapt_to_target_domain"
     UPDATE_CELL_PARAMETERS = "update_cell_parameters"
     CHECK_OPERATING_CONDITION = "check_operating_condition"
     RECOMMEND_NEXT_EXPERIMENT = "recommend_next_experiment"

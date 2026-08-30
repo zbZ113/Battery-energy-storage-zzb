@@ -7,24 +7,24 @@
 预测区间和决策数值只能由版本化工具产生；LLM 只负责理解任务、编排已授权工具和
 解释已经登记的证据。
 
-当前仓库已经完成 MATR 三批正式 Advanced 训练与制品验收，并在测试环境贯通
-active route、calibration materialization、RUL/SOH/Conformal、Agent、报告和
-Next.js UI。仓库还实现了 manifest-bounded BLAST-Lite 温度/倍率/DoD 情景工具、
-1～25 年自然时间参考推演，以及 Fake Feishu 受审计交付链。个人比赛单机部署代码及 ECS/TLS 前置设施已经准备，但公网应用栈尚未
-完成纵向验收。这不等于生产部署，也不构成跨数据集覆盖保证或工业寿命承诺。
+当前仓库已经完成 MATR 三批正式 Advanced 训练与制品验收，并贯通 active route、
+calibration materialization、RUL/SOH/Conformal、Agent、报告、Next.js、飞书机器人和
+Aily MCP。系统还实现了 manifest-bounded BLAST-Lite 温度/倍率/DoD 参考情景工具与
+1～25 年自然时间推演。目标飞书租户已经完成真实 CSV、模型卡片、曲线、报告和 Bitable
+交付；临时 HTTPS 隧道不等于生产部署，也不构成跨数据集覆盖保证或工业寿命承诺。
 
 ## 当前状态
 
-状态更新时间：2026-08-12。
+状态更新时间：2026-08-30。
 
 | 状态 | 定义 | 当前结论 |
 | --- | --- | --- |
 | **Implemented** | 代码、契约、配置或 migration 已存在 | Advanced 产品链、BLAST 情景工具、飞书/Aily 审计链、竞赛 Compose、API、Worker、Next.js、Nginx |
-| **Validated** | 有正式实验、测试、哈希或受控 E2E | 80 次 A100 Final、逐样本对账、Conformal、Naumann/280Ah 参考核验、Fake Feishu scenario E2E、部署契约 |
+| **Validated** | 有正式实验、测试、哈希或受控 E2E | 80 次 A100 Final、逐样本对账、Conformal、Naumann/280Ah 参考核验、飞书/Aily 受控链与部署契约 |
 | **Published** | 不可变镜像或发布包已进入目标 registry | **是**；`2026.07.28-1` 五个私有 ACR 镜像及 digest 已冻结 |
 | **Deployed** | 已在目标 ECS 启动并通过服务验收 | **否**；ECS、Docker、UFW、ACR、TLS 前置就绪，应用栈尚未启动 |
-| **Demonstrated** | 公网浏览器真实业务路径通过 | **否**；尚待完成 |
-| **Planned** | 仍需实现、实验或外部输入 | 真实场景飞书/Aily E2E、候选路由人工晋级、HUST、删失感知区间、企业 BMS/EMS、HA 与长期运维 |
+| **Demonstrated** | 公网浏览器真实业务路径通过 | **是**；目标租户经临时 HTTPS 入口完成飞书上传、分析交付和 Aily MCP 调用 |
+| **Planned** | 仍需实现、实验或外部输入 | 稳定公网入口、候选路由人工晋级、删失感知区间、企业 BMS/EMS、HA 与长期运维 |
 
 完整矩阵见[项目状态](docs/status.md)，禁止性表述见
 [已知限制](docs/limitations.md)。本次镜像身份见
@@ -98,10 +98,6 @@ Naumann 固定上游参数 replay 保存了 1,260 个逐测试点预测；calend
 温度、DoD、倍率、自然年/EFC、EOL、支持范围、Naumann parity 与 280Ah 对比图及其 CSV 源数据位于
 [`reports/experiments/blast_scenarios_v1/scenario-v3/`](reports/experiments/blast_scenarios_v1/scenario-v3/)。长期曲线证据等级为 `PHYSICS_REFERENCE`，route 状态保持 `REGISTERED_CANDIDATE`。
 
-`LFP_FIELD_160AH` 当前模型视图是 `no_health_target`，时间语义为
-`LOCAL_TIME_TIMEZONE_UNRESOLVED`。它可用于现场遥测跨度、异常偏离和弱单体检查，但没有
-可据此评估的 SOH/RUL 标签；本阶段没有从该数据集生成 SOH 精度、总体寿命分布或 25 年验证结论。
-
 ## 核心技术路线
 
 ```mermaid
@@ -124,7 +120,7 @@ flowchart LR
 - train/validation/calibration/test 严格按 `cell_id` 隔离；
 - RUL 标量目标是 MATR 官方 `cycle-life`，不是统一 EOL80；
 - SOH 监督与输出采用真实有限时域，当前正式轨迹最长到 cycle 500；
-- HUST 官方 pickle 不能在主进程直接加载，必须先隔离核验并安全转换。
+- 外部数据只能通过已审核的适配器和受控存储接入，原始文件不得进入主进程或 Git。
 
 ### 正式模型与基线
 
@@ -199,7 +195,6 @@ flowchart TB
 - ACR 五个镜像的成功发布及 immutable digest；
 - ECS Compose、migration、真实 route/calibration 激活和公网浏览器 E2E；
 - 服务重启、route 回退、失败恢复和数据库备份恢复演练；
-- HUST 零样本外部泛化与目标域重校准；
 - 右删失样本的 survival-aware 评价与 Conformal；
 - 单样本推理延迟、吞吐、并发和长期运行；
 - 企业 BMS/EMS、设备安全联锁、HA、KMS 和合规验收。
@@ -236,30 +231,12 @@ python -m pip install -e ".[scenarios]"
 python -m pip install -e ".[mcp]"
 ```
 
-### Foundation API
+### 完整运行时
 
-[`deploy/foundation_api.py`](deploy/foundation_api.py) 只提供健康检查、工具发现和
-已装配基础工具，不是完整产品 API：
-
-```bash
-python -m uvicorn deploy.foundation_api:app --host 127.0.0.1 --port 8000
-```
-
-```text
-http://127.0.0.1:8000/health
-http://127.0.0.1:8000/v1/tools
-http://127.0.0.1:8000/docs
-```
-
-基础 Compose：
-
-```bash
-docker compose -f deploy/compose.yaml up --build
-```
-
-文件系统原型可以使用 `FileSystemVerifiedEarlyCycleBatchStore` 与
-`JsonlAuditLedger`；正式竞赛运行使用 PostgreSQL、Redis 和 strict competition
-composition root。
+本机和服务器分别使用 `deploy/local.compose.yaml` 与
+`deploy/competition.compose.yaml`。两者都装配 PostgreSQL、Redis、API、Worker、
+Next.js 和网关；飞书/Aily 与 Aily MCP 通过独立 override 显式启用。完整命令、运行时
+目录和临时 HTTPS 地址更新方式见[运行指南](docs/runtime-setup.md)。
 
 ### 飞书/Aily 受审计情景链
 
@@ -270,24 +247,23 @@ composition root。
 
 正式 competition composition root 已可选择性装配这条链：API 入口仍为
 `deploy.competition_api:app`，Worker 仍复用 `agent-runs` 队列，数据库迁移 head 为
-`0027`。基础 `deploy/competition.compose.yaml` 不装配飞书/Aily；只有显式合并
-`deploy/competition.feishu-aily.override.yaml` 才会启用，并让 API、Worker 和 migrate
+`0029`。基础 `deploy/competition.compose.yaml` 不装配飞书/Aily；只有显式合并
+`deploy/competition.feishu-aily.override.yaml` 与
+`deploy/competition.aily-mcp.override.yaml` 才会启用，并让 API、Worker 和 migrate
 使用同一组 secret-file settings。候选情景执行与候选结果展示分别由两个独立开关
 控制，不能以“能计算”替代“获准展示”。
 
 稳定情景工具为 `compare_operation_scenarios` 与 `project_storage_lifetime`。Aily 先以已验证 batch 和完整 `OperationScenario` 创建 `scenario_context_id`，再提交只含该引用的分析任务。BLAST route 与结果展示均默认 fail-closed；当前 `REGISTERED_CANDIDATE` 只允许经服务器端显式授权的参考情景，不会自动成为生产 active route。
 
-安全边界保持不变：第一阶段上传只接受 canonical CSV；所有展示的业务数值必须来自有效
+安全边界保持不变：CSV 先经过确定性字段映射、单位与周期完整性校验；所有展示的业务数值必须来自有效
 `ToolResult`，并保留 `run_id`、`result_id`、JSON 路径和版本信息；LLM/Aily 不得生成、
 补全或改写 SOH、RUL、EOL、区间及其他业务数值。`CONDITIONAL` 或
 `NOT_ACTIVATED` 模型路由继续拒绝，循环寿命不得自动换算为工业自然年寿命。
 
-生产 Worker 不从飞书文件名或消息正文猜测电芯元数据。先复制
-`deploy/feishu-csv-registrations.example.json` 为受管的
-`feishu-csv-registrations.json`，再为每个获准 canonical CSV 登记实际
-`payload_sha256`。同一 SHA-256 必须同时写入 `metadata.source_sha256`，并出现在
-`source_kind=OBSERVED` 的 provenance 中；三者不一致、空注册表或未知附件哈希都会
-fail closed。详细字段与部署位置见飞书/Aily 指南和部署安全文档。
+生产 Worker 不从飞书文件名或消息正文猜测业务数值。新 CSV 由版本化 mapping profile
+解析字段与单位，并将附件 SHA-256、规范化批次和 `source_kind=OBSERVED` provenance
+绑定为同一数据身份；缺少必要字段或身份冲突时 fail closed。冻结演示资产仍可通过
+受管注册表做精确哈希复用。
 
 Windows PowerShell 配置检查：
 
@@ -315,13 +291,11 @@ Invoke-RestMethod http://127.0.0.1:8787/health
 
 这个 runner 做验签、解密、verification token、防重、receipt claim，并在快速 ACK 前把 sanitized durable job 写入本地 SQLite；进程内队列只接收 job UUID。它不下载附件、不运行 worker、也不自动回复。进程内队列、本地 SQLite 和
 Cloudflare Quick Tunnel 只适合受控联调，不是完整生产 callback worker 或生产部署。
-Fake Feishu scenario E2E 已覆盖真实 BLAST 计算、ToolResult、PNG、卡片、报告与
-scalar-only Bitable；Fake Aily scenario E2E 已覆盖生产 assembly、Aily HTTP、共享 SQL
-账本/Worker、run-bound ToolResult、受审计报告和 scalar-only Bitable，且不会发送飞书
-聊天或上传文件。本轮断网环境未重新执行真实场景飞书/Aily链；目标租户凭证、交互卡片、
-受保护网关和真实 Bitable 字段仍需人工复验。PBT/MAGNet activation 状态没有改变。
+Fake E2E 覆盖 BLAST 计算、ToolResult、PNG、卡片、报告、Bitable 和 Aily 任务来源绑定。
+目标租户也已完成真实 CSV 上传到 RUL、有限 SOH、25℃/35℃ 工况卡与审计报告的交付，
+Aily MCP 已完成服务安装和受控任务查询/工况创建。模型路由仍由服务端清单和人工审批控制。
 
-### Next.js 与 Streamlit
+### Next.js
 
 Next.js 版本以 [`frontend/package.json`](frontend/package.json) 为准，固定使用
 `pnpm@10.28.1`：
@@ -331,14 +305,6 @@ cd frontend
 pnpm install --frozen-lockfile
 pnpm dev
 ```
-
-科研工作台：
-
-```bash
-streamlit run workbench/streamlit_app.py
-```
-
-工作台只通过 HTTP API 消费结果，不加载模型或读取服务端路径。
 
 ### A100 复现入口
 
@@ -393,10 +359,9 @@ service、active route、数值工具、Audit Ledger、Worker 再返回 UI 的�
 后端：
 
 ```bash
-python -m pytest -q
 python -m ruff check .
 python -m mypy
-python -m compileall -q src workbench deploy migrations
+python -m compileall -q src deploy migrations
 python -m pip check
 ```
 
@@ -410,19 +375,12 @@ pnpm typecheck
 pnpm build
 ```
 
-文档：
-
-```bash
-python -m pytest tests/integration/test_runtime_docs.py -q
-python -m ruff check tests/integration/test_runtime_docs.py
-```
-
 GitHub Actions 使用 Python 3.11、Node.js 24 和锁定 pnpm。测试通过只能证明当前
 自动化契约成立，不能替代外部数据、目标 ECS、安全或长期运行验收。
 
 ## 文档导航
 
-### 八类核心文档
+### 核心文档
 
 | 类别 | README 摘要 | 详细文档 |
 | --- | --- | --- |
@@ -452,8 +410,5 @@ GitHub Actions 使用 Python 3.11、Node.js 24 和锁定 pnpm。测试通过只�
 - [数据契约](DATA_CONTRACT.md)
 - [实验协议](EXPERIMENT_PROTOCOL.md)
 - [完成定义](DEFINITION_OF_DONE.md)
-- [技术路线扩展参考](docs/architecture/technical-roadmap.md)
 - [许可证策略](LICENSE_POLICY.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
-
-`docs/superpowers/plans/` 保存历史实施计划和工程追踪，不是当前公开状态的单一事实源。

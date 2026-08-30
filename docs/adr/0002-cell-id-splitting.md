@@ -44,12 +44,12 @@
 - `EXPERIMENT_PROTOCOL.md`；
 - `src/quanxin_life/data/` 与 `src/quanxin_life/training/`；
 - `src/quanxin_life/evaluation/`；
-- `tests/` 中的 split、training 和 calibration 契约测试。
+- 团队本地维护的 split、training 和 calibration 契约回归记录（不随 Git 分发）。
 
 正式 MATR 固定划分及样本数见 [项目状态](../status.md)。
 
 ## 成熟度
 
 - MATR 三批固定划分：Validated；
-- HUST 或企业数据划分：Planned，需独立数据许可与新清单；
+- 未见外部或企业数据划分：Planned，需独立数据许可与新清单；
 - 删失感知评估：Planned。

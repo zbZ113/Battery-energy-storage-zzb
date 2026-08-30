@@ -108,10 +108,11 @@ TARGET_DOMAIN_UNCALIBRATED
 
 模式 A 的 `uncertainty` 为 `null`，因为它不是单电芯结论；模式 B 的 `uncertainty` 必须绑定已登记上游数值。
 
-## 验收测试
+## 验收
 
 ```powershell
-.\.venv\python.exe -m pytest tests\unit\tools\test_conformal_calibration_tool.py tests\unit\tools\test_conformal_interval_issuance_tool.py tests\unit\uncertainty\test_normalized_conformal.py -q
-.\.venv\Scripts\ruff.exe check src\quanxin_life\tools\conformal_calibration.py tests\unit\tools\test_conformal_calibration_tool.py tests\unit\tools\test_conformal_interval_issuance_tool.py
+.\.venv\Scripts\ruff.exe check src\quanxin_life\tools\conformal_calibration.py
 .\.venv\Scripts\mypy.exe src\quanxin_life\tools\conformal_calibration.py
 ```
+
+数值契约回归用例由团队在本地维护，不随 Git 分发。

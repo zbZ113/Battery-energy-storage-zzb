@@ -234,7 +234,6 @@ def _write_canonical_values(
         CanonicalTableType.CELL_CYCLE_TELEMETRY,
         CanonicalTableType.TRAJECTORY_OBSERVATIONS,
         CanonicalTableType.CONDITION_OBSERVATIONS,
-        CanonicalTableType.FIELD_SYSTEM_TELEMETRY,
     }
     for table_type, records in grouped.items():
         if table_type in observation_tables:

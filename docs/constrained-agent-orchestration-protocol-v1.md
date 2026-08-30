@@ -7,7 +7,7 @@
 | 角色 | 允许调用的共享工具 |
 | --- | --- |
 | 数据质检 Agent | `validate_battery_data`、`audit_dataset_split`、`extract_early_cycle_features` |
-| 寿命预测 Agent | `predict_cycle_life`、`predict_soh_trajectory`、`calibrate_prediction_interval`、`adapt_to_target_domain`、`update_cell_parameters` |
+| 寿命预测 Agent | `predict_cycle_life`、`predict_soh_trajectory`、`calibrate_prediction_interval`、`update_cell_parameters` |
 | 物理核验 Agent | `check_operating_condition` |
 | 试验决策 Agent | `recommend_next_experiment` |
 | 监督 Agent | `make_batch_decision`、`retrieve_battery_evidence`、`generate_audited_report` |

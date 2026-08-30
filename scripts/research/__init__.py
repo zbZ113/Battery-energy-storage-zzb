@@ -1,1 +1,0 @@
-"""Research-material synchronization helpers."""

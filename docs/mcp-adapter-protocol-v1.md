@@ -4,7 +4,7 @@
 
 `quanxin_life.tools.mcp_adapter` 为阶段 7 的 MCP 传输层提供一个可选、无副作用的适配边界。它不实现任何电芯数据、寿命、物理、试验或报告业务逻辑；所有发现和调用均委托给已经注册的 `ToolRegistry`。
 
-模块导入时不会导入 MCP SDK、初始化网络、加载模型或连接服务。因此，即使环境未安装 MCP SDK，FastAPI、Next.js、Streamlit、数值工具和本地测试仍可正常使用。
+模块导入时不会导入 MCP SDK、初始化网络、加载模型或连接服务。因此，即使环境未安装 MCP SDK，FastAPI、Next.js、数值工具和本地测试仍可正常使用。
 
 ## 调用模型
 

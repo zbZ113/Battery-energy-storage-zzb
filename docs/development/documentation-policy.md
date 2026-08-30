@@ -5,8 +5,8 @@
 README 是项目入口，不是全部技术细节。每次重大变更必须同步更新入口状态和对应的
 权威详细文档，避免代码、部署与公开叙事分叉。
 
-仓库的 [PR 模板](../../.github/PULL_REQUEST_TEMPLATE.md) 将该要求转成提交检查项；
-自动化文档契约位于 `tests/integration/test_runtime_docs.py`。
+仓库的 [PR 模板](../../.github/PULL_REQUEST_TEMPLATE.md) 将该要求转成提交检查项。
+根目录测试代码不随 Git 分发，文档一致性由提交检查项和本地维护验证共同约束。
 
 ## 必须触发文档更新的变更
 
@@ -54,12 +54,7 @@ README 是项目入口，不是全部技术细节。每次重大变更必须同�
 
 ## 提交前检查
 
-```bash
-python -m pytest tests/integration/test_runtime_docs.py -q
-python -m ruff check tests/integration/test_runtime_docs.py
-```
-
-还应检查：
+提交前应检查：
 
 - Markdown 相对链接不存在失效目标；
 - 文档没有本机绝对路径、密钥或临时账号；

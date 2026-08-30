@@ -58,7 +58,8 @@ tool_version: conformal-calibration-tool-v1
 ## 验收
 
 ```powershell
-.\.venv\python.exe -m pytest tests\unit\tools\test_conformal_interval_issuance_tool.py tests\unit\tools\test_batch_decision_tool.py -q
-.\.venv\Scripts\ruff.exe check src\quanxin_life\tools\conformal_calibration.py src\quanxin_life\tools\batch_decision.py tests\unit\tools
+.\.venv\Scripts\ruff.exe check src\quanxin_life\tools\conformal_calibration.py src\quanxin_life\tools\batch_decision.py
 .\.venv\Scripts\mypy.exe src\quanxin_life\tools\conformal_calibration.py src\quanxin_life\tools\batch_decision.py
 ```
+
+数值契约回归用例由团队在本地维护，不随 Git 分发。

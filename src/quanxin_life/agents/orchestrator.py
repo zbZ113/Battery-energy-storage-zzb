@@ -45,7 +45,6 @@ ROLE_TOOL_ALLOWLIST: dict[AgentRole, frozenset[StandardToolName]] = {
             StandardToolName.CONVERT_SCENARIO_LIFETIME,
             StandardToolName.PREDICT_SOH_TRAJECTORY,
             StandardToolName.CALIBRATE_PREDICTION_INTERVAL,
-            StandardToolName.ADAPT_TO_TARGET_DOMAIN,
             StandardToolName.INGEST_NEWLY_OBSERVED_SOH,
             StandardToolName.UPDATE_CELL_PARAMETERS,
         }

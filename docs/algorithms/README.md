@@ -326,7 +326,7 @@ materialization，并把数值写入可追溯 `ToolResult`。模型得分不能�
 - 2017-06-30 批次的 SOH 表现较弱；
 - 12 个 calibration 电芯对 90%/95% 覆盖评价过小；
 - RUL calibration 当前拒绝右删失电芯，尚不是 survival-aware conformal；
-- 尚无 HUST 零样本外部验证或企业域重校准证据；
+- 尚无未见外部域或企业域重校准证据；
 - A100 训练耗时和峰值显存不能替代线上 CPU 推理延迟与吞吐测量。
 
 因此当前算法适用于 MATR 同协议研究、比赛展示和受控辅助分析；不适用于未经重校准

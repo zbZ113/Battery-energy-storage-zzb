@@ -16,10 +16,11 @@
 
 ## MCP 工具
 
-默认发布五个业务工具；配置复检表后再发布第六个：
+默认发布六个业务工具；配置复检表后再发布第七个：
 
 | 工具 | 用途 |
 | --- | --- |
+| `quanxin_resolve_analysis_source` | 按 `电芯ID | cutoff-N` 解析当前用户已完成的飞书上传及内部任务引用 |
 | `quanxin_create_scenario_context` | 保存工程师明确给出的温度、倍率、SOC、DoD 等工况假设 |
 | `quanxin_create_analysis_task` | 创建异步寿命、SOH、参考工况或工程建议任务 |
 | `quanxin_get_analysis_task` | 轮询持久化任务状态 |
@@ -118,19 +119,18 @@ Aily 会自动发送 `x-aily-user` 和 `x-aily-email`，无需在 UI 中另配 H
 
 ## 当前限制
 
-- MCP 不会扫描聊天正文、猜测电芯或自动枚举全库任务。
-- 当前没有“按 Aily 用户自动发现最近上传”的公共查询契约。创建业务任务时仍需要来自飞书卡片、多维表格或受控上下文的 `source_run_id`，数据任务还需要 `data_batch_id`。
+- MCP 不会猜测电芯或自动枚举全库任务。用户提供 `电芯ID | cutoff-N` 后，Aily 先调用 `quanxin_resolve_analysis_source`；服务端只在当前用户获授权且已成功的飞书上传中解析 `source_run_id` 与 `data_batch_id`。
+- 同一电芯和 cutoff 存在多个成功上传时，解析器按受审时间选择当前有效来源；Aily 不应要求用户手写内部 UUID。
 - 报告单次返回受 Aily 约 2 万字上下文建议限制。大型轨迹数组不会直接返回，曲线应读取飞书附件和受审报告。
 - 只有已完成、项目绑定有效、数据身份未变化的原始飞书上传可以作为 Aily 任务来源。
 
 ## 验证
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q `
-  tests/integration/api/test_aily_mcp.py `
-  tests/integration/api/test_aily_mcp_mount.py `
-  tests/unit/application/test_aily_mcp_authorization.py `
-  tests/unit/deploy/test_runtime_settings.py `
-  tests/integration/deploy/test_competition_deployment_contract.py `
-  tests/integration/deploy/test_local_deployment_contract.py
+.\.venv\Scripts\python.exe -m ruff check src deploy scripts
+.\.venv\Scripts\python.exe -m mypy
+.\.venv\Scripts\python.exe -m compileall -q src deploy migrations
 ```
+
+根目录测试代码仅在团队本地维护，不随 Git 分发。发布验收还必须在目标 Aily 中完成
+MCP 安装、工具发现、真实用户授权、任务标签解析和受审工况查询。

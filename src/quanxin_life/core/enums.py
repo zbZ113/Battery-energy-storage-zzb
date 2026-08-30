@@ -29,7 +29,6 @@ class PredictionTarget(StrEnum):
     EOL80_CYCLE = "eol80_cycle"
     UNIFIED_EOL80_CYCLE = "unified_eol80_cycle"
     MATR_OFFICIAL_CYCLE_LIFE = "matr_official_cycle_life"
-    MAGNET_QD_ED_TRAJECTORY = "magnet_qd_ed_trajectory"
 
 
 class TrainingMode(StrEnum):
@@ -47,8 +46,6 @@ class TrainingTaskType(StrEnum):
     CYCLE_LIFE = "cycle_life"
     SOH_TRAJECTORY = "soh_trajectory"
     CONDITION_DEGRADATION = "condition_degradation"
-    FIELD_MONITORING = "field_monitoring"
-    PARTIAL_CHARGE_FEATURE = "partial_charge_feature"
 
 
 class TrainingReadableSplit(StrEnum):
@@ -90,7 +87,6 @@ class CanonicalTableType(StrEnum):
     CELL_CYCLE_TELEMETRY = "cell_cycle_telemetry"
     TRAJECTORY_OBSERVATIONS = "trajectory_observations"
     CONDITION_OBSERVATIONS = "condition_observations"
-    FIELD_SYSTEM_TELEMETRY = "field_system_telemetry"
     METADATA = "metadata"
     TARGETS = "targets"
     QUALITY_REPORT = "quality_report"

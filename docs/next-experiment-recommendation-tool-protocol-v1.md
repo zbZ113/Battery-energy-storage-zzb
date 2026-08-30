@@ -72,4 +72,4 @@ model_version   naumann-condition-gp-v2
 
 ## 6. 注册与服务集成
 
-该工具依赖服务端的上下文解析器，因此不进入无参 `create_available_tool_registry()`。FastAPI、MCP、Agent、Next.js 与 Streamlit 必须通过同一 `register_recommend_next_experiment_tool()` 绑定同一个已审核上下文解析器；禁止在不同接入层复制 GP、排序或候选过滤逻辑。
+该工具依赖服务端的上下文解析器，因此不进入无参 `create_available_tool_registry()`。FastAPI、MCP、Agent 与 Next.js 必须通过同一 `register_recommend_next_experiment_tool()` 绑定同一个已审核上下文解析器；禁止在不同接入层复制 GP、排序或候选过滤逻辑。

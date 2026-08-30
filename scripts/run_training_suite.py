@@ -35,7 +35,6 @@ def main() -> int:
         choices=(
             "matr",
             "matr-three-batch",
-            "hust",
             "naumann-cycle",
             "naumann-calendar",
         ),

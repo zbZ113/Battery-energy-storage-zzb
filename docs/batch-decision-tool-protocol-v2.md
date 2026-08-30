@@ -40,7 +40,7 @@ v2 保留 `quanxin_life.decision.make_batch_decision()` 作为研究与单元测
 - 校准域、目标域和目标域校准状态。
 
 当 `target_domain_calibrated=true` 时，目标域必须与校准域一致。不能把源域校准结果表述为未经重校准
-的 HUST、Naumann 或工业场景目标域结论。
+的 Naumann 或工业场景目标域结论。
 
 ### Conformal 校准
 

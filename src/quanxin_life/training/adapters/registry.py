@@ -51,24 +51,12 @@ class TrainingAdapterRegistry:
 
 
 def build_governed_training_adapter_registry() -> TrainingAdapterRegistry:
-    """Build the closed registry for reviewed external training families."""
+    """Build the closed registry for the retained BLAST-Lite adapter."""
 
-    from quanxin_life.training.adapters.batterymformer import BatteryMFormerAdapter
-    from quanxin_life.training.adapters.battgp import BattGPAdapter
     from quanxin_life.training.adapters.blast import BLASTAdapter
-    from quanxin_life.training.adapters.diting import DITINGAdapter
-    from quanxin_life.training.adapters.magnet import MAGNetAdapter
-    from quanxin_life.training.adapters.pbt import PBTAdapter
-    from quanxin_life.training.adapters.smart_feature import SmartFeatureAdapter
 
     registry = TrainingAdapterRegistry()
-    registry.register("battgp", BattGPAdapter())
-    registry.register("batterymformer", BatteryMFormerAdapter())
     registry.register("blast_lite", BLASTAdapter())
-    registry.register("diting_cptransformer", DITINGAdapter())
-    registry.register("magnet", MAGNetAdapter())
-    registry.register("pbt", PBTAdapter())
-    registry.register("smart_feature", SmartFeatureAdapter())
     return registry
 
 

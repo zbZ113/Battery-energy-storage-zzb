@@ -80,8 +80,6 @@ def _plan_entry(
 
 
 def _blocker(entry: SourceCatalogEntry) -> str | None:
-    if entry.dataset_id == "HUST":
-        return "BLOCKED_REVIEW"
     if entry.license_status.upper() == "UNVERIFIED":
         return "BLOCKED_LICENSE"
     if entry.dataset_id not in {"MATR", "NAUMANN_CYCLE", "NAUMANN_CALENDAR"}:

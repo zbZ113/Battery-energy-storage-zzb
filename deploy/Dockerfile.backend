@@ -10,7 +10,20 @@ WORKDIR /app
 RUN groupadd --system --gid 10001 quanxin \
     && useradd --system --uid 10001 --gid quanxin --home-dir /app quanxin
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
+
+RUN touch README.md \
+    && mkdir -p src/quanxin_life \
+    && touch src/quanxin_life/__init__.py \
+    && python -m pip install --upgrade "pip>=26.1.2,<27" "setuptools>=83" \
+    && python -m pip install --resume-retries 30 \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch>=2.5,<3" \
+    && python -m pip install --resume-retries 30 \
+        ".[agents,auth,data,knowledge,llm,ml,api,infrastructure,persistence,reporting,scenarios,mcp]" \
+    && rm -rf src
+
+COPY README.md ./
 COPY src ./src
 COPY deploy ./deploy
 COPY migrations ./migrations
@@ -18,12 +31,7 @@ COPY scripts ./scripts
 COPY configs ./configs
 COPY alembic.ini ./
 
-RUN python -m pip install --upgrade "pip>=26.1.2,<27" "setuptools>=83" \
-    && python -m pip install --resume-retries 30 \
-        --index-url https://download.pytorch.org/whl/cpu \
-        "torch>=2.5,<3" \
-    && python -m pip install --resume-retries 30 \
-        ".[agents,auth,data,knowledge,llm,ml,api,infrastructure,persistence,reporting,scenarios,mcp]" \
+RUN python -m pip install --no-deps . \
     && python -m compileall -q src deploy migrations
 
 RUN mkdir -p /srv/quanxin/artifacts /srv/quanxin/data /srv/quanxin/policies \

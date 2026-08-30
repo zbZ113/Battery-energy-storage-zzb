@@ -2,11 +2,11 @@
 
 ## 状态与范围
 
-本文件描述第一阶段接入及其 BLAST-Lite 情景扩展。交互层是飞书机器人、飞书卡片、多维表格、受审计报告和 Aily；独立 Web 前端不在本阶段范围。本阶段不训练模型，不运行 PBT/MAGNet，也不自动改变任何模型 activation 状态。
+本文件描述第一阶段接入及其 BLAST-Lite 情景扩展。交互层是飞书机器人、飞书卡片、多维表格、受审计报告和 Aily；独立 Web 前端不在本阶段范围。本阶段不训练模型，也不自动改变模型 activation 状态。
 
 新版 Aily 工作助手使用 MCP HTTPStreaming，不再依赖旧版 OpenAPI Connector UI。部署、身份映射、出口 IP 和工具配置见 [Aily MCP HTTPStreaming 接入](./aily-mcp-httpstreaming.md)，工作助手提示词见 [Aily MCP 系统提示词](./aily-mcp-system-prompt.md)。旧 `/v1/aily/*` Bearer API 继续保留兼容。
 
-当前 Advanced 路由仍受服务器端路由、制品清单、SHA-256、支持域和人工审批约束。`CONDITIONAL` 或 `NOT_ACTIVATED` 路由不能展示预测数值。PBT 与 MAGNet 完成训练、独立评估、制品核验和人工晋级前，不会出现在可执行路由中。
+当前 Advanced 路由仍受服务器端路由、制品清单、SHA-256、支持域和人工审批约束。`CONDITIONAL` 或 `NOT_ACTIVATED` 路由不能展示预测数值。
 
 BLAST-Lite 数值路由独立于上述深度学习 activation。当前两个参考路由均为 `REGISTERED_CANDIDATE`，证据等级为 `PHYSICS_REFERENCE`；只有显式启用候选情景执行与候选结果展示时，才允许在 manifest 支持范围内生成和展示 ToolResult。它们不是海辰产品模型，也不构成 15～25 年真实寿命验证。
 
@@ -39,7 +39,7 @@ BLAST-Lite 数值路由独立于上述深度学习 activation。当前两个参�
 | `update_trajectory` | 映射现有在线更新契约 |
 | `generate_audited_report` | 仅消费账本中有效的 `result_id` 和字段路径 |
 
-模型选择只发生在服务器端。CyclePatch、Hybrid、PBT、MAGNet 等内部名称不作为面向用户的
+模型选择只发生在服务器端。CyclePatch、Hybrid 等内部名称不作为面向用户的
 飞书/Aily 业务工具名；卡片和报告的审计证据层仍可展示实际 route 与 model metadata。
 
 ## BLAST-Lite 情景边界
@@ -177,7 +177,7 @@ Aily 通过受保护 HTTP façade 接入，不直接调用模型，也不连接�
 docs/integrations/aily-connector-openapi.yaml
 ```
 
-稳定操作为：创建受控场景上下文、创建分析任务、查询任务状态、读取 run-bound ToolResult、下载 run-bound 审计报告。`predict_cycle_life` 与 `predict_soh_trajectory` 使用 `source_run_id + data_batch_id` 创建项目绑定任务；两个 BLAST-Lite 工具先用同一组数据身份引用创建受控 `OperationScenario`，再使用 `source_run_id + scenario_context_id` 创建情景任务。调用方只能提交引用和结构化工况，不能附带业务结果数字。
+稳定操作为：按 `电芯ID | cutoff-N` 解析来源、创建受控场景上下文、创建分析任务、查询任务状态、读取 run-bound ToolResult、下载 run-bound 审计报告。`quanxin_resolve_analysis_source` 先在当前用户获授权的成功飞书上传中解析 `source_run_id + data_batch_id`；`predict_cycle_life` 与 `predict_soh_trajectory` 再使用这组引用创建项目绑定任务。两个 BLAST-Lite 工具先用同一数据身份创建受控 `OperationScenario`，再使用 `source_run_id + scenario_context_id` 创建情景任务。调用方只能提交任务标签、引用和结构化工况，不能附带业务结果数字。
 
 `source_run_id` 是 Aily 数据访问的授权锚点，必须指向一条已完成、已验证的根飞书文件任务。服务端会重新验证该任务的飞书群聊与发送人项目身份、精确 `data_batch_id`、文件 SHA、电芯引用以及项目内 FROZEN RecordBatch；任一绑定失活、引用不一致或来源不是根飞书上传时都拒绝。`data_batch_id` 仍是 canonical 内容批次引用，不能单独作为项目授权凭据。Aily 任务只复制必要的安全身份引用并登记 `job_origin=AILY` 与 `source_job_id`，队列仍只传 `job_id`，项目 ToolResult 继续写入现有项目审计账本。
 
@@ -285,17 +285,15 @@ scalar-only Bitable，且没有飞书聊天或文件副作用。项目集成测�
 为 `source_run_id` 锚点创建 `predict_cycle_life` 和 `predict_soh_trajectory` Aily 任务，
 重新检查活动项目身份与精确 FROZEN batch，并将项目 ToolResult 从同一审计账本读回。
 
-目标租户已经真实执行飞书 CSV 到项目级 CyclePatch，以及独立 BLAST-Lite 到曲线、卡片、
-报告和 Bitable 的两条交付链；但尚未取得真实租户 Aily 自然语言创建任务、连续追问并触发
-上述 `job_origin=AILY` 链路的运行证据。因此 Fake Aily E2E 和自动化项目测试都不能描述为
-真实租户 Aily 已完成纵向自然语言编排。
+目标租户已经真实执行飞书 CSV 到项目级 CyclePatch、有限 SOH，以及独立 BLAST-Lite
+到曲线、卡片、报告和 Bitable 的交付链。Aily MCP 也已在真实租户完成服务安装、任务标签
+解析和 25℃/35℃ 受控工况查询；曲线仍由飞书附件和审计报告交付，不由 Aily 文本生成。
 
 ## 本地运行
 
 ### 本地真实回调 runner
 
-本地 runner 是独立的 callback surface，不复用或暴露
-`deploy.foundation_api:app`。它只挂载：
+本地 runner 是独立的 callback surface，不复用或暴露完整竞赛 API。它只挂载：
 
 ```text
 GET  /health
@@ -359,7 +357,7 @@ https://实际返回的临时主机名/v1/integrations/feishu/events
 隧道 URL 每次可能变化。隧道关闭后应视为失效；不要把临时主机名当作生产地址。配置 URL
 verification 前确认 `FEISHU_ENCRYPT_KEY` 和 `FEISHU_VERIFICATION_TOKEN` 与当前应用一致；本地 runner 支持加密 URL verification，不要求关闭飞书事件加密。
 
-2026-08-08 已使用 Cloudflare Quick Tunnel 与目标企业飞书应用完成 callback receipt 链的受控验证：加密 URL verification、群聊文本消息和 CSV 文件消息均到达 `/v1/integrations/feishu/events` 并返回 HTTP 200。此后目标租户已真实执行 durable job、项目级 CyclePatch，以及独立 BLAST-Lite 的曲线、卡片、报告与 Bitable 交付。Aily 自然语言创建和编排这些任务仍缺少真实 `job_origin=AILY` 运行证据。临时隧道主机名不构成生产部署证据。
+2026-08-08 已使用 Cloudflare Quick Tunnel 与目标企业飞书应用完成 callback receipt 链的受控验证：加密 URL verification、群聊文本消息和 CSV 文件消息均到达 `/v1/integrations/feishu/events` 并返回 HTTP 200。此后目标租户已真实执行 durable job、项目级 CyclePatch、有限 SOH、BLAST-Lite 曲线、卡片、报告与 Bitable 交付，并完成 Aily MCP 受控工况查询。临时隧道主机名不构成生产部署证据。
 
 ### 真实 Bitable metadata smoke
 
@@ -388,13 +386,8 @@ Sandbox token 固定为本地协议测试用途，只能绑定 loopback，不得
 .\.venv\Scripts\python.exe scripts\feishu_preflight.py
 ```
 
-运行本次接入测试：
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests\unit\integrations\feishu tests\integration\api\test_feishu_api.py tests\integration\api\test_aily_api.py tests\integration\test_fake_feishu_sandbox.py tests\e2e\test_fake_feishu_scenario_delivery.py -q
-```
-
-`Fake Feishu scenario E2E` 使用真实 validation-first workflow、BLAST 数值工具、ToolResult、审计报告工厂、PNG 曲线渲染、卡片、文件交付和 scalar-only Bitable metadata；测试不包含硬编码 SOH/EOL 输出。
+根目录测试代码仅在团队本地维护，不随 Git 分发。发布版本使用 preflight、真实飞书回调、
+受审 ToolResult、卡片/文件交付和 Bitable 写入完成纵向验收，不使用硬编码 SOH/EOL 输出。
 
 ## 正式部署检查
 
@@ -408,7 +401,7 @@ Sandbox token 固定为本地协议测试用途，只能绑定 loopback，不得
 - Aily 端点经过 API Gateway 的 TLS、来源限制、速率限制和审计；
 - 日志脱敏，不记录 Secret、Token、原始附件、完整用户提示或完整消息正文；
 - Fake Sandbox 与生产部署包隔离；
-- 相关 pytest、Ruff、mypy、compile/build 在目标提交上产生最新输出。
+- Ruff、mypy、compile/build 与目标租户冒烟在目标提交上产生最新输出。
 
 ## 故障恢复
 
@@ -418,18 +411,16 @@ Sandbox token 固定为本地协议测试用途，只能绑定 loopback，不得
 
 审计调查至少关联 event ID、任务 ID、`run_id`、数据批次、输入 SHA、`result_id`、route ID、版本、activation 决策、卡片消息 ID、Bitable record ID 和报告 SHA。敏感原文不进入该关联表。
 
-## PBT/MAGNet 后续接入
+## 路由治理
 
-训练结束后只能执行以下路由内步骤：验证训练结果与独立测试指标；构建安全部署制品和 manifest；核对来源与 SHA-256；注册 candidate route；完成人工晋级；在工具内部切换 route。
-
-PBT 只能作为 `predict_cycle_life` 的候选内部路由。MAGNet 保持独立研究候选，不替代当前 manifest-bounded BLAST 情景工具，也不能绕过其支持范围和证据等级。两者接入不得修改飞书事件、卡片、Bitable 字段、Aily 提示词或连接器 API。
+任何新模型或新情景都必须先完成独立评估、制品清单与 SHA-256 核验、支持范围审查和人工晋级，
+再注册为服务器端 candidate route。未晋级的候选不会出现在可执行工具列表，也不能修改飞书事件、
+卡片、Bitable 字段、Aily 提示词或连接器 API。
 
 ## 科学边界
 
 现有 MATR 结果是内部数据集和既定协议下的深度学习模型证据，不是目标工业电芯长期自然年寿命的精确验证。Naumann 最新外部验证结果和逐测试点明细位于 `reports/experiments/blast_naumann_v1/validation-v2/`：其中 19 条温度、DoD、倍率 `leave-one-condition` 指标是固定上游参数的 held-condition 诊断，`parameter_refit=false`，不等于本项目训练或独立训练 holdout。280Ah 方形 LFP 的观测范围内尺度核验位于 `reports/experiments/blast_280ah_v1/validation-v1/`。约 700 循环范围内的核验不能外推成 25 年真实验证。最新长期图表和 CSV 源数据位于 `reports/experiments/blast_scenarios_v1/scenario-v3/`，只能称为物理参考情景。
 
-`LFP_FIELD_160AH` 当前只建立了系统级来源索引和 `no_health_target` 现场监测视图，时间戳语义仍是 `LOCAL_TIME_TIMEZONE_UNRESOLVED`。它可以支持自然时间跨度、遥测异常和弱单体偏离检查，但没有受审查的 SOH/RUL 标签，因此当前不能生成 SOH 精度、无偏总体寿命分布或 15～25 年真实验证结论。
-
 当前链路不支持把循环数直接描述为自然年，也不支持未经受审计情景工具的长期经营结论。PyBaMM 仅可用于短时滚动物理核验和敏感性参考，不能制造长期退化标签。
 
-因此，本阶段交付的是可追溯、安全拒绝的情景工具链，不是海辰电芯 15～25 年真实寿命结论。真实飞书交付仍依赖有效凭证、目标租户配置与人工候选授权；Aily 自然语言编排还需要真实调用证据。PBT/MAGNet activation 状态没有改变。
+因此，本阶段交付的是可追溯、安全拒绝的情景工具链，不是海辰电芯 15～25 年真实寿命结论。真实飞书/Aily 交付仍依赖有效凭证、目标租户配置与人工候选授权。

@@ -38,7 +38,7 @@
 pgvector 语义召回 + PostgreSQL 全文/BM25 关键词召回 + 中文/中英重排器
 ```
 
-后端返回 `HybridEvidenceSearchResponse`，每个命中包含 `document_id`、`chunk_id`、页码或章节、原文摘录、BM25 分数、向量分数、重排分数和最终分数。工具不自行重算这些分数，也不让 LLM 修改它们。未来的 pgvector 存储、embedding 服务和 reranker 仅能通过该后端协议接入，不得在 FastAPI、MCP、Agent、Next.js 或 Streamlit 中另写检索逻辑。
+后端返回 `HybridEvidenceSearchResponse`，每个命中包含 `document_id`、`chunk_id`、页码或章节、原文摘录、BM25 分数、向量分数、重排分数和最终分数。工具不自行重算这些分数，也不让 LLM 修改它们。未来的 pgvector 存储、embedding 服务和 reranker 仅能通过该后端协议接入，不得在 FastAPI、MCP、Agent 或 Next.js 中另写检索逻辑。
 
 若后端明确返回非 `pgvector_bm25_reranker` 模式，工具保留结果但强制附加 `KNOWLEDGE_RETRIEVAL_DEGRADED_FROM_PGVECTOR_HYBRID`；该降级标记必须被前端、Agent 与报告展示，不得静默隐藏。
 

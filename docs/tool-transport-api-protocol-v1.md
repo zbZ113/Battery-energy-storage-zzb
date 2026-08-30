@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-`quanxin_life.api.ToolInvocationService` 是 HTTP、MCP、Streamlit、Next.js 和本地脚本调用领域工具的唯一服务边界。它只把经过 Pydantic 验证的 JSON 输入转交给 `ToolRegistry`；不包含 SOH、RUL、预测区间、退化率、物理仿真或批次决策的第二套实现。
+`quanxin_life.api.ToolInvocationService` 是 HTTP、MCP、Next.js 和本地脚本调用领域工具的唯一服务边界。它只把经过 Pydantic 验证的 JSON 输入转交给 `ToolRegistry`；不包含 SOH、RUL、预测区间、退化率、物理仿真或批次决策的第二套实现。
 
 数值工具必须先在 `ToolRegistry` 中登记。服务层返回的业务数值始终来自登记工具产生并通过审计契约复验的 `ToolResult`，不能由传输层、LLM、UI 或 HTTP 路由拼接。
 

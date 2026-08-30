@@ -8,6 +8,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .test-tmp*/
+tests/
 
 # Secrets and machine-local configuration
 .env*
@@ -35,6 +36,7 @@ server-results/
 node_modules/
 frontend/node_modules/
 frontend/.next/
+frontend/tests/
 build/
 dist/
 coverage/

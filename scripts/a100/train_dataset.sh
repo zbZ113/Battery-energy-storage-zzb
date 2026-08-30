@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "usage: bash scripts/a100/train_dataset.sh <matr|matr-three-batch|hust|naumann-cycle|naumann-calendar> <smoke|final>" >&2
+  echo "usage: bash scripts/a100/train_dataset.sh <matr|matr-three-batch|naumann-cycle|naumann-calendar> <smoke|final>" >&2
   exit 2
 fi
 

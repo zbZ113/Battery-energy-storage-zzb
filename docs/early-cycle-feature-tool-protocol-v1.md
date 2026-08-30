@@ -3,7 +3,7 @@
 `extract_early_cycle_features` 是生成早期 SOH 轨迹与特征证据的受控源工具。它只
 接受服务端受信存储签发的 `record_batch_id`，再由注入的
 `VerifiedEarlyCycleBatchResolver` 解析 canonical Parquet 记录、元数据、特征配置、
-版本和 `OBSERVED` 来源链。API、MCP、Agent、Next.js 和 Streamlit 不能直接提交
+版本和 `OBSERVED` 来源链。API、MCP、Agent 和 Next.js 不能直接提交
 原始记录、元数据、特征配置、SOH、版本或 provenance。
 
 ## 输入与信任边界

@@ -47,8 +47,7 @@ RUL、SOH、置信区间和阈值判断会直接影响电池决策。若 LLM、�
 - `src/quanxin_life/tools/`：工具注册与执行边界；
 - `src/quanxin_life/audit/`：结果校验和项目账本；
 - `src/quanxin_life/reporting/`：账本绑定报告；
-- `tests/unit/audit/test_numeric_firewall.py`；
-- `tests/integration/test_sql_project_audit_ledger.py`。
+- 团队本地维护的数字防火墙与 SQL 项目账本回归记录（不随 Git 分发）。
 
 ## 成熟度
 

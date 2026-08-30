@@ -98,5 +98,5 @@ ToolResult 的模型、数据与特征版本继承自冻结全局轨迹；输入
 输入；provenance 从两个上游结果按规范 JSON SHA-256 去重合并；`created_at` 仅使用
 执行时的 UTC 时钟。
 
-Agent、FastAPI、MCP、Next.js 与 Streamlit 必须经同一工具注册路径调用本工具，不得
+Agent、FastAPI、MCP 与 Next.js 必须经同一工具注册路径调用本工具，不得
 复制校正逻辑或由 LLM 改写数值。

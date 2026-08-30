@@ -203,7 +203,7 @@ Aily 将多个数值工具组织成研发人员可以直接使用的协同流程
 7. 卡片、图表、报告和多维表格读取同一结果；Aily 只解释已登记证据。
 8. 新数据或新工况进入时创建新任务和新结果，不覆盖历史结论。
 
-现有 MCP 场景契约支持一次提交温度、倍率、SOC 或 DoD 等多个字段。目标流程由服务端继承未修改字段，并对全部修改执行原子校验：任一参数不合法时，整次更新不生效；校验通过后创建新的受审工况上下文，历史上下文保持不变。Aily 对这一流程的完整自然语言编排仍列为待最终复验项。
+现有 MCP 场景契约支持一次提交温度、倍率、SOC 或 DoD 等一个或多个字段。服务端继承未修改字段，并对全部修改执行原子校验：任一参数不合法时，整次更新不生效；校验通过后创建新的受审工况上下文，历史上下文保持不变。真实 Aily 链路已完成 MCP 服务安装、按“电芯 ID | cutoff-N”解析受审任务，以及基线 25 摄氏度与对比 35 摄氏度的工况查询；组合修改仍沿用同一契约，不把内部 run_id 或 data_batch_id 写入固定提示词。
 
 这一工作流将 Agent 的自由度限制在可审计范围内：它可以理解、追问、选择、查询和解释，但不能生成 SOH、RUL、区间、阈值比较或经营指标。
 
@@ -222,11 +222,9 @@ ToolResult 是方案中的数值事实单元。每个结果至少绑定工具名
 | 状态 | 已有工作与证据 |
 | --- | --- |
 | 已完成 | MATR 三批数据治理与按 cell_id 固定划分；CyclePatch Direct、CyclePatch-BatLiNet、Current Hybrid、HybridPatch-v2 的 80 次 A100 Advanced Final；逐样本导出、指标闭合、Conformal 校准和安全模型制品；BLAST-Lite 参考工况链；FastAPI、异步任务、ToolResult、审计报告、飞书卡片和多维表格交付。 |
-| 已完成受控演示 | 目标飞书租户已完成加密 URL verification、群聊文本与 CSV 文件回调，并真实执行项目级 CyclePatch、独立 BLAST-Lite、曲线、卡片、报告和多维表格交付。 |
-| 中断时正在进行 | 任意自描述新电芯 CSV 的自动字段映射、来源登记、批次创建、项目冻结绑定和支持域拦截；Aily 多参数原子更新；本地服务与临时 HTTPS 入口恢复。已有局部实现和聚焦检查，但尚未完成整条链的集成验收，本方案文档不继续该开发。 |
-| 待最终复验 | Aily 网页端的固定提示词、自然语言任务创建、动态工况修改和完整 job_origin=AILY 纵向链；稳定 HTTPS 入口和提交版本的公网纵向验收。 |
-| 研究候选 | PBT 与 MAGNet 已完成上游来源、许可证、安全制品契约和训练任务准备，但没有可纳入当前成绩表或正式 route 的结果。 |
-| 尚未完成 | HUST 零样本正式验证、企业目标域校准、真实 BMS/EMS 接入、并发与灾难恢复验收、企业业务收益测量。 |
+| 已完成受控演示 | 目标飞书租户已完成加密 URL verification、群聊文本与 CSV 文件回调；符合数据契约且落入已激活 route 支持域的自描述新电芯 CSV，可自动完成字段映射、来源登记、批次创建、项目冻结绑定和支持域判定。真实任务已交付 RUL、有限时域 SOH、25 摄氏度/35 摄氏度参考工况卡片、曲线、受审报告和多维表格记录。 |
+| 已完成 Aily 链路 | Aily 已安装受控 MCP 服务，可用固定提示词按“电芯 ID | cutoff-N”解析当前有效任务，读取受审 ToolResult，并创建、查询基线 25 摄氏度与对比 35 摄氏度的参考工况。场景契约允许一次原子修改一个或多个工况参数；LLM 只负责理解与编排，不生成寿命或 SOH 数值。 |
+| 尚未完成 | 稳定公网 HTTPS 入口、企业目标域校准、真实 BMS/EMS 接入、并发与灾难恢复验收、企业业务收益测量。 |
 
 ## 3.8 失败模式与降级策略
 
@@ -308,7 +306,7 @@ ToolResult 是方案中的数值事实单元。每个结果至少绑定工具名
 | 时间 | 展示内容 |
 | --- | --- |
 | 0:00—0:30 | 说明早期数据与长期寿命决策之间的时间矛盾，以及“Aily 负责理解和编排、数值工具负责计算”的原则。 |
-| 0:30—1:15 | 在飞书上传一份已登记 CSV，展示机器人接收确认、任务 ID、数据身份和校验状态。 |
+| 0:30—1:15 | 在飞书上传一份符合数据契约的新 CSV，展示自动字段映射、机器人接收确认、任务 ID、数据身份和校验状态。 |
 | 1:15—2:20 | 展示个体总循环寿命、RUL 摘要、有限 SOH 曲线、警告和适用范围。 |
 | 2:20—3:05 | 在 Aily 中同时修改温度、倍率或 DoD，展示系统原子校验多个参数并创建新工况上下文和新任务，历史结果保持不变。 |
 | 3:05—3:35 | 提交缺字段、域外或未激活模型请求，展示系统明确拒绝而不生成预测数值。 |
@@ -423,7 +421,7 @@ HybridPatch-v2 在四个 cutoff 上的平均 MAE 较低；Current Hybrid 的 RMS
 | BatteryGPT，Nature Communications 2026 | 使用前 30% 生命周期数据预测完整 SOH、knee point 和 EOL | SOH RMSE 0.21%、MAPE 0.14%；knee point 误差 13 cycles；EOL 误差 10 cycles | 输入已覆盖生命周期比例，信息量明显高于固定早期 cutoff，不参与数值排名 |
 | iMOE，Nature Communications 2026 | 退役电池第二寿命轨迹；单次现场可测信号；295 个电芯、93 种使用条件 | 全寿命轨迹平均 MAPE 0.95%；推理时间 0.43 ms；150-cycle 时域平均 MAPE 1.50% | 第二寿命数据和任务定义不同；其 MAPE、时域误差与推理延迟可作为未来部署指标参考 |
 
-PINN4SOH 和 SambaMixer 主要评估当前周期 SOH 点估计，分别使用 MIT/HUST 等数据和 NASA 数据。它们报告的 MAE、RMSE 与 MAPE 适合建立“当前状态估计”基线，但不能与 HybridPatch 的未来轨迹误差直接比较。
+PINN4SOH 和 SambaMixer 主要评估当前周期 SOH 点估计，分别使用公开实验室数据和 NASA 数据。它们报告的 MAE、RMSE 与 MAPE 适合建立“当前状态估计”基线，但不能与 HybridPatch 的未来轨迹误差直接比较。
 
 基于上述文献，后续统一评估应补充三类指标：一是 SOH trajectory MAPE、早期/中期/远期分段误差和不同 EOL 阈值下的曲线 RMSE；二是 seen/unseen ageing condition、leave-one-condition-out 和目标域校准后的误差；三是在固定硬件、固定 batch size 下测量参数量、模型大小、单电芯推理延迟和峰值内存。当前没有正式结果的项目保持空白，不以论文数值替代本项目实测。
 
@@ -446,15 +444,13 @@ PINN4SOH 和 SambaMixer 主要评估当前周期 SOH 点估计，分别使用 MI
 
 ## 近期
 
-- 完成 Aily 固定提示词、自然语言任务创建和动态工况修改的真实纵向复验；
+- 固化已验证的 Aily 提示词与演示工况，并补录多参数组合修改的演示证据；
 - 以稳定 HTTPS 域名替代临时 Quick Tunnel；
 - 完成提交版本的后端、前端、数据库迁移、Docker 镜像和部署门禁；
 - 使用固定数据、固定模型和固定脚本录制 3—5 分钟 Demo。
 
 ## 中期
 
-- 完成 HUST 安全转换、零样本评价和独立目标域重校准；
-- 完成 PBT、MAGNet 的正式训练、独立测试、制品核验和候选 route 审批；
 - 增加删失感知生存分析、IPCW 和相应的 Conformal 方法；
 - 建立域漂移监测、route 复审和新增观测在线更新机制；
 - 通过企业试点补充真实效率、质量和复检闭环指标。
@@ -475,18 +471,17 @@ PINN4SOH 和 SambaMixer 主要评估当前周期 SOH 点估计，分别使用 MI
 5. BatteryLife: A Comprehensive Dataset and Benchmark for Battery Life Prediction，arXiv:2502.18807：https://arxiv.org/abs/2502.18807
 6. MATR 三批电芯数据：https://data.matr.io/1/projects/5c48dd2bc625d700019f3204
 7. Severson, K. A. et al. Data-driven prediction of battery cycle life before capacity degradation. Nature Energy 4, 383–391 (2019). DOI: 10.1038/s41560-019-0356-8.
-8. HUST Mendeley v2 数据：https://data.mendeley.com/datasets/nsc7hnsg4s/2
-9. Naumann 循环老化数据：https://data.mendeley.com/datasets/6hgyr25h8d/1；配套论文 DOI: 10.1016/j.jpowsour.2019.227666.
-10. Naumann 日历老化数据：https://data.mendeley.com/datasets/kxh42bfgtj/1；配套论文 DOI: 10.1016/j.est.2018.01.019.
-11. 280 Ah LFP DoD 数据，Zenodo record 14576042：https://zenodo.org/records/14576042
-12. Zhang, H. et al. Battery lifetime prediction across diverse ageing conditions with inter-cell deep learning. Nature Machine Intelligence 7, 270–277 (2025). DOI: 10.1038/s42256-024-00972-x.
-13. Tan, R. et al. BatteryMFormer: Multi-level Learning for Battery Degradation Trajectory Forecasting. KDD 2026；代码：https://github.com/Ruifeng-Tan/BatteryMFormer
-14. Eivazi, H. et al. DiffBatt: A Diffusion Model for Battery Degradation Prediction and Synthesis. arXiv:2410.23893 (2024).
-15. Huang, X. et al. IC2ML: Unified battery state-of-health, degradation trajectory and remaining useful life prediction via intra-cycle and inter-cycle enhanced machine learning. Journal of Power Sources 666, 239148 (2026). DOI: 10.1016/j.jpowsour.2025.239148.
-16. Hu, J. et al. Early prediction of lithium-ion battery degradation with a generative pre-trained transformer. Nature Communications 17, 126 (2026). DOI: 10.1038/s41467-025-66819-0.
-17. Huang, X. et al. iMOE: prediction of second-life battery degradation trajectory using interpretable mixture of experts. Nature Communications 17, 2549 (2026). DOI: 10.1038/s41467-026-69369-1.
-18. Wang, F. et al. Physics-informed neural network for lithium-ion battery degradation stable modeling and prognosis. Nature Communications 15 (2024). DOI: 10.1038/s41467-024-48779-z.
-19. Olalde-Verano, J. I. et al. SambaMixer: State of Health Prediction of Li-ion Batteries using Mamba State Space Models. arXiv:2411.00233 (2024).
+8. Naumann 循环老化数据：https://data.mendeley.com/datasets/6hgyr25h8d/1；配套论文 DOI: 10.1016/j.jpowsour.2019.227666.
+9. Naumann 日历老化数据：https://data.mendeley.com/datasets/kxh42bfgtj/1；配套论文 DOI: 10.1016/j.est.2018.01.019.
+10. 280 Ah LFP DoD 数据，Zenodo record 14576042：https://zenodo.org/records/14576042
+11. Zhang, H. et al. Battery lifetime prediction across diverse ageing conditions with inter-cell deep learning. Nature Machine Intelligence 7, 270–277 (2025). DOI: 10.1038/s42256-024-00972-x.
+12. Tan, R. et al. BatteryMFormer: Multi-level Learning for Battery Degradation Trajectory Forecasting. KDD 2026；代码：https://github.com/Ruifeng-Tan/BatteryMFormer
+13. Eivazi, H. et al. DiffBatt: A Diffusion Model for Battery Degradation Prediction and Synthesis. arXiv:2410.23893 (2024).
+14. Huang, X. et al. IC2ML: Unified battery state-of-health, degradation trajectory and remaining useful life prediction via intra-cycle and inter-cycle enhanced machine learning. Journal of Power Sources 666, 239148 (2026). DOI: 10.1016/j.jpowsour.2025.239148.
+15. Hu, J. et al. Early prediction of lithium-ion battery degradation with a generative pre-trained transformer. Nature Communications 17, 126 (2026). DOI: 10.1038/s41467-025-66819-0.
+16. Huang, X. et al. iMOE: prediction of second-life battery degradation trajectory using interpretable mixture of experts. Nature Communications 17, 2549 (2026). DOI: 10.1038/s41467-026-69369-1.
+17. Wang, F. et al. Physics-informed neural network for lithium-ion battery degradation stable modeling and prognosis. Nature Communications 15 (2024). DOI: 10.1038/s41467-024-48779-z.
+18. Olalde-Verano, J. I. et al. SambaMixer: State of Health Prediction of Li-ion Batteries using Mamba State Space Models. arXiv:2411.00233 (2024).
 
 ---
 
@@ -508,8 +503,7 @@ PINN4SOH 和 SambaMixer 主要评估当前周期 SOH 点估计，分别使用 MI
 | RUL 与 SOH 需要多路由 | 五种子误差、coverage 与资源权衡 | 已支持；不声明唯一冠军 |
 | BLAST-Lite 可用于参考工况 | Naumann replay、280 Ah observed-range check | 已支持为参考；不支持产品寿命承诺 |
 | 飞书可完成真实交付 | 真实 callback、CSV、卡片、曲线、报告和多维表格记录 | 已演示；临时隧道不等于生产部署 |
-| Aily 不生成业务数值 | MCP 契约、数字防火墙、ToolResult-only 展示 | 已实现；自然语言纵向链仍需最终复验 |
-| PBT/MAGNet 可提升外部泛化 |  | 当前无正式结果，不作主张 |
+| Aily 不生成业务数值 | MCP 契约、数字防火墙、ToolResult-only 展示 | 已实现并完成受控任务解析与 25 摄氏度/35 摄氏度工况查询；稳定公网入口仍待部署 |
 | 系统可节省具体时间或成本 |  | 尚无企业试点，不作主张 |
 
 # 3. 术语说明

@@ -62,7 +62,7 @@ Agent exact-step / 报告 / API / UI
 
 职责：
 
-- MATR/HUST/Naumann 来源登记；
+- MATR/Naumann 来源登记；
 - Canonical schema 和版本化 Parquet；
 - 以 `cell_id` 为单位的 train/validation/calibration/test 划分；
 - Advanced Final 输出索引和 artifact v2；
@@ -280,10 +280,10 @@ fenced claim 覆盖新结果或写入 FAILED。
 
 当前仓库包含两种运行形态：
 
-### Foundation API
+### 运行入口
 
-`deploy/foundation_api.py` 和 `deploy/compose.yaml` 可直接启动健康检查和基础工具入口。
-它不包含完整项目认证、数据库路由、Worker、对象存储或 Advanced 数值链。
+`deploy/local.compose.yaml` 与 `deploy/competition.compose.yaml` 分别提供本机和服务器
+完整运行入口，不再维护与正式装配分叉的 foundation-only 服务。
 
 ### 完整应用装配
 

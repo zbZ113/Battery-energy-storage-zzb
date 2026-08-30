@@ -108,7 +108,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "dataset",
-        choices=("matr-three-batch", "hust", "naumann-cycle", "naumann-calendar"),
+        choices=("matr-three-batch", "naumann-cycle", "naumann-calendar"),
     )
     parser.add_argument("mode", choices=("smoke", "select", "final"))
     parser.add_argument("--plan-only", action="store_true")

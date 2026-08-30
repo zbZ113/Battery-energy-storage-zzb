@@ -2,7 +2,7 @@
 
 ## 目的与边界
 
-`quanxin_life.tools` 是 FastAPI、MCP、Agent、Next.js 和 Streamlit 的唯一领域工具入口。注册表只负责输入契约校验、白名单授权、执行调度和审计契约核验；它不实现电芯寿命预测、SOH 轨迹、物理仿真或任何业务数值计算。
+`quanxin_life.tools` 是 FastAPI、MCP、Agent 和 Next.js 的唯一领域工具入口。注册表只负责输入契约校验、白名单授权、执行调度和审计契约核验；它不实现电芯寿命预测、SOH 轨迹、物理仿真或任何业务数值计算。
 
 工具执行函数必须自行调用已经批准的数值模块，并自行产生 `ToolResult`。注册表不会补写、修正、四舍五入或重新解释工具返回的任何数值。LLM 仅可选择已注册工具、提供经契约约束的输入并解释经审计的结果。
 
@@ -17,7 +17,6 @@ extract_early_cycle_features
 predict_cycle_life
 predict_soh_trajectory
 calibrate_prediction_interval
-adapt_to_target_domain
 update_cell_parameters
 check_operating_condition
 recommend_next_experiment

@@ -84,10 +84,6 @@ from quanxin_life.tools.physics_check import (
 from quanxin_life.tools.registry import ToolRegistry
 from quanxin_life.tools.scenario_lifetime import register_scenario_lifetime_tool
 from quanxin_life.tools.split_audit import register_audit_dataset_split_tool
-from quanxin_life.tools.target_domain_adaptation import (
-    VerifiedAdaptationCohortResolver,
-    register_adapt_to_target_domain_tool,
-)
 from quanxin_life.tools.trajectory_prediction import (
     register_predict_soh_trajectory_tool,
 )
@@ -135,7 +131,6 @@ class CompetitionToolDependencies:
     hybrid_degradation_predictor: HybridDegradationPredictor
     normalized_calibration_cohort_resolver: VerifiedNormalizedCalibrationCohortResolver
     prediction_difficulty_scale_resolver: VerifiedPredictionDifficultyScaleResolver | None
-    adaptation_cohort_resolver: VerifiedAdaptationCohortResolver
     measurement_resolver: VerifiedMeasurementResolver
     individual_trajectory_calibrator: IndividualTrajectoryCalibrator | None
     physics_validator: PhysicsValidator
@@ -156,7 +151,6 @@ class CompetitionToolDependencies:
             self.cycle_life_predictor,
             self.hybrid_degradation_predictor,
             self.normalized_calibration_cohort_resolver,
-            self.adaptation_cohort_resolver,
             self.measurement_resolver,
             self.physics_validator,
             self.experiment_recommendation_context_resolver,
@@ -359,11 +353,6 @@ def create_competition_tool_registry(
         resolver=dependencies.normalized_calibration_cohort_resolver,
         audit_ledger=dependencies.audit_ledger,
         difficulty_scale_resolver=dependencies.prediction_difficulty_scale_resolver,
-    )
-    register_adapt_to_target_domain_tool(
-        registry,
-        audit_ledger=dependencies.audit_ledger,
-        resolver=dependencies.adaptation_cohort_resolver,
     )
     register_update_cell_parameters_tool(
         registry,

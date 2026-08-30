@@ -24,10 +24,9 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[agents,auth,data,dev,knowledge,llm,ml,api,infrastructure,persistence,reporting]"
-python -m pytest -q
 python -m ruff check .
 python -m mypy
-python -m compileall -q src workbench deploy migrations
+python -m compileall -q src deploy migrations
 python -m pip check
 ```
 
@@ -44,10 +43,10 @@ pnpm build
 
 该层证明实现满足自动化契约，不证明正式模型性能。
 
-## 层级 1：foundation API
+## 层级 1：完整本地运行时
 
 ```powershell
-python -m uvicorn deploy.foundation_api:app --host 127.0.0.1 --port 8000
+docker compose --env-file <local-private-env> -f deploy/local.compose.yaml up -d
 ```
 
 可检查：
@@ -58,7 +57,7 @@ GET /v1/tools
 GET /docs
 ```
 
-foundation API 不包含完整项目认证、Advanced route、Worker 和 UI 数值闭环。
+本地 Compose 与服务器使用同一应用装配，只在 Origin、镜像来源和 TLS 边界上不同。
 
 ## 层级 2：正式结果包复核
 
@@ -163,14 +162,8 @@ A100 服务器采用离线人工文件传输，不要求 Git、SSH、SCP 或网�
 - READY calibration materialization；
 - FastAPI 完整装配与 Next.js UI。
 
-纵向验收入口：
-
-```powershell
-python -m pytest tests/e2e/test_project_advanced_calibration_workflow.py -q
-```
-
-该测试使用真实应用装配和证据解析，但模型前向边界为显式测试适配器。
-目标环境仍需单独完成真实 Worker、真实权重和浏览器冒烟。
+纵向验收使用团队本地维护但不随 Git 分发的回归用例，并结合真实应用装配、证据解析、
+Worker、模型权重和浏览器冒烟。内部测试适配器的通过记录不能替代目标环境验收。
 
 ## 指标复核
 

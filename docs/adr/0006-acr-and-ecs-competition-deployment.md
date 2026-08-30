@@ -71,8 +71,7 @@ Compose 对各服务设置资源上限，Worker 并发为 1。该选择优先保
 - `deploy/nginx/competition.conf`；
 - `deploy/runtime_settings.py`；
 - `deploy/competition_runtime.py`；
-- `tests/integration/test_acr_release_contract.py`；
-- `tests/integration/deploy/test_competition_deployment_contract.py`。
+- 团队本地维护的 ACR release 与竞赛部署契约回归记录（不随 Git 分发）。
 
 ## 成熟度
 

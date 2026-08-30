@@ -1,4 +1,4 @@
-"""Versioned registry for the five reviewed model-view families."""
+"""Versioned registry for the retained reviewed model-view families."""
 
 from __future__ import annotations
 

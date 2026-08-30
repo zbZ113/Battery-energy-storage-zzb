@@ -75,9 +75,7 @@ class PromotionBundleManifest(ContractModel):
         "RUL",
         "SOH",
         "CYCLE_LIFE",
-        "FIELD_MONITORING",
         "CONDITION_DEGRADATION",
-        "PARTIAL_CHARGE_FEATURE",
     ]
     family: str = Field(min_length=1)
     version: str = Field(min_length=1)
@@ -113,9 +111,7 @@ def export_promoted_model_bundle(
         "RUL",
         "SOH",
         "CYCLE_LIFE",
-        "FIELD_MONITORING",
         "CONDITION_DEGRADATION",
-        "PARTIAL_CHARGE_FEATURE",
     ],
     family: str,
     version: str,
